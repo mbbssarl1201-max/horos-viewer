@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, bigint, json } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, bigint, json, index } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -27,7 +27,9 @@ export const patients = mysqlTable("patients", {
   sex: varchar("sex", { length: 2 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, (t) => ({
+  patientIdIdx: index("patients_patientId_idx").on(t.patientId),
+}));
 
 /**
  * DICOM Study table
@@ -50,7 +52,10 @@ export const studies = mysqlTable("studies", {
   status: mysqlEnum("status", ["new", "in_progress", "reported", "finalized"]).default("new"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, (t) => ({
+  patientIdIdx: index("studies_patientId_idx").on(t.patientId),
+  createdAtIdx: index("studies_createdAt_idx").on(t.createdAt),
+}));
 
 /**
  * DICOM Series table
@@ -65,7 +70,9 @@ export const series = mysqlTable("series", {
   bodyPart: varchar("bodyPart", { length: 64 }),
   numberOfInstances: int("numberOfInstances").default(0),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, (t) => ({
+  studyIdIdx: index("series_studyId_idx").on(t.studyId),
+}));
 
 /**
  * DICOM Instance (image) table
@@ -84,7 +91,9 @@ export const instances = mysqlTable("instances", {
   windowWidth: varchar("windowWidth", { length: 64 }),
   fileSize: bigint("fileSize", { mode: "number" }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, (t) => ({
+  seriesIdIdx: index("instances_seriesId_idx").on(t.seriesId),
+}));
 
 /**
  * Albums for organizing studies
@@ -96,7 +105,9 @@ export const albums = mysqlTable("albums", {
   userId: int("userId").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, (t) => ({
+  userIdIdx: index("albums_userId_idx").on(t.userId),
+}));
 
 /**
  * Album-Study junction table
@@ -106,7 +117,10 @@ export const albumStudies = mysqlTable("album_studies", {
   albumId: int("albumId").notNull(),
   studyId: int("studyId").notNull(),
   addedAt: timestamp("addedAt").defaultNow().notNull(),
-});
+}, (t) => ({
+  albumIdIdx: index("album_studies_albumId_idx").on(t.albumId),
+  studyIdIdx: index("album_studies_studyId_idx").on(t.studyId),
+}));
 
 /**
  * Notifications table
@@ -120,7 +134,10 @@ export const notifications = mysqlTable("notifications", {
   studyId: int("studyId"),
   isRead: int("isRead").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, (t) => ({
+  userIdIdx: index("notifications_userId_idx").on(t.userId),
+  studyIdIdx: index("notifications_studyId_idx").on(t.studyId),
+}));
 
 /**
  * Annotations table for measurements and ROIs
@@ -133,7 +150,10 @@ export const annotations = mysqlTable("annotations", {
   data: json("data").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, (t) => ({
+  instanceIdIdx: index("annotations_instanceId_idx").on(t.instanceId),
+  userIdIdx: index("annotations_userId_idx").on(t.userId),
+}));
 
 /**
  * PACS Server sources (configurable)
@@ -149,7 +169,9 @@ export const pacsServers = mysqlTable("pacs_servers", {
   userId: int("userId").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, (t) => ({
+  userIdIdx: index("pacs_servers_userId_idx").on(t.userId),
+}));
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;

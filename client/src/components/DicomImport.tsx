@@ -8,6 +8,21 @@ interface DicomImportProps {
   onComplete?: () => void;
 }
 
+/**
+ * Convert an ArrayBuffer to a base64 string in fixed-size chunks. Avoids the
+ * O(n^2) per-byte string concatenation that overflows on multi-MB DICOM files.
+ */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000; // 32 KB per chunk
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
+  }
+  return btoa(binary);
+}
+
 export default function DicomImport({ onComplete }: DicomImportProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -107,14 +122,10 @@ export default function DicomImport({ onComplete }: DicomImportProps) {
         const file = dicomFiles[i];
         const metadata = await parseDicomFile(file);
 
-        // Convert file to base64
+        // Convert file to base64 (chunked — the previous per-byte reduce was
+        // O(n^2) and overflowed memory/stack on large CT/MR files).
         const arrayBuffer = await file.arrayBuffer();
-        const base64 = btoa(
-          new Uint8Array(arrayBuffer).reduce(
-            (data, byte) => data + String.fromCharCode(byte),
-            ""
-          )
-        );
+        const base64 = arrayBufferToBase64(arrayBuffer);
 
         await importMutation.mutateAsync({
           ...metadata,

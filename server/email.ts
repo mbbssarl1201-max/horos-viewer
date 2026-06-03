@@ -16,6 +16,20 @@ interface EmailOptions {
 }
 
 /**
+ * Escape a value before interpolating it into an HTML email body, so
+ * attacker-controlled fields (patient name, urgency reason, …) cannot inject
+ * markup or scripts into the rendered message.
+ */
+function esc(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
  * Create a configured SMTP transporter
  */
 function createTransporter() {
@@ -83,11 +97,11 @@ export async function notifyNewStudy(params: {
         <div style="background: #1a1a2e; color: #e0e0e0; padding: 20px; border-radius: 8px;">
           <h2 style="color: #4fc3f7; margin-top: 0;">New Study Received</h2>
           <table style="width: 100%; border-collapse: collapse;">
-            <tr><td style="padding: 8px 0; color: #9e9e9e;">Patient:</td><td style="padding: 8px 0; color: #fff;">${params.patientName}</td></tr>
-            <tr><td style="padding: 8px 0; color: #9e9e9e;">Modality:</td><td style="padding: 8px 0; color: #fff;">${params.modality}</td></tr>
-            <tr><td style="padding: 8px 0; color: #9e9e9e;">Date:</td><td style="padding: 8px 0; color: #fff;">${params.studyDate}</td></tr>
-            <tr><td style="padding: 8px 0; color: #9e9e9e;">Description:</td><td style="padding: 8px 0; color: #fff;">${params.studyDescription}</td></tr>
-            ${params.institution ? `<tr><td style="padding: 8px 0; color: #9e9e9e;">Institution:</td><td style="padding: 8px 0; color: #fff;">${params.institution}</td></tr>` : ""}
+            <tr><td style="padding: 8px 0; color: #9e9e9e;">Patient:</td><td style="padding: 8px 0; color: #fff;">${esc(params.patientName)}</td></tr>
+            <tr><td style="padding: 8px 0; color: #9e9e9e;">Modality:</td><td style="padding: 8px 0; color: #fff;">${esc(params.modality)}</td></tr>
+            <tr><td style="padding: 8px 0; color: #9e9e9e;">Date:</td><td style="padding: 8px 0; color: #fff;">${esc(params.studyDate)}</td></tr>
+            <tr><td style="padding: 8px 0; color: #9e9e9e;">Description:</td><td style="padding: 8px 0; color: #fff;">${esc(params.studyDescription)}</td></tr>
+            ${params.institution ? `<tr><td style="padding: 8px 0; color: #9e9e9e;">Institution:</td><td style="padding: 8px 0; color: #fff;">${esc(params.institution)}</td></tr>` : ""}
           </table>
           <p style="margin-top: 20px; font-size: 12px; color: #757575;">This is an automated notification from Horos Medical Imaging Viewer.</p>
         </div>
@@ -116,11 +130,11 @@ export async function notifyStatUrgent(params: {
           <h2 style="color: #f44336; margin-top: 0;">⚠️ STAT / URGENT Study</h2>
           <p style="color: #ffcdd2; font-weight: bold;">This study requires immediate attention.</p>
           <table style="width: 100%; border-collapse: collapse;">
-            <tr><td style="padding: 8px 0; color: #9e9e9e;">Patient:</td><td style="padding: 8px 0; color: #fff; font-weight: bold;">${params.patientName}</td></tr>
-            <tr><td style="padding: 8px 0; color: #9e9e9e;">Modality:</td><td style="padding: 8px 0; color: #fff;">${params.modality}</td></tr>
-            <tr><td style="padding: 8px 0; color: #9e9e9e;">Date:</td><td style="padding: 8px 0; color: #fff;">${params.studyDate}</td></tr>
-            <tr><td style="padding: 8px 0; color: #9e9e9e;">Description:</td><td style="padding: 8px 0; color: #fff;">${params.studyDescription}</td></tr>
-            ${params.urgencyReason ? `<tr><td style="padding: 8px 0; color: #9e9e9e;">Reason:</td><td style="padding: 8px 0; color: #f44336; font-weight: bold;">${params.urgencyReason}</td></tr>` : ""}
+            <tr><td style="padding: 8px 0; color: #9e9e9e;">Patient:</td><td style="padding: 8px 0; color: #fff; font-weight: bold;">${esc(params.patientName)}</td></tr>
+            <tr><td style="padding: 8px 0; color: #9e9e9e;">Modality:</td><td style="padding: 8px 0; color: #fff;">${esc(params.modality)}</td></tr>
+            <tr><td style="padding: 8px 0; color: #9e9e9e;">Date:</td><td style="padding: 8px 0; color: #fff;">${esc(params.studyDate)}</td></tr>
+            <tr><td style="padding: 8px 0; color: #9e9e9e;">Description:</td><td style="padding: 8px 0; color: #fff;">${esc(params.studyDescription)}</td></tr>
+            ${params.urgencyReason ? `<tr><td style="padding: 8px 0; color: #9e9e9e;">Reason:</td><td style="padding: 8px 0; color: #f44336; font-weight: bold;">${esc(params.urgencyReason)}</td></tr>` : ""}
           </table>
           <p style="margin-top: 20px; font-size: 12px; color: #757575;">This is an automated STAT notification from Horos Medical Imaging Viewer.</p>
         </div>
@@ -148,11 +162,11 @@ export async function notifyReportFinalized(params: {
         <div style="background: #1a1a2e; color: #e0e0e0; padding: 20px; border-radius: 8px; border-left: 4px solid #4caf50;">
           <h2 style="color: #4caf50; margin-top: 0;">✓ Report Finalized</h2>
           <table style="width: 100%; border-collapse: collapse;">
-            <tr><td style="padding: 8px 0; color: #9e9e9e;">Patient:</td><td style="padding: 8px 0; color: #fff;">${params.patientName}</td></tr>
-            <tr><td style="padding: 8px 0; color: #9e9e9e;">Modality:</td><td style="padding: 8px 0; color: #fff;">${params.modality}</td></tr>
-            <tr><td style="padding: 8px 0; color: #9e9e9e;">Study Date:</td><td style="padding: 8px 0; color: #fff;">${params.studyDate}</td></tr>
-            <tr><td style="padding: 8px 0; color: #9e9e9e;">Author:</td><td style="padding: 8px 0; color: #fff;">${params.reportAuthor}</td></tr>
-            ${params.reportSummary ? `<tr><td style="padding: 8px 0; color: #9e9e9e;">Summary:</td><td style="padding: 8px 0; color: #fff;">${params.reportSummary}</td></tr>` : ""}
+            <tr><td style="padding: 8px 0; color: #9e9e9e;">Patient:</td><td style="padding: 8px 0; color: #fff;">${esc(params.patientName)}</td></tr>
+            <tr><td style="padding: 8px 0; color: #9e9e9e;">Modality:</td><td style="padding: 8px 0; color: #fff;">${esc(params.modality)}</td></tr>
+            <tr><td style="padding: 8px 0; color: #9e9e9e;">Study Date:</td><td style="padding: 8px 0; color: #fff;">${esc(params.studyDate)}</td></tr>
+            <tr><td style="padding: 8px 0; color: #9e9e9e;">Author:</td><td style="padding: 8px 0; color: #fff;">${esc(params.reportAuthor)}</td></tr>
+            ${params.reportSummary ? `<tr><td style="padding: 8px 0; color: #9e9e9e;">Summary:</td><td style="padding: 8px 0; color: #fff;">${esc(params.reportSummary)}</td></tr>` : ""}
           </table>
           <p style="margin-top: 20px; font-size: 12px; color: #757575;">This is an automated notification from Horos Medical Imaging Viewer.</p>
         </div>

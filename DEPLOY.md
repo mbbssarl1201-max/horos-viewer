@@ -5,14 +5,17 @@ storage) + the app, with **local email/password auth** (no Manus dependency).
 The stack is defined in [`docker-compose.yml`](docker-compose.yml) and sits
 behind the existing Traefik reverse proxy.
 
-## Prerequisites on the VPS (76.13.55.44)
-- Docker + Docker Compose.
-- A running Traefik with an external Docker network (default name assumed `web`)
-  and a cert resolver (default name assumed `letsencrypt`).
-- A DNS A record for the chosen domain (e.g. `horos.mbbsarl.ch`) → VPS IP.
+## Prerequisites on the VPS (76.13.55.44 / VM 1377524)
+- Docker + Docker Compose (present).
+- The active Traefik is `traefik-fblq` (`/docker/traefik-fblq`), running in
+  **`network_mode: host`** with cert resolver **`letsencrypt`** and entrypoints
+  `web` (:80) / `websecure` (:443), ACME **HTTP-01** challenge. The compose is
+  already tuned for this — no shared external network is required.
+- A **DNS A record** for the chosen domain (e.g. `horos.mbbsarl.ch`) →
+  `76.13.55.44` (needed for the ACME HTTP-01 challenge to issue TLS).
 
-> Confirm the Traefik **network name** and **certresolver name** match this
-> host; adjust them in `docker-compose.yml` if not.
+> The `mbbs-traefik` container in the `obsidian-mbbs` project is in *Created*
+> (not running) state — ignore it; `traefik-fblq` is the live proxy.
 
 ## 1. Configure
 ```sh

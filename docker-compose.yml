@@ -1,10 +1,11 @@
 # Self-hosted Horos Viewer stack: MySQL + MinIO (S3) + app, behind Traefik.
 # Copy .env.example -> .env and fill values before `docker compose up -d`.
 #
-# Placeholders to confirm for the MBBS VPS:
-#   - `web` external network = the Traefik network name on the host.
-#   - HOROS_DOMAIN in .env (e.g. horos.mbbsarl.ch) + DNS A record -> VPS.
-#   - `certresolver=letsencrypt` = the Traefik cert resolver name on the host.
+# Tuned for the MBBS VPS (76.13.55.44 / VM 1377524): the active Traefik
+# (traefik-fblq) runs in `network_mode: host` with cert resolver `letsencrypt`
+# and entrypoint `websecure`. Host-mode Traefik reaches the app via its bridge
+# IP, so NO shared external network is needed — the app stays on `internal`.
+# Required: a DNS A record for HOROS_DOMAIN -> 76.13.55.44 (ACME HTTP-01).
 
 services:
   db:
@@ -85,10 +86,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3000"
-    networks: [internal, web]
+    networks: [internal]
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=web"
       - "traefik.http.routers.horos.rule=Host(`${HOROS_DOMAIN:?set HOROS_DOMAIN}`)"
       - "traefik.http.routers.horos.entrypoints=websecure"
       - "traefik.http.routers.horos.tls.certresolver=letsencrypt"
@@ -100,5 +100,3 @@ volumes:
 
 networks:
   internal:
-  web:
-    external: true

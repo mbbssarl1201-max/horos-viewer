@@ -46,11 +46,15 @@ function createTransporter() {
   return nodemailer.createTransport({
     host: ENV.smtpHost,
     port: ENV.smtpPort,
-    secure: ENV.smtpPort === 465,
+    secure: ENV.smtpPort === 465 && !ENV.smtpInsecure,
+    requireTLS: !ENV.smtpInsecure && ENV.smtpPort === 587,
     auth: {
       user: ENV.smtpUser,
       pass: ENV.smtpPassword,
     },
+    // For a self-hosted relay on a trusted network (Mailu notls), don't fail on
+    // a missing/self-signed cert.
+    ...(ENV.smtpInsecure ? { tls: { rejectUnauthorized: false } } : {}),
   });
 }
 

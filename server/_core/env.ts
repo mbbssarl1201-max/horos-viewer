@@ -27,4 +27,7 @@ export const ENV = {
   smtpUser: process.env.SMTP_USER ?? "",
   smtpPassword: process.env.SMTP_PASSWORD ?? "",
   smtpFrom: process.env.SMTP_FROM ?? "noreply@horos-viewer.com",
+  // Allow a self-hosted relay without a public TLS cert (e.g. Mailu notls on
+  // the same host). Only safe when the SMTP hop stays on a trusted network.
+  smtpInsecure: (process.env.SMTP_INSECURE ?? "false") === "true",
 };

@@ -27,10 +27,16 @@ async function initCornerstone() {
     try {
       const cornerstone = await import("@cornerstonejs/core");
       const cornerstoneTools = await import("@cornerstonejs/tools");
-      await import("@cornerstonejs/dicom-image-loader");
+      const dicomImageLoader = await import("@cornerstonejs/dicom-image-loader");
 
       // Initialize cornerstone core
       await cornerstone.init();
+
+      // Register the DICOM image loader: this wires up the `wadouri:`/`wadors:`
+      // schemes, web workers and codecs, and the metadata provider. Without it
+      // the `wadouri:` image IDs have no registered loader, so setStack loads
+      // nothing and the viewport stays blank.
+      dicomImageLoader.init();
 
       // Initialize tools
       cornerstoneTools.init();

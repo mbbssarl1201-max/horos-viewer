@@ -13,6 +13,7 @@ interface CornerstoneViewerProps {
   windowWidth: number;
   windowCenter: number;
   onWindowLevelChange: (ww: number, wc: number) => void;
+  onZoomChange?: (zoomPercent: number) => void;
 }
 
 // Cornerstone3D initialization state
@@ -110,6 +111,7 @@ export default function CornerstoneViewer({
   windowWidth,
   windowCenter,
   onWindowLevelChange,
+  onZoomChange,
 }: CornerstoneViewerProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -117,6 +119,7 @@ export default function CornerstoneViewer({
   const renderingEngineRef = useRef<any>(null);
   const viewportIdRef = useRef("CT_VIEWPORT");
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const listenersCleanupRef = useRef<(() => void) | null>(null);
 
   // Initialize Cornerstone3D
   useEffect(() => {
@@ -227,6 +230,33 @@ export default function CornerstoneViewer({
         toolGroup.addViewport(viewportIdRef.current, RENDERING_ENGINE_ID);
         applyActiveTool(cornerstoneTools, toolGroup, activeTool);
 
+        // Keep the WW/WC and Zoom overlays in sync with live tool interaction
+        // (the WindowLevel and Zoom tools change the viewport directly, not the
+        // React state). Translate Cornerstone events back to the parent.
+        const el = viewportRef.current!;
+        const onVoi = (e: any) => {
+          const range = e?.detail?.range;
+          if (range) {
+            onWindowLevelChange(
+              Math.round(range.upper - range.lower),
+              Math.round((range.upper + range.lower) / 2),
+            );
+          }
+        };
+        const onCamera = () => {
+          try {
+            const z = viewport.getZoom?.();
+            if (typeof z === "number") onZoomChange?.(Math.round(z * 100));
+          } catch {}
+        };
+        el.addEventListener(Enums.Events.VOI_MODIFIED, onVoi);
+        el.addEventListener(Enums.Events.CAMERA_MODIFIED, onCamera);
+        listenersCleanupRef.current?.();
+        listenersCleanupRef.current = () => {
+          el.removeEventListener(Enums.Events.VOI_MODIFIED, onVoi);
+          el.removeEventListener(Enums.Events.CAMERA_MODIFIED, onCamera);
+        };
+
         console.log("[Cornerstone3D] Viewport setup complete with", imageIds.length, "images");
       } catch (err: any) {
         console.error("[Cornerstone3D] Viewport setup failed:", err);
@@ -242,6 +272,8 @@ export default function CornerstoneViewer({
       mounted = false;
       resizeObserverRef.current?.disconnect();
       resizeObserverRef.current = null;
+      listenersCleanupRef.current?.();
+      listenersCleanupRef.current = null;
     };
   }, [isInitialized, imageUrls]);
 

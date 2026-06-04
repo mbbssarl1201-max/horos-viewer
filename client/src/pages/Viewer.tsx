@@ -74,6 +74,7 @@ export default function Viewer() {
   const [totalSlices, setTotalSlices] = useState(1);
   const [windowWidth, setWindowWidth] = useState(400);
   const [windowCenter, setWindowCenter] = useState(40);
+  const [zoomPercent, setZoomPercent] = useState(100);
   const [selectedSeries, setSelectedSeries] = useState<number | null>(null);
   const [viewportLayout, setViewportLayout] = useState<"1x1" | "1x2" | "2x2">("1x1");
   const [viewMode, setViewMode] = useState<"2d" | "mpr" | "3d">("2d");
@@ -422,6 +423,7 @@ export default function Viewer() {
                     setWindowWidth(ww);
                     setWindowCenter(wc);
                   }}
+                  onZoomChange={setZoomPercent}
                 />
               ) : (
                 <VolumeViewer
@@ -452,7 +454,7 @@ export default function Viewer() {
 
             {/* Overlay - HU Statistics (bottom-left) */}
             <div className="absolute bottom-3 left-3 text-[10px] text-green-400/60 font-mono pointer-events-none">
-              <div>Zoom: 100%</div>
+              <div>Zoom: {zoomPercent}%</div>
               {huStats && (
                 <div className="mt-1 border border-green-400/30 rounded px-2 py-1 bg-black/60">
                   <div className="text-green-400/90 font-semibold text-[9px] mb-0.5">ROI Statistics (HU)</div>

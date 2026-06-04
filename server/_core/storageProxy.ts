@@ -33,9 +33,18 @@ export function registerStorageProxy(app: Express) {
     try {
       // Stream the object straight from S3/MinIO to the client. The bucket
       // stays private (no presigned URL handed to the browser).
-      const { body, contentType } = await storageGetObject(key);
+      const { body } = await storageGetObject(key);
+
+      // Hardening: these bytes are served same-origin, so a malicious file
+      // (e.g. HTML masquerading as a DICOM) must never be rendered/executed in
+      // the app origin. Force an opaque, non-sniffable, download-only response
+      // and ignore the stored Content-Type. Cornerstone loads via fetch/XHR,
+      // so `attachment` doesn't affect viewing.
       res.set("Cache-Control", "no-store");
-      res.set("Content-Type", contentType || "application/octet-stream");
+      res.set("Content-Type", "application/octet-stream");
+      res.set("Content-Disposition", "attachment");
+      res.set("X-Content-Type-Options", "nosniff");
+      res.set("Content-Security-Policy", "default-src 'none'; sandbox");
       body.on("error", (err) => {
         console.error("[StorageProxy] stream error:", err);
         if (!res.headersSent) res.status(502).send("Storage stream error");

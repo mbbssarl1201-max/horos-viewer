@@ -40,18 +40,23 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-  // Rate limiting (DoS / abuse mitigation). General cap on the whole API,
-  // plus a tighter cap on the PHI export routes that stream patient data.
+  // Rate limiting (DoS / abuse mitigation). DICOM import is ONE request per
+  // instance, so a single study (often 100s–1000s of slices) bursts many
+  // requests — the cap must be high enough not to cut a legitimate import off
+  // mid-upload. Defaults are generous; tune via env without a rebuild.
+  const RL_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? `${15 * 60 * 1000}`);
+  const RL_MAX = parseInt(process.env.RATE_LIMIT_MAX ?? "6000");
+  const RL_EXPORT_MAX = parseInt(process.env.RATE_LIMIT_EXPORT_MAX ?? "120");
   const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 300,
+    windowMs: RL_WINDOW_MS,
+    limit: RL_MAX,
     standardHeaders: "draft-7",
     legacyHeaders: false,
     message: { error: "Too many requests, please try again later." },
   });
   const exportLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 30,
+    windowMs: RL_WINDOW_MS,
+    limit: RL_EXPORT_MAX,
     standardHeaders: "draft-7",
     legacyHeaders: false,
     message: { error: "Too many export requests, please try again later." },

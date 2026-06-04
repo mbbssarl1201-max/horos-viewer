@@ -133,7 +133,14 @@ export const appRouter = router({
   system: systemRouter,
 
   auth: router({
-    me: publicProcedure.query((opts) => opts.ctx.user),
+    me: publicProcedure.query((opts) => {
+      // Never expose the password hash to the client.
+      if (!opts.ctx.user) return null;
+      const { passwordHash, ...safeUser } = opts.ctx.user as typeof opts.ctx.user & {
+        passwordHash?: string | null;
+      };
+      return safeUser;
+    }),
 
     // Self-hosted email/password registration. The first account created
     // becomes an admin; later accounts default to the unprivileged "user"

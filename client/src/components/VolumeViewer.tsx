@@ -56,7 +56,6 @@ export default function VolumeViewer({ imageUrls, mode }: VolumeViewerProps) {
         const volume = await volumeLoader.createAndCacheVolume(volumeId, {
           imageIds,
         });
-        volume.load();
 
         // Fresh engine each time.
         if (engineRef.current) {
@@ -93,17 +92,23 @@ export default function VolumeViewer({ imageUrls, mode }: VolumeViewerProps) {
           engine.setViewports(inputs);
           const mprIds = ["MPR_AXIAL", "MPR_SAGITTAL", "MPR_CORONAL"];
           await setVolumesForViewports(engine, [{ volumeId }], mprIds);
-          // Apply a CT soft-tissue window (WW 400 / WC 40) so the
-          // reconstructions show anatomy instead of flat mid-grey.
-          for (const id of mprIds) {
-            try {
-              engine
-                .getViewport(id)
-                .setProperties({ voiRange: { lower: -160, upper: 240 } });
-            } catch {}
-          }
+          // Apply a CT soft-tissue window (WW 400 / WC 40). The streaming
+          // volume resets the VOI to a wide default when it finishes loading,
+          // so apply it now AND again from the load-completion callback,
+          // otherwise the reconstructions end up flat mid-grey.
+          const applyMprWindow = () => {
+            for (const id of mprIds) {
+              try {
+                engine
+                  .getViewport(id)
+                  .setProperties({ voiRange: { lower: -160, upper: 240 } });
+              } catch {}
+            }
+            engine.renderViewports(mprIds);
+          };
           engine.resize(true, false);
-          engine.renderViewports(mprIds);
+          applyMprWindow();
+          volume.load(() => applyMprWindow());
         } else {
           engine.setViewports([
             {
@@ -116,12 +121,17 @@ export default function VolumeViewer({ imageUrls, mode }: VolumeViewerProps) {
           await setVolumesForViewports(engine, [{ volumeId }], ["VR_3D"]);
           const vp = engine.getViewport("VR_3D") as any;
           // A bone preset gives a recognizable VR; fall back silently if the
-          // preset name isn't available in this build.
-          try {
-            vp.setProperties({ preset: "CT-Bone" });
-          } catch {}
+          // preset name isn't available in this build. Apply now and again once
+          // the volume has fully streamed in.
+          const applyPreset = () => {
+            try {
+              vp.setProperties({ preset: "CT-Bone" });
+            } catch {}
+            vp.render();
+          };
           engine.resize(true, false);
-          vp.render();
+          applyPreset();
+          volume.load(() => applyPreset());
         }
 
         if (!cancelled) setLoading(false);

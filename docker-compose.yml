@@ -88,11 +88,13 @@ services:
       PORT: "3000"
     networks: [internal]
     labels:
+      # Router/service name distinct from the legacy `horos` (mediadmin-ia) to
+      # avoid a Traefik name collision during the transition.
       - "traefik.enable=true"
-      - "traefik.http.routers.horos.rule=Host(`${HOROS_DOMAIN:?set HOROS_DOMAIN}`)"
-      - "traefik.http.routers.horos.entrypoints=websecure"
-      - "traefik.http.routers.horos.tls.certresolver=letsencrypt"
-      - "traefik.http.services.horos.loadbalancer.server.port=3000"
+      - "traefik.http.routers.horosviewer.rule=Host(`${HOROS_DOMAIN:?set HOROS_DOMAIN}`)"
+      - "traefik.http.routers.horosviewer.entrypoints=websecure"
+      - "traefik.http.routers.horosviewer.tls.certresolver=letsencrypt"
+      - "traefik.http.services.horosviewer.loadbalancer.server.port=3000"
 
 volumes:
   db-data:

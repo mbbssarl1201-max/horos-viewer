@@ -143,7 +143,13 @@ export const appRouter = router({
 
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
-    logout: publicProcedure.mutation(({ ctx }) => {
+    logout: publicProcedure.mutation(async ({ ctx }) => {
+      // Revoke all outstanding sessions for this user server-side, not just
+      // clear the cookie on this device.
+      if (ctx.user?.openId) {
+        const { bumpSessionVersion } = await import("./db");
+        await bumpSessionVersion(ctx.user.openId);
+      }
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;

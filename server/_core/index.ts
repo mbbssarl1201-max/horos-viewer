@@ -59,6 +59,18 @@ async function startServer() {
   app.use("/api", apiLimiter);
   app.use("/api/export", exportLimiter);
 
+  // CSRF mitigation for the PHI export GET routes: a cross-site context (e.g. a
+  // malicious page triggering a navigation/download) is rejected. Same-origin
+  // app requests ("same-origin"/"same-site") and direct user navigations
+  // ("none", e.g. typing the URL) are allowed.
+  app.use("/api/export", (req, res, next) => {
+    if (req.headers["sec-fetch-site"] === "cross-site") {
+      res.status(403).json({ error: "Cross-site request blocked" });
+      return;
+    }
+    next();
+  });
+
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   // Export routes (ZIP DICOM + PDF) - must be before tRPC

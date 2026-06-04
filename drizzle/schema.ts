@@ -11,6 +11,9 @@ export const users = mysqlTable("users", {
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
   role: mysqlEnum("role", ["user", "admin", "radiologist", "technician"]).default("user").notNull(),
+  // Bumped on logout to revoke every previously issued session JWT for this
+  // user. A token whose `sv` claim != this value is rejected at auth time.
+  sessionVersion: int("sessionVersion").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),

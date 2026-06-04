@@ -72,6 +72,19 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+/**
+ * Increment a user's session version, invalidating every JWT issued before
+ * now. Called on logout to make session revocation server-side and immediate.
+ */
+export async function bumpSessionVersion(openId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(users)
+    .set({ sessionVersion: sql`${users.sessionVersion} + 1` })
+    .where(eq(users.openId, openId));
+}
+
 // ============ STUDY QUERIES ============
 
 export async function listStudies(filters?: { modality?: string; search?: string; timeFilter?: string }) {

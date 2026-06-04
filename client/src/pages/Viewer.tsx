@@ -31,11 +31,13 @@ import {
   SkipForward,
   Download,
   Printer,
+  Mail,
   Camera,
   FlipHorizontal,
   FlipVertical,
   TriangleAlert,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 
 // Window/Level presets for different body parts
@@ -253,6 +255,50 @@ export default function Viewer() {
     doc.body.appendChild(img);
   }, []);
 
+  // Email a PDF report (study info + current image) to a recipient, who can
+  // open it directly from their inbox — no login, no link.
+  const sendReportMutation = trpc.email.sendReport.useMutation();
+  const handleEmailReport = useCallback(async () => {
+    const canvas = getViewportCanvas();
+    if (!canvas || !studyId) {
+      toast.error("Aucune image à envoyer");
+      return;
+    }
+    const to = window.prompt("Adresse email du destinataire :");
+    if (!to) return;
+    try {
+      const { jsPDF } = await import("jspdf");
+      const doc = new jsPDF();
+      doc.setFontSize(15);
+      doc.text("Compte rendu d'imagerie", 14, 16);
+      doc.setFontSize(10);
+      const lines = [
+        `Patient : ${study?.patientName || "—"}`,
+        `Date d'étude : ${study?.studyDate || "—"}`,
+        `Modalité : ${study?.modality || "—"}`,
+        `Description : ${study?.studyDescription || "—"}`,
+        `Institution : ${study?.institution || "—"}`,
+      ];
+      lines.forEach((l, i) => doc.text(l, 14, 28 + i * 6));
+      const imgData = canvas.toDataURL("image/png");
+      const w = 180;
+      const h = Math.min(200, (canvas.height / canvas.width) * w);
+      doc.addImage(imgData, "PNG", 14, 62, w, h);
+      const pdfBase64 = doc.output("datauristring").split(",")[1];
+
+      await sendReportMutation.mutateAsync({
+        to,
+        studyId,
+        patientName: study?.patientName || undefined,
+        pdfBase64,
+        filename: `compte-rendu-${studyId}.pdf`,
+      });
+      toast.success(`Compte rendu PDF envoyé à ${to}`);
+    } catch (e: any) {
+      toast.error("Échec de l'envoi : " + (e?.message || "erreur"));
+    }
+  }, [studyId, study, sendReportMutation]);
+
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       {/* Top Toolbar */}
@@ -340,6 +386,15 @@ export default function Viewer() {
         <button className="toolbar-btn" title="Print current view" onClick={handlePrint}>
           <Printer className="w-4 h-4" />
           <span className="text-[9px]">Print</span>
+        </button>
+        <button
+          className="toolbar-btn"
+          title="Email PDF report to a recipient"
+          onClick={handleEmailReport}
+          disabled={sendReportMutation.isPending}
+        >
+          <Mail className="w-4 h-4" />
+          <span className="text-[9px]">{sendReportMutation.isPending ? "…" : "Email"}</span>
         </button>
       </div>
 

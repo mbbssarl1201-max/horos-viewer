@@ -764,6 +764,55 @@ export const appRouter = router({
         });
       }),
 
+    // Email a generated PDF report (built client-side from the rendered image
+    // + study info) to a recipient as an attachment, so they can read it
+    // directly without logging in. The PDF carries PHI — every send is logged.
+    sendReport: medicalProcedure
+      .input(z.object({
+        to: z.string().email(),
+        studyId: z.number(),
+        patientName: z.string().optional(),
+        message: z.string().max(2000).optional(),
+        pdfBase64: z.string().min(1).max(20_000_000), // ~15 MB cap
+        filename: z.string().max(128).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const subjectName = input.patientName ? ` — ${input.patientName}` : "";
+        const result = await sendEmail({
+          to: input.to,
+          subject: `Compte rendu d'imagerie${subjectName}`,
+          html:
+            `<div style="font-family:sans-serif;max-width:600px">` +
+            `<p>Bonjour,</p>` +
+            `<p>Veuillez trouver ci-joint le compte rendu d'imagerie au format PDF.</p>` +
+            (input.message ? `<p>${input.message.replace(/[<>&]/g, "")}</p>` : "") +
+            `<p style="color:#888;font-size:12px">Document médical confidentiel — destiné au seul destinataire.</p>` +
+            `</div>`,
+          attachments: [
+            {
+              filename: input.filename || `compte-rendu-${input.studyId}.pdf`,
+              content: input.pdfBase64,
+              encoding: "base64",
+              contentType: "application/pdf",
+            },
+          ],
+        });
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "study.email.report",
+          studyId: input.studyId,
+          detail: input.to,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        if (!result.success) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: result.error || "Email send failed",
+          });
+        }
+        return { success: true };
+      }),
+
     notifyNewStudy: medicalProcedure
       .input(z.object({
         recipientEmail: z.string().email(),

@@ -13,6 +13,12 @@ interface EmailOptions {
   subject: string;
   html: string;
   text?: string;
+  attachments?: Array<{
+    filename: string;
+    content: string | Buffer;
+    contentType?: string;
+    encoding?: string;
+  }>;
 }
 
 /**
@@ -68,6 +74,7 @@ export async function sendEmail(options: EmailOptions): Promise<{ success: boole
       subject: options.subject,
       html: options.html,
       text: options.text || options.html.replace(/<[^>]*>/g, ""),
+      attachments: options.attachments,
     });
 
     console.log("[Email] Sent:", options.subject, "to:", recipients);

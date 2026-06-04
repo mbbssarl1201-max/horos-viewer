@@ -78,6 +78,7 @@ export default function CornerstoneViewer({
   const [error, setError] = useState<string | null>(null);
   const renderingEngineRef = useRef<any>(null);
   const viewportIdRef = useRef("CT_VIEWPORT");
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
   // Initialize Cornerstone3D
   useEffect(() => {
@@ -138,6 +139,20 @@ export default function CornerstoneViewer({
         const imageIds = imageUrls.map((url) => `wadouri:${url}`);
 
         await viewport.setStack(imageIds, currentSlice);
+
+        // Cornerstone sizes the canvas from the element at enableElement time.
+        // If the container wasn't laid out yet, the canvas keeps its default
+        // 300x150 size and the image renders invisibly small (blank viewport).
+        // Fit it to the now-laid-out container, and keep it fitted on resize.
+        renderingEngine.resize(true, true);
+        const ro = new ResizeObserver(() => {
+          try {
+            renderingEngine.resize(true, true);
+          } catch {}
+        });
+        ro.observe(viewportRef.current!);
+        resizeObserverRef.current = ro;
+
         viewport.render();
 
         // Set initial window/level
@@ -161,6 +176,8 @@ export default function CornerstoneViewer({
 
     return () => {
       mounted = false;
+      resizeObserverRef.current?.disconnect();
+      resizeObserverRef.current = null;
     };
   }, [isInitialized, imageUrls]);
 

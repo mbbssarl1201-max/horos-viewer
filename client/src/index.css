@@ -85,7 +85,10 @@
 /* DICOM viewer specific styles */
 .dicom-viewport {
   background: #000;
-  position: relative;
+  /* NOTE: do not set `position: relative` here — the element is rendered with
+     the Tailwind `absolute inset-0` utilities to fill its parent. Forcing
+     relative here overrode `absolute`, so inset-0 no longer stretched it and
+     the viewport collapsed to height 0 (blank/black image). */
   overflow: hidden;
 }
 

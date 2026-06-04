@@ -1,5 +1,6 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import CornerstoneViewer from "@/components/CornerstoneViewer";
+import VolumeViewer from "@/components/VolumeViewer";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -409,7 +410,7 @@ export default function Viewer() {
                     </p>
                   </div>
                 </div>
-              ) : (
+              ) : viewMode === "2d" ? (
                 <CornerstoneViewer
                   imageUrls={instancesList.map((inst: any) => inst.storageUrl || '')}
                   currentSlice={currentSlice}
@@ -421,6 +422,11 @@ export default function Viewer() {
                     setWindowWidth(ww);
                     setWindowCenter(wc);
                   }}
+                />
+              ) : (
+                <VolumeViewer
+                  imageUrls={instancesList.map((inst: any) => inst.storageUrl || '')}
+                  mode={viewMode}
                 />
               )}
             </div>
@@ -458,35 +464,6 @@ export default function Viewer() {
               )}
             </div>
 
-            {/* MPR crosshair overlay — visual preview only, NOT a real
-                multiplanar reconstruction. Labelled clearly to avoid being
-                mistaken for a diagnostic reconstruction. */}
-            {viewMode === "mpr" && (
-              <div className="absolute inset-0 pointer-events-none">
-                <div className="absolute top-0 bottom-0 left-1/2 w-px bg-yellow-400/50" />
-                <div className="absolute left-0 right-0 top-1/2 h-px bg-cyan-400/50" />
-                <div className="absolute top-2 left-1/2 ml-2 text-[9px] text-yellow-400 font-mono">Sagittal</div>
-                <div className="absolute left-2 top-1/2 mt-2 text-[9px] text-cyan-400 font-mono">Coronal</div>
-                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] text-amber-300 bg-black/70 px-2 py-0.5 rounded font-semibold">
-                  MPR preview — not a real reconstruction (not for diagnostic use)
-                </div>
-              </div>
-            )}
-
-            {/* 3D volume rendering is not implemented — show an honest
-                "unavailable" state instead of claiming an active VolumeViewport. */}
-            {viewMode === "3d" && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/80">
-                <div className="text-center">
-                  <div className="w-32 h-32 mx-auto mb-4 rounded-full border-2 border-primary/30 flex items-center justify-center">
-                    <Grid3X3 className="w-16 h-16 text-primary/40" />
-                  </div>
-                  <p className="text-sm text-muted-foreground">3D Volume Rendering</p>
-                  <p className="text-xs text-amber-300/90 mt-2 font-semibold">Not available — 2D viewer only</p>
-                  <p className="text-xs text-muted-foreground/60 mt-1">Volume rendering is not yet implemented in this build</p>
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Bottom Controls */}

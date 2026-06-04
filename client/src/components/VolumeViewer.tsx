@@ -91,13 +91,19 @@ export default function VolumeViewer({ imageUrls, mode }: VolumeViewerProps) {
             },
           ];
           engine.setViewports(inputs);
-          await setVolumesForViewports(
-            engine,
-            [{ volumeId }],
-            ["MPR_AXIAL", "MPR_SAGITTAL", "MPR_CORONAL"],
-          );
+          const mprIds = ["MPR_AXIAL", "MPR_SAGITTAL", "MPR_CORONAL"];
+          await setVolumesForViewports(engine, [{ volumeId }], mprIds);
+          // Apply a CT soft-tissue window (WW 400 / WC 40) so the
+          // reconstructions show anatomy instead of flat mid-grey.
+          for (const id of mprIds) {
+            try {
+              engine
+                .getViewport(id)
+                .setProperties({ voiRange: { lower: -160, upper: 240 } });
+            } catch {}
+          }
           engine.resize(true, false);
-          engine.renderViewports(["MPR_AXIAL", "MPR_SAGITTAL", "MPR_CORONAL"]);
+          engine.renderViewports(mprIds);
         } else {
           engine.setViewports([
             {

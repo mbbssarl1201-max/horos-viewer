@@ -173,6 +173,25 @@ export const pacsServers = mysqlTable("pacs_servers", {
   userIdIdx: index("pacs_servers_userId_idx").on(t.userId),
 }));
 
+/**
+ * PHI access audit trail (HIPAA / nLPD). One row per access to patient data:
+ * who (userId), what (action), which study, when, and from where (IP).
+ * Append-only — never updated or deleted in normal operation.
+ */
+export const accessLogs = mysqlTable("access_logs", {
+  id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  action: varchar("action", { length: 64 }).notNull(),
+  studyId: int("studyId"),
+  detail: varchar("detail", { length: 256 }),
+  ipAddress: varchar("ipAddress", { length: 64 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  userIdIdx: index("access_logs_userId_idx").on(t.userId),
+  studyIdIdx: index("access_logs_studyId_idx").on(t.studyId),
+  createdAtIdx: index("access_logs_createdAt_idx").on(t.createdAt),
+}));
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type Patient = typeof patients.$inferSelect;
@@ -182,3 +201,5 @@ export type Instance = typeof instances.$inferSelect;
 export type Album = typeof albums.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type Annotation = typeof annotations.$inferSelect;
+export type AccessLog = typeof accessLogs.$inferSelect;
+export type InsertAccessLog = typeof accessLogs.$inferInsert;

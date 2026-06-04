@@ -77,11 +77,18 @@ async function startServer() {
       const studyId = parseInt(req.params.studyId);
       if (isNaN(studyId)) { res.status(400).json({ error: "Invalid study ID" }); return; }
 
-      const { listSeriesByStudy, listInstancesBySeries, getStudyById } = await import("../db");
+      const { listSeriesByStudy, listInstancesBySeries, getStudyById, recordAccess } = await import("../db");
       const { storageGetSignedUrl } = await import("../storage");
 
       const study = await getStudyById(studyId);
       if (!study) { res.status(404).json({ error: "Study not found" }); return; }
+
+      await recordAccess({
+        userId: user.id,
+        action: "study.export.dicom",
+        studyId,
+        ipAddress: req.ip ?? null,
+      });
 
       const seriesList = await listSeriesByStudy(studyId);
       if (seriesList.length === 0) { res.status(404).json({ error: "No series found" }); return; }
@@ -135,9 +142,16 @@ async function startServer() {
       const studyId = parseInt(req.params.studyId);
       if (isNaN(studyId)) { res.status(400).json({ error: "Invalid study ID" }); return; }
 
-      const { getStudyById } = await import("../db");
+      const { getStudyById, recordAccess } = await import("../db");
       const study = await getStudyById(studyId);
       if (!study) { res.status(404).json({ error: "Study not found" }); return; }
+
+      await recordAccess({
+        userId: user.id,
+        action: "study.export.pdf",
+        studyId,
+        ipAddress: req.ip ?? null,
+      });
 
       const { jsPDF } = await import("jspdf");
       const doc = new jsPDF();

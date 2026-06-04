@@ -18,6 +18,7 @@ import {
   getUserNotifications,
   markNotificationRead,
   createNotification,
+  recordAccess,
 } from "./db";
 import { storagePut } from "./storage";
 import { hasMedicalAccess, isAdmin } from "./rbac";
@@ -159,8 +160,15 @@ export const appRouter = router({
 
     get: medicalProcedure
       .input(z.object({ id: z.number() }))
-      .query(async ({ input }) => {
-        return getStudyById(input.id);
+      .query(async ({ input, ctx }) => {
+        const study = await getStudyById(input.id);
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "study.view",
+          studyId: input.id,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return study;
       }),
 
     updateStatus: adminProcedure
@@ -224,7 +232,7 @@ export const appRouter = router({
         id: z.number(),
         fields: z.array(z.string()),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
         const { studies, patients } = await import("../drizzle/schema");
         const { eq } = await import("drizzle-orm");
@@ -271,12 +279,20 @@ export const appRouter = router({
           await db.update(patients).set(patientUpdate).where(eq(patients.id, study.patientId));
         }
 
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "study.anonymize",
+          studyId: input.id,
+          detail: input.fields.join(","),
+          ipAddress: ctx.req?.ip ?? null,
+        });
+
         return { success: true, fieldsAnonymized: studyCount + patientCount };
       }),
 
     delete: strictAdminProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
         const { studies, series, instances, annotations, notifications, albumStudies } = await import("../drizzle/schema");
         const { eq } = await import("drizzle-orm");
@@ -297,6 +313,13 @@ export const appRouter = router({
         await db.delete(notifications).where(eq(notifications.studyId, input.id));
         await db.delete(albumStudies).where(eq(albumStudies.studyId, input.id));
         await db.delete(studies).where(eq(studies.id, input.id));
+
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "study.delete",
+          studyId: input.id,
+          ipAddress: ctx.req?.ip ?? null,
+        });
 
         return { success: true };
       }),
@@ -606,7 +629,7 @@ export const appRouter = router({
 
   // PACS Servers CRUD router
   pacsServers: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
+    list: medicalProcedure.query(async ({ ctx }) => {
       const { getDb } = await import("./db");
       const { pacsServers } = await import("../drizzle/schema");
       const { eq } = await import("drizzle-orm");
@@ -615,10 +638,12 @@ export const appRouter = router({
       return db.select().from(pacsServers).where(eq(pacsServers.userId, ctx.user.id));
     }),
 
-    create: protectedProcedure
+    // Configuring a PACS endpoint defines where studies can be C-MOVE'd —
+    // admin/radiologist only, not every logged-in account.
+    create: adminProcedure
       .input(z.object({
         name: z.string().min(1),
-        aeTitle: z.string().min(1),
+        aeTitle: aeTitleSchema,
         host: z.string().min(1),
         port: z.number().min(1).max(65535),
         orthancUrl: z.string().optional(),
@@ -639,7 +664,7 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    delete: protectedProcedure
+    delete: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");

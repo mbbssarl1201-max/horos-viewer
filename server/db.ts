@@ -1,6 +1,6 @@
 import { eq, desc, and, like, sql, gte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, patients, studies, series, instances, albums, albumStudies, notifications, annotations } from "../drizzle/schema";
+import { InsertUser, users, patients, studies, series, instances, albums, albumStudies, notifications, annotations, accessLogs } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -395,4 +395,39 @@ export async function updateSeriesCount(seriesId: number) {
     .update(series)
     .set({ numberOfInstances: count[0]?.count || 0 })
     .where(eq(series.id, seriesId));
+}
+
+// ============ ACCESS LOG (HIPAA / nLPD audit trail) ============
+
+export interface AccessEvent {
+  userId: number;
+  action: string;
+  studyId?: number | null;
+  detail?: string | null;
+  ipAddress?: string | null;
+}
+
+/**
+ * Append one PHI-access record. Best-effort: a logging failure is recorded to
+ * the console but never propagated, so audit problems can't break a clinical
+ * request mid-flight. (If a hard "no audit, no access" policy is required, make
+ * the callers await and fail on rejection instead.)
+ */
+export async function recordAccess(event: AccessEvent): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) {
+      console.warn("[AccessLog] DB unavailable, access NOT recorded:", event.action);
+      return;
+    }
+    await db.insert(accessLogs).values({
+      userId: event.userId,
+      action: event.action,
+      studyId: event.studyId ?? null,
+      detail: event.detail ?? null,
+      ipAddress: event.ipAddress ?? null,
+    });
+  } catch (err) {
+    console.error("[AccessLog] Failed to record access event:", event.action, err);
+  }
 }

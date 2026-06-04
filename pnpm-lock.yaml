@@ -17,10 +17,10 @@ importers:
   .:
     dependencies:
       '@aws-sdk/client-s3':
-        specifier: ^3.693.0
+        specifier: ^3.907.0
         version: 3.907.0
       '@aws-sdk/s3-request-presigner':
-        specifier: ^3.693.0
+        specifier: ^3.907.0
         version: 3.907.0
       '@cornerstonejs/core':
         specifier: ^4.22.13
@@ -136,6 +136,9 @@ importers:
       axios:
         specifier: ^1.12.0
         version: 1.12.2
+      bcryptjs:
+        specifier: ^3.0.3
+        version: 3.0.3
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -3240,6 +3243,10 @@ packages:
 
   baseline-browser-mapping@2.8.12:
     resolution: {integrity: sha512-vAPMQdnyKCBtkmQA6FMCBvU9qFIppS3nzyXnEM+Lo2IAhG4Mpjv9cCxMudhgV3YdNNJv6TNqXy97dfRVL2LmaQ==}
+    hasBin: true
+
+  bcryptjs@3.0.3:
+    resolution: {integrity: sha512-GlF5wPWnSa/X5LKM1o0wz0suXIINz1iHRLvTS+sLyi7XPbe5ycmYI3DlZqVGZZtDgl4DmasFg7gOB3JYbphV5g==}
     hasBin: true
 
   big.js@5.2.2:
@@ -9246,6 +9253,8 @@ snapshots:
   baseline-browser-mapping@2.10.33: {}
 
   baseline-browser-mapping@2.8.12: {}
+
+  bcryptjs@3.0.3: {}
 
   big.js@5.2.2: {}
 

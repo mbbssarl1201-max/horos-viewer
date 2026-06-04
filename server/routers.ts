@@ -1,4 +1,4 @@
-import { COOKIE_NAME } from "@shared/const";
+import { COOKIE_NAME, SEVEN_DAYS_MS } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
@@ -134,6 +134,73 @@ export const appRouter = router({
 
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
+
+    // Self-hosted email/password registration. The first account created
+    // becomes an admin; later accounts default to the unprivileged "user"
+    // role and must be promoted to a clinical role to see PHI.
+    register: publicProcedure
+      .input(z.object({
+        email: z.string().email(),
+        password: z.string().min(8, "Password must be at least 8 characters"),
+        name: z.string().min(1).max(128).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const { ENV } = await import("./_core/env");
+        if (ENV.authMode !== "local") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Registration disabled" });
+        }
+        const { getUserByEmail, countUsers, createLocalUser } = await import("./db");
+        const { hashPassword } = await import("./localAuth");
+        const { sdk } = await import("./_core/sdk");
+
+        const email = input.email.trim().toLowerCase();
+        if (await getUserByEmail(email)) {
+          throw new TRPCError({ code: "CONFLICT", message: "Email already registered" });
+        }
+
+        const isFirstUser = (await countUsers()) === 0;
+        const passwordHash = await hashPassword(input.password);
+        const openId = `local:${crypto.randomUUID()}`;
+        const user = await createLocalUser({
+          openId,
+          email,
+          name: input.name ?? null,
+          passwordHash,
+          role: isFirstUser ? "admin" : "user",
+        });
+        if (!user) {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "User creation failed" });
+        }
+
+        const token = await sdk.createSessionToken(openId, { name: input.name || "" });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: SEVEN_DAYS_MS });
+        return { success: true, user: { id: user.id, email, role: user.role } };
+      }),
+
+    login: publicProcedure
+      .input(z.object({
+        email: z.string().email(),
+        password: z.string().min(1),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const { getUserByEmail } = await import("./db");
+        const { verifyPassword } = await import("./localAuth");
+        const { sdk } = await import("./_core/sdk");
+
+        const email = input.email.trim().toLowerCase();
+        const user = await getUserByEmail(email);
+        // Generic error either way to avoid leaking which emails exist.
+        if (!user || !user.passwordHash || !(await verifyPassword(input.password, user.passwordHash))) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
+        }
+
+        const token = await sdk.createSessionToken(user.openId, { name: user.name || "" });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: SEVEN_DAYS_MS });
+        return { success: true, user: { id: user.id, email, role: user.role } };
+      }),
+
     logout: publicProcedure.mutation(async ({ ctx }) => {
       // Revoke all outstanding sessions for this user server-side, not just
       // clear the cookie on this device.

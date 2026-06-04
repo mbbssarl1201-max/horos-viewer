@@ -1,0 +1,104 @@
+# Self-hosted Horos Viewer stack: MySQL + MinIO (S3) + app, behind Traefik.
+# Copy .env.example -> .env and fill values before `docker compose up -d`.
+#
+# Placeholders to confirm for the MBBS VPS:
+#   - `web` external network = the Traefik network name on the host.
+#   - HOROS_DOMAIN in .env (e.g. horos.mbbsarl.ch) + DNS A record -> VPS.
+#   - `certresolver=letsencrypt` = the Traefik cert resolver name on the host.
+
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-horos}
+      MYSQL_USER: ${MYSQL_USER:-horos}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+    volumes:
+      - db-data:/var/lib/mysql
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+    volumes:
+      - minio-data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: create the DICOM bucket (private) then exit.
+  createbucket:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set h http://minio:9000 $${S3_ACCESS_KEY} $${S3_SECRET_KEY} &&
+      mc mb --ignore-existing h/$${S3_BUCKET} &&
+      echo 'bucket ready';
+      "
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:-horos-dicom}
+    networks: [internal]
+    restart: "no"
+
+  # One-shot: apply DB migrations, then exit.
+  migrate:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["pnpm", "db:migrate"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    networks: [internal]
+    restart: "no"
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+    networks: [internal, web]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.horos.rule=Host(`${HOROS_DOMAIN:?set HOROS_DOMAIN}`)"
+      - "traefik.http.routers.horos.entrypoints=websecure"
+      - "traefik.http.routers.horos.tls.certresolver=letsencrypt"
+      - "traefik.http.services.horos.loadbalancer.server.port=3000"
+
+volumes:
+  db-data:
+  minio-data:
+
+networks:
+  internal:
+  web:
+    external: true

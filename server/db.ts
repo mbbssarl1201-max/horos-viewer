@@ -72,6 +72,45 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+export async function getUserByEmail(email: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function countUsers(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const result = await db.select({ count: sql<number>`COUNT(*)` }).from(users);
+  return result[0]?.count ?? 0;
+}
+
+/**
+ * Create a user for self-hosted email/password auth. Returns the created row.
+ * Throws if the DB is unavailable.
+ */
+export async function createLocalUser(input: {
+  openId: string;
+  email: string;
+  name: string | null;
+  passwordHash: string;
+  role: "user" | "admin" | "radiologist" | "technician";
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(users).values({
+    openId: input.openId,
+    email: input.email,
+    name: input.name,
+    passwordHash: input.passwordHash,
+    role: input.role,
+    loginMethod: "local",
+    lastSignedIn: new Date(),
+  });
+  return getUserByOpenId(input.openId);
+}
+
 /**
  * Increment a user's session version, invalidating every JWT issued before
  * now. Called on logout to make session revocation server-side and immediate.

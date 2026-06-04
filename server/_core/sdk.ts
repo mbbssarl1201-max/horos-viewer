@@ -297,6 +297,12 @@ class SDKServer {
     const signedInAt = new Date();
     let user = await db.getUserByOpenId(sessionUserId);
 
+    // In self-hosted local auth mode there is no upstream OAuth server to sync
+    // from: the user must already exist (created via auth.register).
+    if (!user && ENV.authMode === "local") {
+      throw ForbiddenError("User not found");
+    }
+
     // If user not in DB, sync from OAuth server automatically
     if (!user) {
       try {

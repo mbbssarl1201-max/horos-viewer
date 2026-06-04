@@ -10,6 +10,8 @@ export const users = mysqlTable("users", {
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
+  // bcrypt hash for self-hosted email/password auth. Null for OAuth users.
+  passwordHash: varchar("passwordHash", { length: 255 }),
   role: mysqlEnum("role", ["user", "admin", "radiologist", "technician"]).default("user").notNull(),
   // Bumped on logout to revoke every previously issued session JWT for this
   // user. A token whose `sv` claim != this value is rejected at auth time.

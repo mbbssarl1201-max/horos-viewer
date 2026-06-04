@@ -190,6 +190,32 @@ describe("annotations.save - RBAC", () => {
   });
 });
 
+describe("auth.register / auth.login - input validation", () => {
+  it("rejects registration with an invalid email", async () => {
+    const ctx = createUnauthenticatedContext();
+    const caller = appRouter.createCaller(ctx);
+    await expect(
+      caller.auth.register({ email: "not-an-email", password: "longenough1" })
+    ).rejects.toThrow();
+  });
+
+  it("rejects registration with a too-short password", async () => {
+    const ctx = createUnauthenticatedContext();
+    const caller = appRouter.createCaller(ctx);
+    await expect(
+      caller.auth.register({ email: "a@b.com", password: "short" })
+    ).rejects.toThrow();
+  });
+
+  it("rejects login with an invalid email", async () => {
+    const ctx = createUnauthenticatedContext();
+    const caller = appRouter.createCaller(ctx);
+    await expect(
+      caller.auth.login({ email: "nope", password: "x" })
+    ).rejects.toThrow();
+  });
+});
+
 describe("orthanc.cFind - AE Title validation (SSRF guard)", () => {
   it("rejects an AE Title containing path separators", async () => {
     const { ctx } = createMockContext("admin");

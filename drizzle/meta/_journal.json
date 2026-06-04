@@ -43,6 +43,13 @@
       "when": 1780575304918,
       "tag": "0005_whole_warbird",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1780577348143,
+      "tag": "0006_cheerful_night_nurse",
+      "breakpoints": true
     }
   ]
 }

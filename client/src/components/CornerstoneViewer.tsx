@@ -64,6 +64,44 @@ async function initCornerstone() {
   return initPromise;
 }
 
+const TOOL_GROUP_ID = "horosToolGroup";
+const RENDERING_ENGINE_ID = "horosRenderingEngine";
+
+// Maps our toolbar IDs to Cornerstone3D tool names.
+function buildToolMap(cst: any): Record<string, string> {
+  return {
+    wwwl: cst.WindowLevelTool.toolName,
+    zoom: cst.ZoomTool.toolName,
+    pan: cst.PanTool.toolName,
+    scroll: cst.StackScrollTool.toolName,
+    length: cst.LengthTool.toolName,
+    angle: cst.AngleTool.toolName,
+    ellipse: cst.EllipticalROITool.toolName,
+    rect: cst.RectangleROITool.toolName,
+    text: cst.ArrowAnnotateTool.toolName,
+  };
+}
+
+// Make the chosen tool the primary-button tool; keep stack scroll on the wheel.
+function applyActiveTool(cst: any, toolGroup: any, activeTool: string) {
+  const map = buildToolMap(cst);
+  const csName = map[activeTool];
+  if (!csName) return;
+  Object.values(map).forEach((name) => {
+    try {
+      toolGroup.setToolPassive(name);
+    } catch {}
+  });
+  toolGroup.setToolActive(csName, {
+    bindings: [{ mouseButton: cst.Enums.MouseBindings.Primary }],
+  });
+  try {
+    toolGroup.setToolActive(cst.StackScrollTool.toolName, {
+      bindings: [{ mouseButton: cst.Enums.MouseBindings.Wheel }],
+    });
+  } catch {}
+}
+
 export default function CornerstoneViewer({
   imageUrls,
   currentSlice,
@@ -120,8 +158,7 @@ export default function CornerstoneViewer({
         }
 
         // Create rendering engine
-        const renderingEngineId = "horosRenderingEngine";
-        const renderingEngine = new RenderingEngine(renderingEngineId);
+        const renderingEngine = new RenderingEngine(RENDERING_ENGINE_ID);
         renderingEngineRef.current = renderingEngine;
 
         const viewportInput = {
@@ -162,6 +199,33 @@ export default function CornerstoneViewer({
             upper: windowCenter + windowWidth / 2,
           },
         });
+
+        // Bind the tool group to THIS viewport. Doing it here — after the
+        // viewport is enabled — is essential: the previous code created the
+        // tool group in a separate effect that raced ahead of this async
+        // setup, so addViewport ran before the viewport existed and the
+        // annotation tools (Length, Angle, ROI…) never attached, making every
+        // measurement silently do nothing. The engine is rebuilt on each setup,
+        // so recreate the group to drop the stale viewport reference.
+        const cornerstoneTools = await import("@cornerstonejs/tools");
+        const { ToolGroupManager } = cornerstoneTools;
+        if (ToolGroupManager.getToolGroup(TOOL_GROUP_ID)) {
+          ToolGroupManager.destroyToolGroup(TOOL_GROUP_ID);
+        }
+        const toolGroup = ToolGroupManager.createToolGroup(TOOL_GROUP_ID)!;
+        [
+          cornerstoneTools.WindowLevelTool,
+          cornerstoneTools.PanTool,
+          cornerstoneTools.ZoomTool,
+          cornerstoneTools.StackScrollTool,
+          cornerstoneTools.LengthTool,
+          cornerstoneTools.AngleTool,
+          cornerstoneTools.EllipticalROITool,
+          cornerstoneTools.RectangleROITool,
+          cornerstoneTools.ArrowAnnotateTool,
+        ].forEach((T) => toolGroup.addTool(T.toolName));
+        toolGroup.addViewport(viewportIdRef.current, RENDERING_ENGINE_ID);
+        applyActiveTool(cornerstoneTools, toolGroup, activeTool);
 
         console.log("[Cornerstone3D] Viewport setup complete with", imageIds.length, "images");
       } catch (err: any) {
@@ -220,71 +284,23 @@ export default function CornerstoneViewer({
     }
   }, [windowWidth, windowCenter, isInitialized]);
 
-  // Handle active tool change
+  // Handle active tool change — the tool group is created in setupViewport, so
+  // here we only re-bind which tool is on the primary mouse button.
   useEffect(() => {
     if (!isInitialized) return;
 
-    const setTool = async () => {
+    (async () => {
       try {
         const cornerstoneTools = await import("@cornerstonejs/tools");
-        const { ToolGroupManager, Enums: ToolEnums } = cornerstoneTools;
-
-        let toolGroup = ToolGroupManager.getToolGroup("horosToolGroup");
-        if (!toolGroup) {
-          toolGroup = ToolGroupManager.createToolGroup("horosToolGroup");
-          toolGroup?.addViewport(viewportIdRef.current, "horosRenderingEngine");
-
-          // Add all tools to group
-          toolGroup?.addTool(cornerstoneTools.WindowLevelTool.toolName);
-          toolGroup?.addTool(cornerstoneTools.PanTool.toolName);
-          toolGroup?.addTool(cornerstoneTools.ZoomTool.toolName);
-          toolGroup?.addTool(cornerstoneTools.StackScrollTool.toolName);
-          toolGroup?.addTool(cornerstoneTools.LengthTool.toolName);
-          toolGroup?.addTool(cornerstoneTools.AngleTool.toolName);
-          toolGroup?.addTool(cornerstoneTools.EllipticalROITool.toolName);
-          toolGroup?.addTool(cornerstoneTools.RectangleROITool.toolName);
-          toolGroup?.addTool(cornerstoneTools.ArrowAnnotateTool.toolName);
-        }
-
-        // Map our tool IDs to cornerstone tool names
-        const toolMap: Record<string, string> = {
-          wwwl: cornerstoneTools.WindowLevelTool.toolName,
-          zoom: cornerstoneTools.ZoomTool.toolName,
-          pan: cornerstoneTools.PanTool.toolName,
-          scroll: cornerstoneTools.StackScrollTool.toolName,
-          length: cornerstoneTools.LengthTool.toolName,
-          angle: cornerstoneTools.AngleTool.toolName,
-          ellipse: cornerstoneTools.EllipticalROITool.toolName,
-          rect: cornerstoneTools.RectangleROITool.toolName,
-          text: cornerstoneTools.ArrowAnnotateTool.toolName,
-        };
-
-        const csToolName = toolMap[activeTool];
-        if (csToolName && toolGroup) {
-          // Deactivate all tools first
-          Object.values(toolMap).forEach((name) => {
-            try {
-              toolGroup!.setToolPassive(name);
-            } catch {}
-          });
-
-          // Activate selected tool
-          toolGroup.setToolActive(csToolName, {
-            bindings: [{ mouseButton: ToolEnums.MouseBindings.Primary }],
-          });
-
-          // Always keep scroll on mouse wheel
-          toolGroup.setToolActive(cornerstoneTools.StackScrollTool.toolName, {
-            bindings: [{ mouseButton: ToolEnums.MouseBindings.Wheel }],
-          });
+        const toolGroup = cornerstoneTools.ToolGroupManager.getToolGroup(TOOL_GROUP_ID);
+        if (toolGroup) {
+          applyActiveTool(cornerstoneTools, toolGroup, activeTool);
         }
       } catch (err) {
         console.error("[Cornerstone3D] Tool change failed:", err);
       }
-    };
-
-    setTool();
-  }, [activeTool, isInitialized]);
+    })();
+  }, [activeTool, isInitialized, imageUrls]);
 
   // Handle scroll for slice navigation
   const handleWheel = useCallback(

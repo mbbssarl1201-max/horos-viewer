@@ -205,6 +205,52 @@ export default function Viewer() {
     [totalSlices]
   );
 
+  // Grab the rendered viewport canvas (the onscreen 2D copy Cornerstone keeps).
+  const getViewportCanvas = () =>
+    document.querySelector<HTMLCanvasElement>("#cornerstone-viewport canvas");
+
+  // Capture: download the current view as a PNG.
+  const handleCapture = useCallback(() => {
+    const canvas = getViewportCanvas();
+    if (!canvas) return;
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `capture_study${studyId ?? ""}_slice${currentSlice + 1}.png`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }, "image/png");
+  }, [studyId, currentSlice]);
+
+  // Export: download the whole study as a ZIP of DICOM files (server route,
+  // same-origin so the session cookie authenticates the request).
+  const handleExport = useCallback(() => {
+    if (!studyId) return;
+    window.location.href = `/api/export/dicom-zip/${studyId}`;
+  }, [studyId]);
+
+  // Print: open the current view in a print dialog.
+  const handlePrint = useCallback(() => {
+    const canvas = getViewportCanvas();
+    if (!canvas) return;
+    const dataUrl = canvas.toDataURL("image/png");
+    const w = window.open("", "_blank");
+    if (!w) return;
+    const doc = w.document;
+    doc.title = "Print";
+    doc.body.style.margin = "0";
+    doc.body.style.background = "#000";
+    const img = doc.createElement("img");
+    img.src = dataUrl;
+    img.style.cssText = "max-width:100%;max-height:100vh;display:block;margin:auto";
+    img.onload = () => {
+      w.focus();
+      w.print();
+    };
+    doc.body.appendChild(img);
+  }, []);
+
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       {/* Top Toolbar */}
@@ -281,15 +327,15 @@ export default function Viewer() {
         <div className="flex-1" />
 
         {/* Export actions */}
-        <button className="toolbar-btn" title="Screenshot">
+        <button className="toolbar-btn" title="Screenshot (PNG)" onClick={handleCapture}>
           <Camera className="w-4 h-4" />
           <span className="text-[9px]">Capture</span>
         </button>
-        <button className="toolbar-btn" title="Export">
+        <button className="toolbar-btn" title="Export study (DICOM ZIP)" onClick={handleExport}>
           <Download className="w-4 h-4" />
           <span className="text-[9px]">Export</span>
         </button>
-        <button className="toolbar-btn" title="Print">
+        <button className="toolbar-btn" title="Print current view" onClick={handlePrint}>
           <Printer className="w-4 h-4" />
           <span className="text-[9px]">Print</span>
         </button>

@@ -771,13 +771,28 @@ export const appRouter = router({
       .input(z.object({
         to: z.string().email(),
         studyId: z.number(),
-        patientName: z.string().optional(),
         message: z.string().max(2000).optional(),
-        pdfBase64: z.string().min(1).max(20_000_000), // ~15 MB cap
+        pdfBase64: z.string().min(1).max(10_000_000), // ~7.5 MB cap
         filename: z.string().max(128).optional(),
       }))
       .mutation(async ({ input, ctx }) => {
-        const subjectName = input.patientName ? ` — ${input.patientName}` : "";
+        // Authorize against a real study the server loaded — don't trust the
+        // client's studyId/patientName for the audit record or the subject.
+        const study = await getStudyById(input.studyId);
+        if (!study) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Study not found" });
+        }
+
+        // The attachment must actually be a PDF, so this endpoint can't be used
+        // to relay arbitrary attacker-chosen bytes to arbitrary recipients.
+        const header = Buffer.from(input.pdfBase64.slice(0, 16), "base64")
+          .subarray(0, 5)
+          .toString("latin1");
+        if (header !== "%PDF-") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Attachment is not a PDF" });
+        }
+
+        const subjectName = study.patientName ? ` — ${study.patientName}` : "";
         const result = await sendEmail({
           to: input.to,
           subject: `Compte rendu d'imagerie${subjectName}`,

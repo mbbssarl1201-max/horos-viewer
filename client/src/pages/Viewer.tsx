@@ -289,7 +289,6 @@ export default function Viewer() {
       await sendReportMutation.mutateAsync({
         to,
         studyId,
-        patientName: study?.patientName || undefined,
         pdfBase64,
         filename: `compte-rendu-${studyId}.pdf`,
       });

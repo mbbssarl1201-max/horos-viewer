@@ -267,36 +267,15 @@ export default function Viewer() {
     const to = window.prompt("Adresse email du destinataire :");
     if (!to) return;
     try {
-      const { jsPDF } = await import("jspdf");
-      const doc = new jsPDF();
-      doc.setFontSize(15);
-      doc.text("Compte rendu d'imagerie", 14, 16);
-      doc.setFontSize(10);
-      const lines = [
-        `Patient : ${study?.patientName || "—"}`,
-        `Date d'étude : ${study?.studyDate || "—"}`,
-        `Modalité : ${study?.modality || "—"}`,
-        `Description : ${study?.studyDescription || "—"}`,
-        `Institution : ${study?.institution || "—"}`,
-      ];
-      lines.forEach((l, i) => doc.text(l, 14, 28 + i * 6));
-      const imgData = canvas.toDataURL("image/png");
-      const w = 180;
-      const h = Math.min(200, (canvas.height / canvas.width) * w);
-      doc.addImage(imgData, "PNG", 14, 62, w, h);
-      const pdfBase64 = doc.output("datauristring").split(",")[1];
-
-      await sendReportMutation.mutateAsync({
-        to,
-        studyId,
-        pdfBase64,
-        filename: `compte-rendu-${studyId}.pdf`,
-      });
+      // Send only the rendered image; the server assembles the PDF from the
+      // authoritative study record (prevents arbitrary-attachment relay).
+      const imagePngBase64 = canvas.toDataURL("image/png").split(",")[1];
+      await sendReportMutation.mutateAsync({ to, studyId, imagePngBase64 });
       toast.success(`Compte rendu PDF envoyé à ${to}`);
     } catch (e: any) {
       toast.error("Échec de l'envoi : " + (e?.message || "erreur"));
     }
-  }, [studyId, study, sendReportMutation]);
+  }, [studyId, sendReportMutation]);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">

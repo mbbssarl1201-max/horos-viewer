@@ -451,6 +451,27 @@ export async function updateSeriesCount(seriesId: number) {
 
 // ============ ACCESS LOG (HIPAA / nLPD audit trail) ============
 
+/** Count a user's recent access events of a given action (for rate limiting). */
+export async function countRecentAccess(
+  userId: number,
+  action: string,
+  withinMinutes: number,
+): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(accessLogs)
+    .where(
+      and(
+        eq(accessLogs.userId, userId),
+        eq(accessLogs.action, action),
+        gte(accessLogs.createdAt, sql`NOW() - INTERVAL ${withinMinutes} MINUTE`),
+      ),
+    );
+  return rows[0]?.count ?? 0;
+}
+
 export interface AccessEvent {
   userId: number;
   action: string;

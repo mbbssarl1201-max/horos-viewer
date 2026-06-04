@@ -764,33 +764,70 @@ export const appRouter = router({
         });
       }),
 
-    // Email a generated PDF report (built client-side from the rendered image
-    // + study info) to a recipient as an attachment, so they can read it
-    // directly without logging in. The PDF carries PHI — every send is logged.
+    // Email an imaging report to a recipient who can read it straight from
+    // their inbox. The PDF is ASSEMBLED SERVER-SIDE from the authoritative study
+    // record + the client-supplied rendered PNG (never a client-supplied PDF),
+    // so the document content is bounded and this can't be used to relay
+    // arbitrary attacker-chosen attachments / phishing. Rate-limited per user;
+    // every send is access-logged (PHI egress).
     sendReport: medicalProcedure
       .input(z.object({
         to: z.string().email(),
         studyId: z.number(),
-        message: z.string().max(2000).optional(),
-        pdfBase64: z.string().min(1).max(10_000_000), // ~7.5 MB cap
-        filename: z.string().max(128).optional(),
+        message: z.string().max(500).optional(),
+        imagePngBase64: z.string().min(1).max(10_000_000), // ~7.5 MB cap
       }))
       .mutation(async ({ input, ctx }) => {
-        // Authorize against a real study the server loaded — don't trust the
-        // client's studyId/patientName for the audit record or the subject.
+        const { countRecentAccess } = await import("./db");
+        // Rate limit: cap report emails per user per hour.
+        const recent = await countRecentAccess(ctx.user.id, "study.email.report", 60);
+        if (recent >= 20) {
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: "Limite d'envois atteinte, réessayez plus tard.",
+          });
+        }
+
+        // Authorize against a real study the server loaded — never trust the
+        // client for the subject/audit/PDF content.
         const study = await getStudyById(input.studyId);
         if (!study) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Study not found" });
         }
 
-        // The attachment must actually be a PDF, so this endpoint can't be used
-        // to relay arbitrary attacker-chosen bytes to arbitrary recipients.
-        const header = Buffer.from(input.pdfBase64.slice(0, 16), "base64")
-          .subarray(0, 5)
-          .toString("latin1");
-        if (header !== "%PDF-") {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Attachment is not a PDF" });
+        // Validate the image is a real PNG and read its dimensions (IHDR).
+        const png = Buffer.from(input.imagePngBase64, "base64");
+        const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        if (png.length < 24 || !png.subarray(0, 8).equals(PNG_SIG)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Image must be a PNG" });
         }
+        const imgW = png.readUInt32BE(16);
+        const imgH = png.readUInt32BE(20);
+
+        // Build the PDF server-side from trusted study data + the image.
+        const { jsPDF } = await import("jspdf");
+        const doc = new jsPDF();
+        doc.setFontSize(15);
+        doc.text("Compte rendu d'imagerie", 14, 16);
+        doc.setFontSize(10);
+        [
+          `Patient : ${study.patientName || "—"}`,
+          `Date d'étude : ${study.studyDate || "—"}`,
+          `Modalité : ${study.modality || "—"}`,
+          `Description : ${study.studyDescription || "—"}`,
+          `Institution : ${study.institution || "—"}`,
+        ].forEach((line, i) => doc.text(line, 14, 28 + i * 6));
+        const pageW = 180;
+        const drawH = imgW > 0 ? Math.min(210, (imgH / imgW) * pageW) : 120;
+        doc.addImage(
+          `data:image/png;base64,${input.imagePngBase64}`,
+          "PNG",
+          14,
+          62,
+          pageW,
+          drawH,
+        );
+        const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
 
         const subjectName = study.patientName ? ` — ${study.patientName}` : "";
         const result = await sendEmail({
@@ -800,14 +837,15 @@ export const appRouter = router({
             `<div style="font-family:sans-serif;max-width:600px">` +
             `<p>Bonjour,</p>` +
             `<p>Veuillez trouver ci-joint le compte rendu d'imagerie au format PDF.</p>` +
-            (input.message ? `<p>${input.message.replace(/[<>&]/g, "")}</p>` : "") +
+            (input.message
+              ? `<p>${input.message.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`
+              : "") +
             `<p style="color:#888;font-size:12px">Document médical confidentiel — destiné au seul destinataire.</p>` +
             `</div>`,
           attachments: [
             {
-              filename: input.filename || `compte-rendu-${input.studyId}.pdf`,
-              content: input.pdfBase64,
-              encoding: "base64",
+              filename: `compte-rendu-${study.id}.pdf`,
+              content: pdfBuffer,
               contentType: "application/pdf",
             },
           ],
@@ -815,7 +853,7 @@ export const appRouter = router({
         await recordAccess({
           userId: ctx.user.id,
           action: "study.email.report",
-          studyId: input.studyId,
+          studyId: study.id,
           detail: input.to,
           ipAddress: ctx.req?.ip ?? null,
         });

@@ -39,7 +39,10 @@ function esc(value: unknown): string {
  * Create a configured SMTP transporter
  */
 function createTransporter() {
-  if (!ENV.smtpHost || !ENV.smtpUser) {
+  // Host is enough: a same-host self-hosted MTA (Mailu front:25) relays for our
+  // domains without auth from the trusted internal network. Auth is used only
+  // when credentials are supplied.
+  if (!ENV.smtpHost) {
     return null;
   }
 
@@ -48,10 +51,9 @@ function createTransporter() {
     port: ENV.smtpPort,
     secure: ENV.smtpPort === 465 && !ENV.smtpInsecure,
     requireTLS: !ENV.smtpInsecure && ENV.smtpPort === 587,
-    auth: {
-      user: ENV.smtpUser,
-      pass: ENV.smtpPassword,
-    },
+    ...(ENV.smtpUser
+      ? { auth: { user: ENV.smtpUser, pass: ENV.smtpPassword } }
+      : {}),
     // For a self-hosted relay on a trusted network (Mailu notls), don't fail on
     // a missing/self-signed cert.
     ...(ENV.smtpInsecure ? { tls: { rejectUnauthorized: false } } : {}),
@@ -190,7 +192,7 @@ export async function notifyReportFinalized(params: {
  * Check SMTP configuration status
  */
 export function getSmtpStatus(): { configured: boolean; host?: string; port?: number } {
-  if (!ENV.smtpHost || !ENV.smtpUser) {
+  if (!ENV.smtpHost) {
     return { configured: false };
   }
   return { configured: true, host: ENV.smtpHost, port: ENV.smtpPort };

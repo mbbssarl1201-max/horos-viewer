@@ -97,21 +97,23 @@ describe("studies.anonymize", () => {
     ).rejects.toThrow("Admin or radiologist access required");
   });
 
-  it.skipIf(!hasDb)("returns success for admin with non-existent study (no-op)", async () => {
+  it.skipIf(!hasDb)("throws NOT_FOUND when anonymizing patient fields of a missing study", async () => {
     const ctx = createAdminContext();
     const caller = appRouter.createCaller(ctx);
 
-    // With a non-existent study, the update affects 0 rows but doesn't throw
-    const result = await caller.studies.anonymize({ id: 99999, fields: ["patientName", "patientId"] });
-    expect(result).toHaveProperty("success", true);
-    expect(result).toHaveProperty("fieldsAnonymized");
+    // Patient-identity fields require resolving the linked patient row; a
+    // missing study must error rather than falsely report success.
+    await expect(
+      caller.studies.anonymize({ id: 99999, fields: ["patientName", "patientId"] })
+    ).rejects.toThrow();
   });
 
-  it.skipIf(!hasDb)("maps known fields correctly", async () => {
+  it.skipIf(!hasDb)("is a no-op for unknown fields (no study/patient touched)", async () => {
     const ctx = createAdminContext();
     const caller = appRouter.createCaller(ctx);
 
-    // Even with unknown fields, it should succeed (just won't anonymize unknown ones)
+    // Unknown fields map to no column on either table → nothing to resolve,
+    // so it succeeds without touching the DB.
     const result = await caller.studies.anonymize({ id: 99999, fields: ["unknownField"] });
     expect(result.success).toBe(true);
     expect(result.fieldsAnonymized).toBe(0);

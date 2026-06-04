@@ -24,6 +24,13 @@ import { hasMedicalAccess, isAdmin } from "./rbac";
 import { checkOrthancConnection, qidoSearchStudies, cFind, cMove, listModalities } from "./orthanc";
 import { sendEmail, notifyNewStudy, notifyStatUrgent, notifyReportFinalized, getSmtpStatus } from "./email";
 
+// DICOM Application Entity Title: max 16 chars, no path separators or spaces.
+// Constrained here to block path traversal / SSRF when interpolated into the
+// Orthanc REST URL (e.g. `/modalities/${aet}/query`).
+const aeTitleSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9._-]{1,16}$/, "Invalid AE Title");
+
 /**
  * Anonymize DICOM file buffer by zeroing out PII tags in the binary.
  * This performs a best-effort removal of patient-identifying information
@@ -219,33 +226,52 @@ export const appRouter = router({
       }))
       .mutation(async ({ input }) => {
         const { getDb } = await import("./db");
-        const { studies } = await import("../drizzle/schema");
+        const { studies, patients } = await import("../drizzle/schema");
         const { eq } = await import("drizzle-orm");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
 
-        // Clear selected fields from the study record
-        const updateData: Record<string, any> = {};
-        const fieldMap: Record<string, string> = {
-          patientName: "patientName",
-          patientId: "patientId",
-          birthDate: "birthDate",
-          referringPhysician: "referringPhysician",
-          institution: "institution",
-          accessionNumber: "accessionNumber",
-        };
+        const PLACEHOLDER = "[ANONYMIZED]";
+
+        // Patient-identity fields live on the `patients` table; only report
+        // metadata lives on `studies`. studies.patientId is an int FK to
+        // patients.id, NOT the DICOM identity — never overwrite it here.
+        const STUDY_FIELDS = new Set(["referringPhysician", "institution", "accessionNumber"]);
+        const PATIENT_FIELDS = new Set(["patientName", "patientId", "birthDate"]);
+
+        const studyUpdate: Partial<typeof studies.$inferInsert> = {};
+        const patientUpdate: Partial<typeof patients.$inferInsert> = {};
 
         for (const field of input.fields) {
-          if (fieldMap[field]) {
-            updateData[fieldMap[field]] = "[ANONYMIZED]";
+          if (STUDY_FIELDS.has(field)) {
+            (studyUpdate as Record<string, unknown>)[field] = PLACEHOLDER;
+          } else if (PATIENT_FIELDS.has(field)) {
+            // birthDate is varchar(10): the placeholder won't fit, so null it.
+            (patientUpdate as Record<string, unknown>)[field] =
+              field === "birthDate" ? null : PLACEHOLDER;
           }
         }
 
-        if (Object.keys(updateData).length > 0) {
-          await db.update(studies).set(updateData).where(eq(studies.id, input.id));
+        const studyCount = Object.keys(studyUpdate).length;
+        const patientCount = Object.keys(patientUpdate).length;
+
+        if (studyCount > 0) {
+          await db.update(studies).set(studyUpdate).where(eq(studies.id, input.id));
         }
 
-        return { success: true, fieldsAnonymized: Object.keys(updateData).length };
+        if (patientCount > 0) {
+          // Resolve the linked patient row, then anonymize it. This affects
+          // every study of that patient — correct for identity removal.
+          const [study] = await db
+            .select({ patientId: studies.patientId })
+            .from(studies)
+            .where(eq(studies.id, input.id))
+            .limit(1);
+          if (!study) throw new TRPCError({ code: "NOT_FOUND", message: "Study not found" });
+          await db.update(patients).set(patientUpdate).where(eq(patients.id, study.patientId));
+        }
+
+        return { success: true, fieldsAnonymized: studyCount + patientCount };
       }),
 
     delete: strictAdminProcedure
@@ -551,7 +577,7 @@ export const appRouter = router({
 
     cFind: medicalProcedure
       .input(z.object({
-        aet: z.string(),
+        aet: aeTitleSchema,
         level: z.enum(["Study", "Series", "Instance"]),
         query: z.record(z.string(), z.string()),
       }))
@@ -559,16 +585,18 @@ export const appRouter = router({
         try {
           const results = await cFind(input);
           return { success: true, results };
-        } catch (err: any) {
-          return { success: false, results: [], error: err.message };
+        } catch (err) {
+          // Don't leak internal Orthanc/error details to the client.
+          console.error("cFind failed:", err);
+          return { success: false, results: [], error: "C-FIND request failed" };
         }
       }),
 
     // C-MOVE can exfiltrate whole studies to an arbitrary AET — admin only.
     cMove: strictAdminProcedure
       .input(z.object({
-        sourceAet: z.string(),
-        targetAet: z.string(),
+        sourceAet: aeTitleSchema,
+        targetAet: aeTitleSchema,
         studyInstanceUID: z.string(),
       }))
       .mutation(async ({ input }) => {

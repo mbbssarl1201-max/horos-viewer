@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
@@ -31,9 +32,33 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+  // Behind Traefik/proxies: trust the first hop so rate-limit keys on the
+  // real client IP (from X-Forwarded-For) rather than the proxy's.
+  app.set("trust proxy", 1);
+
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // Rate limiting (DoS / abuse mitigation). General cap on the whole API,
+  // plus a tighter cap on the PHI export routes that stream patient data.
+  const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 300,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    message: { error: "Too many requests, please try again later." },
+  });
+  const exportLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 30,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    message: { error: "Too many export requests, please try again later." },
+  });
+  app.use("/api", apiLimiter);
+  app.use("/api/export", exportLimiter);
+
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   // Export routes (ZIP DICOM + PDF) - must be before tRPC

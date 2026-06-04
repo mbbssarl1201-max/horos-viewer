@@ -11,6 +11,19 @@ interface OrthancConfig {
   password: string;
 }
 
+/**
+ * Validate a DICOM AE Title before interpolating it into an Orthanc REST URL.
+ * Defense-in-depth against path traversal / SSRF: callers are also validated
+ * at the tRPC input layer, but these functions are exported and could be
+ * reached from elsewhere. Returns a URL-encoded, safe segment.
+ */
+function safeAeTitle(aet: string): string {
+  if (!/^[A-Za-z0-9._-]{1,16}$/.test(aet)) {
+    throw new Error("Invalid AE Title");
+  }
+  return encodeURIComponent(aet);
+}
+
 function getOrthancConfig(): OrthancConfig {
   return {
     url: ENV.orthancUrl,
@@ -170,7 +183,7 @@ export async function cFind(params: {
   query: Record<string, string>;
 }): Promise<any[]> {
   // Use Orthanc's REST API to perform C-FIND
-  const res = await orthancFetch(`/modalities/${params.aet}/query`, {
+  const res = await orthancFetch(`/modalities/${safeAeTitle(params.aet)}/query`, {
     method: "POST",
     body: JSON.stringify({
       Level: params.level,
@@ -213,7 +226,7 @@ export async function cMove(params: {
   studyInstanceUID: string;
 }): Promise<{ success: boolean; message: string }> {
   // First query to find the study
-  const queryRes = await orthancFetch(`/modalities/${params.sourceAet}/query`, {
+  const queryRes = await orthancFetch(`/modalities/${safeAeTitle(params.sourceAet)}/query`, {
     method: "POST",
     body: JSON.stringify({
       Level: "Study",
@@ -248,7 +261,7 @@ export async function cStore(params: {
   targetAet: string;
   orthancId: string;
 }): Promise<{ success: boolean; message: string }> {
-  const res = await orthancFetch(`/modalities/${params.targetAet}/store`, {
+  const res = await orthancFetch(`/modalities/${safeAeTitle(params.targetAet)}/store`, {
     method: "POST",
     body: JSON.stringify({ Resources: [params.orthancId] }),
   });

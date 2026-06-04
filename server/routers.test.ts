@@ -189,3 +189,22 @@ describe("annotations.save - RBAC", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("orthanc.cFind - AE Title validation (SSRF guard)", () => {
+  it("rejects an AE Title containing path separators", async () => {
+    const { ctx } = createMockContext("admin");
+    const caller = appRouter.createCaller(ctx);
+    // Path-traversal payload must be rejected by zod before reaching Orthanc.
+    await expect(
+      caller.orthanc.cFind({ aet: "../system", level: "Study", query: {} })
+    ).rejects.toThrow();
+  });
+
+  it("rejects an over-long AE Title", async () => {
+    const { ctx } = createMockContext("admin");
+    const caller = appRouter.createCaller(ctx);
+    await expect(
+      caller.orthanc.cFind({ aet: "A".repeat(17), level: "Study", query: {} })
+    ).rejects.toThrow();
+  });
+});

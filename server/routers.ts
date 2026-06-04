@@ -24,6 +24,7 @@ import { storagePut } from "./storage";
 import { hasMedicalAccess, isAdmin } from "./rbac";
 import { checkOrthancConnection, qidoSearchStudies, cFind, cMove, listModalities } from "./orthanc";
 import { sendEmail, notifyNewStudy, notifyStatUrgent, notifyReportFinalized, getSmtpStatus } from "./email";
+import dcmjs from "dcmjs";
 
 // DICOM Application Entity Title: max 16 chars, no path separators or spaces.
 // Constrained here to block path traversal / SSRF when interpolated into the
@@ -32,85 +33,75 @@ const aeTitleSchema = z
   .string()
   .regex(/^[A-Za-z0-9._-]{1,16}$/, "Invalid AE Title");
 
-/**
- * Anonymize DICOM file buffer by zeroing out PII tags in the binary.
- * This performs a best-effort removal of patient-identifying information
- * from the raw DICOM byte stream before storage on S3.
- */
-function anonymizeDicomBuffer(buffer: Buffer): Buffer {
-  // DICOM PII tags to anonymize (group, element pairs)
-  const PII_TAGS = [
-    [0x0010, 0x0010], // PatientName
-    [0x0010, 0x0020], // PatientID
-    [0x0010, 0x0030], // PatientBirthDate
-    [0x0010, 0x0040], // PatientSex
-    [0x0010, 0x1000], // OtherPatientIDs
-    [0x0010, 0x1001], // OtherPatientNames
-    [0x0010, 0x1010], // PatientAge
-    [0x0010, 0x1020], // PatientSize
-    [0x0010, 0x1030], // PatientWeight
-    [0x0010, 0x1040], // PatientAddress
-    [0x0010, 0x2154], // PatientTelephoneNumbers
-    [0x0008, 0x0050], // AccessionNumber
-    [0x0008, 0x0080], // InstitutionName
-    [0x0008, 0x0081], // InstitutionAddress
-    [0x0008, 0x0090], // ReferringPhysicianName
-    [0x0008, 0x1050], // PerformingPhysicianName
-  ];
+// Patient-identifying DICOM tags to remove, keyed as 8-hex-digit
+// (group+element) strings — the format dcmjs uses for its dataset dict.
+const PII_TAGS = new Set<string>([
+  "00100010", // PatientName
+  "00100020", // PatientID
+  "00100030", // PatientBirthDate
+  "00100040", // PatientSex
+  "00101000", // OtherPatientIDs
+  "00101001", // OtherPatientNames
+  "00101010", // PatientAge
+  "00101020", // PatientSize
+  "00101030", // PatientWeight
+  "00101040", // PatientAddress
+  "00102154", // PatientTelephoneNumbers
+  "00080050", // AccessionNumber
+  "00080080", // InstitutionName
+  "00080081", // InstitutionAddress
+  "00080090", // ReferringPhysicianName
+  "00081050", // PerformingPhysicianName
+]);
 
-  const result = Buffer.from(buffer);
-
-  // DICOM files start with 128 byte preamble + "DICM" magic
-  if (result.length < 132) return result;
-  const magic = result.toString("ascii", 128, 132);
-  if (magic !== "DICM") return result; // Not a valid DICOM file
-
-  let offset = 132; // Start after preamble + magic
-
-  // Parse data elements and blank PII values
-  while (offset < result.length - 8) {
-    const group = result.readUInt16LE(offset);
-    const element = result.readUInt16LE(offset + 2);
-
-    // Check VR (Value Representation) - explicit VR
-    const vr = result.toString("ascii", offset + 4, offset + 6);
-    let valueLength: number;
-    let valueOffset: number;
-
-    // VRs with 4-byte length field
-    if (["OB", "OD", "OF", "OL", "OW", "SQ", "UC", "UN", "UR", "UT"].includes(vr)) {
-      if (offset + 12 > result.length) break;
-      valueLength = result.readUInt32LE(offset + 8);
-      valueOffset = offset + 12;
-    } else if (vr.match(/^[A-Z]{2}$/)) {
-      // Standard 2-byte length VRs
-      valueLength = result.readUInt16LE(offset + 6);
-      valueOffset = offset + 8;
-    } else {
-      // Implicit VR - 4 byte length at offset+4
-      valueLength = result.readUInt32LE(offset + 4);
-      valueOffset = offset + 8;
+// Recursively blank PII tags in a dcmjs dataset, descending into nested
+// sequences (SQ) so PHI hidden in sub-items is removed too.
+function scrubDicomDataset(dataset: Record<string, any>): void {
+  for (const tag of Object.keys(dataset)) {
+    const element = dataset[tag];
+    if (!element) continue;
+    if (PII_TAGS.has(tag)) {
+      element.Value = [];
+    } else if (element.vr === "SQ" && Array.isArray(element.Value)) {
+      for (const item of element.Value) {
+        if (item && typeof item === "object") scrubDicomDataset(item);
+      }
     }
-
-    // Undefined length or invalid
-    if (valueLength === 0xFFFFFFFF || valueLength < 0) {
-      break;
-    }
-
-    // Check if this tag is PII
-    const isPII = PII_TAGS.some(([g, e]) => g === group && e === element);
-    if (isPII && valueOffset + valueLength <= result.length) {
-      // Replace value bytes with spaces (0x20) to maintain DICOM structure
-      result.fill(0x20, valueOffset, valueOffset + valueLength);
-    }
-
-    offset = valueOffset + valueLength;
-
-    // Stop at pixel data
-    if (group === 0x7FE0 && element === 0x0010) break;
   }
+}
 
-  return result;
+/**
+ * Remove patient-identifying metadata from a DICOM file before storage.
+ *
+ * Uses dcmjs for real DICOM parsing: it handles both Explicit and Implicit VR
+ * transfer syntaxes and nested sequences — cases the previous hand-rolled byte
+ * parser mishandled, leaving PHI intact.
+ *
+ * Fail-closed: if the buffer can't be parsed/anonymized, this THROWS rather
+ * than returning the original bytes, so un-anonymized PHI is never stored.
+ *
+ * NOTE: this removes metadata only. PHI *burned into pixel data* (e.g. US /
+ * secondary capture) is NOT handled here and needs separate treatment.
+ */
+export function anonymizeDicomBuffer(buffer: Buffer): Buffer {
+  try {
+    const arrayBuffer = buffer.buffer.slice(
+      buffer.byteOffset,
+      buffer.byteOffset + buffer.byteLength
+    ) as ArrayBuffer;
+    const dicomDict = dcmjs.data.DicomMessage.readFile(arrayBuffer, {
+      ignoreErrors: true,
+    });
+    scrubDicomDataset(dicomDict.dict as Record<string, any>);
+    const out = dicomDict.write();
+    return Buffer.from(out);
+  } catch (err) {
+    console.error("[Anonymize] DICOM anonymization failed:", err);
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "DICOM anonymization failed; file was not stored.",
+    });
+  }
 }
 
 // Clinical read/write access to patient data (PHI). Excludes the default

@@ -10,6 +10,7 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { ENV } from "./_core/env";
@@ -111,4 +112,16 @@ export async function storageGetObject(
     body: out.Body as Readable,
     contentType: out.ContentType,
   };
+}
+
+/**
+ * Delete an object. Called when a study is removed so its DICOM files don't
+ * linger in the bucket as orphaned PHI (nLPD/GDPR right-to-erasure). Idempotent
+ * on S3 — deleting a missing key is a no-op. A falsy key is skipped entirely.
+ */
+export async function storageDelete(relKey: string): Promise<void> {
+  if (!relKey) return;
+  const { client, bucket } = getS3();
+  const key = normalizeKey(relKey);
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }

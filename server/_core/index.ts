@@ -6,6 +6,7 @@ import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
+import { registerDicomwebProxy } from "../dicomwebProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -44,7 +45,9 @@ async function startServer() {
   // instance, so a single study (often 100s–1000s of slices) bursts many
   // requests — the cap must be high enough not to cut a legitimate import off
   // mid-upload. Defaults are generous; tune via env without a rebuild.
-  const RL_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? `${15 * 60 * 1000}`);
+  const RL_WINDOW_MS = parseInt(
+    process.env.RATE_LIMIT_WINDOW_MS ?? `${15 * 60 * 1000}`
+  );
   const RL_MAX = parseInt(process.env.RATE_LIMIT_MAX ?? "6000");
   const RL_EXPORT_MAX = parseInt(process.env.RATE_LIMIT_EXPORT_MAX ?? "120");
   const apiLimiter = rateLimit({
@@ -77,6 +80,7 @@ async function startServer() {
   });
 
   registerStorageProxy(app);
+  registerDicomwebProxy(app);
   registerOAuthRoutes(app);
   // Export routes (ZIP DICOM + PDF) - must be before tRPC
   app.get("/api/export/dicom-zip/:studyId", async (req, res) => {
@@ -87,18 +91,33 @@ async function startServer() {
       try {
         user = await sdk.authenticateRequest(req as any);
       } catch {
-        res.status(401).json({ error: "Unauthorized" }); return;
+        res.status(401).json({ error: "Unauthorized" });
+        return;
       }
-      if (!hasMedicalAccess(user)) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!hasMedicalAccess(user)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
 
       const studyId = parseInt(req.params.studyId);
-      if (isNaN(studyId)) { res.status(400).json({ error: "Invalid study ID" }); return; }
+      if (isNaN(studyId)) {
+        res.status(400).json({ error: "Invalid study ID" });
+        return;
+      }
 
-      const { listSeriesByStudy, listInstancesBySeries, getStudyById, recordAccess } = await import("../db");
+      const {
+        listSeriesByStudy,
+        listInstancesBySeries,
+        getStudyById,
+        recordAccess,
+      } = await import("../db");
       const { storageGetSignedUrl } = await import("../storage");
 
       const study = await getStudyById(studyId);
-      if (!study) { res.status(404).json({ error: "Study not found" }); return; }
+      if (!study) {
+        res.status(404).json({ error: "Study not found" });
+        return;
+      }
 
       await recordAccess({
         userId: user.id,
@@ -108,13 +127,19 @@ async function startServer() {
       });
 
       const seriesList = await listSeriesByStudy(studyId);
-      if (seriesList.length === 0) { res.status(404).json({ error: "No series found" }); return; }
+      if (seriesList.length === 0) {
+        res.status(404).json({ error: "No series found" });
+        return;
+      }
 
       const archiver = (await import("archiver")).default;
       const archive = archiver("zip", { zlib: { level: 5 } });
 
       res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", `attachment; filename="study_${studyId}_dicom.zip"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="study_${studyId}_dicom.zip"`
+      );
       archive.pipe(res);
 
       for (const s of seriesList) {
@@ -152,16 +177,26 @@ async function startServer() {
       try {
         user = await sdk.authenticateRequest(req as any);
       } catch {
-        res.status(401).json({ error: "Unauthorized" }); return;
+        res.status(401).json({ error: "Unauthorized" });
+        return;
       }
-      if (!hasMedicalAccess(user)) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!hasMedicalAccess(user)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
 
       const studyId = parseInt(req.params.studyId);
-      if (isNaN(studyId)) { res.status(400).json({ error: "Invalid study ID" }); return; }
+      if (isNaN(studyId)) {
+        res.status(400).json({ error: "Invalid study ID" });
+        return;
+      }
 
       const { getStudyById, recordAccess } = await import("../db");
       const study = await getStudyById(studyId);
-      if (!study) { res.status(404).json({ error: "Study not found" }); return; }
+      if (!study) {
+        res.status(404).json({ error: "Study not found" });
+        return;
+      }
 
       await recordAccess({
         userId: user.id,
@@ -197,7 +232,11 @@ async function startServer() {
       doc.text(`Modality: ${study.modality || "N/A"}`, 25, 85);
       doc.text(`Description: ${study.studyDescription || "N/A"}`, 25, 92);
       doc.text(`Institution: ${study.institution || "N/A"}`, 25, 99);
-      doc.text(`Referring Physician: ${study.referringPhysician || "N/A"}`, 25, 106);
+      doc.text(
+        `Referring Physician: ${study.referringPhysician || "N/A"}`,
+        25,
+        106
+      );
       doc.text(`Number of Series: ${study.numberOfSeries || 0}`, 25, 113);
       doc.text(`Number of Images: ${study.numberOfInstances || 0}`, 25, 120);
 
@@ -205,11 +244,18 @@ async function startServer() {
       doc.setFontSize(8);
       doc.setTextColor(100, 100, 100);
       doc.text(`Generated: ${new Date().toISOString()}`, 20, 280);
-      doc.text("Horos Medical Imaging Viewer - For diagnostic purposes only", 20, 286);
+      doc.text(
+        "Horos Medical Imaging Viewer - For diagnostic purposes only",
+        20,
+        286
+      );
 
       const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="report_study_${studyId}.pdf"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="report_study_${studyId}.pdf"`
+      );
       res.send(pdfBuffer);
     } catch (err: any) {
       if (!res.headersSent) {

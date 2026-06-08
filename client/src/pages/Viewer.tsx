@@ -1,6 +1,8 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import CornerstoneViewer from "@/components/CornerstoneViewer";
 import VolumeViewer from "@/components/VolumeViewer";
+import { useOrthancVolume } from "@/hooks/useOrthancVolume";
+import { SLAB_MODES, type SlabMode } from "@/lib/slabBlend";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -57,12 +59,32 @@ const VIEWER_TOOLS = [
   { id: "zoom", label: "Zoom", icon: ZoomIn, description: "Zoom" },
   { id: "pan", label: "Pan", icon: Move, description: "Pan" },
   { id: "scroll", label: "Scroll", icon: Layers, description: "Stack Scroll" },
-  { id: "length", label: "Length", icon: Ruler, description: "Length Measurement" },
-  { id: "angle", label: "Angle", icon: TriangleAlert, description: "Angle Measurement" },
-  { id: "ellipse", label: "Ellipse", icon: Circle, description: "Elliptical ROI" },
+  {
+    id: "length",
+    label: "Length",
+    icon: Ruler,
+    description: "Length Measurement",
+  },
+  {
+    id: "angle",
+    label: "Angle",
+    icon: TriangleAlert,
+    description: "Angle Measurement",
+  },
+  {
+    id: "ellipse",
+    label: "Ellipse",
+    icon: Circle,
+    description: "Elliptical ROI",
+  },
   { id: "rect", label: "Rect", icon: Square, description: "Rectangular ROI" },
   { id: "text", label: "Text", icon: Type, description: "Text Annotation" },
-  { id: "crosshair", label: "MPR", icon: Crosshair, description: "Crosshair / MPR" },
+  {
+    id: "crosshair",
+    label: "MPR",
+    icon: Crosshair,
+    description: "Crosshair / MPR",
+  },
 ];
 
 export default function Viewer() {
@@ -78,9 +100,19 @@ export default function Viewer() {
   const [windowCenter, setWindowCenter] = useState(40);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [selectedSeries, setSelectedSeries] = useState<number | null>(null);
-  const [viewportLayout, setViewportLayout] = useState<"1x1" | "1x2" | "2x2">("1x1");
+  const [viewportLayout, setViewportLayout] = useState<"1x1" | "1x2" | "2x2">(
+    "1x1"
+  );
   const [viewMode, setViewMode] = useState<"2d" | "mpr" | "3d">("2d");
-  const [huStats, setHuStats] = useState<{ mean: number; stdDev: number; min: number; max: number; area: number } | null>(null);
+  const [huStats, setHuStats] = useState<{
+    mean: number;
+    stdDev: number;
+    min: number;
+    max: number;
+    area: number;
+  } | null>(null);
+  const [slabThicknessMm, setSlabThicknessMm] = useState(0);
+  const [slabMode, setSlabMode] = useState<SlabMode>("mip");
 
   const viewportRef = useRef<HTMLDivElement>(null);
 
@@ -101,6 +133,23 @@ export default function Viewer() {
     { seriesId: selectedSeries! },
     { enabled: !!selectedSeries }
   );
+
+  // DICOM UIDs de la série sélectionnée pour le volume Orthanc (MPR avancé)
+  const currentStudyUid = (study as any)?.studyInstanceUid as
+    | string
+    | undefined;
+  const selectedSeriesObj = seriesList?.find(
+    (s: any) => s.id === selectedSeries
+  );
+  const currentSeriesUid = (selectedSeriesObj as any)?.seriesInstanceUid as
+    | string
+    | undefined;
+
+  const {
+    imageIds: orthancImageIds,
+    volumeId: orthancVolumeId,
+    error: orthancError,
+  } = useOrthancVolume(currentStudyUid, currentSeriesUid);
 
   // Auto-select first series
   useEffect(() => {
@@ -123,11 +172,11 @@ export default function Viewer() {
       switch (e.key) {
         case "ArrowUp":
         case "ArrowLeft":
-          setCurrentSlice((prev) => Math.max(0, prev - 1));
+          setCurrentSlice(prev => Math.max(0, prev - 1));
           break;
         case "ArrowDown":
         case "ArrowRight":
-          setCurrentSlice((prev) => Math.min(totalSlices - 1, prev + 1));
+          setCurrentSlice(prev => Math.min(totalSlices - 1, prev + 1));
           break;
         case "r":
           setActiveTool("wwwl");
@@ -155,13 +204,13 @@ export default function Viewer() {
       try {
         const cornerstoneTools = await import("@cornerstonejs/tools");
         const { annotation } = cornerstoneTools;
-        
+
         // Get all annotations for the current viewport
         const allAnnotations = annotation.state.getAllAnnotations();
         if (allAnnotations && allAnnotations.length > 0) {
           const lastAnnotation = allAnnotations[allAnnotations.length - 1];
           const data = lastAnnotation?.data;
-          
+
           if (data?.cachedStats) {
             // Extract HU statistics from ROI tools
             const stats = Object.values(data.cachedStats)[0] as any;
@@ -184,7 +233,7 @@ export default function Viewer() {
     // Poll for annotation changes when ROI tools are active
     const roiTools = ["ellipse", "rect"];
     let interval: ReturnType<typeof setInterval> | null = null;
-    
+
     if (roiTools.includes(activeTool)) {
       interval = setInterval(handleAnnotationCompleted, 1000);
     } else {
@@ -201,9 +250,9 @@ export default function Viewer() {
     (e: React.WheelEvent) => {
       e.preventDefault();
       if (e.deltaY > 0) {
-        setCurrentSlice((prev) => Math.min(totalSlices - 1, prev + 1));
+        setCurrentSlice(prev => Math.min(totalSlices - 1, prev + 1));
       } else {
-        setCurrentSlice((prev) => Math.max(0, prev - 1));
+        setCurrentSlice(prev => Math.max(0, prev - 1));
       }
     },
     [totalSlices]
@@ -217,7 +266,7 @@ export default function Viewer() {
   const handleCapture = useCallback(() => {
     const canvas = getViewportCanvas();
     if (!canvas) return;
-    canvas.toBlob((blob) => {
+    canvas.toBlob(blob => {
       if (!blob) return;
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
@@ -247,7 +296,8 @@ export default function Viewer() {
     doc.body.style.background = "#000";
     const img = doc.createElement("img");
     img.src = dataUrl;
-    img.style.cssText = "max-width:100%;max-height:100vh;display:block;margin:auto";
+    img.style.cssText =
+      "max-width:100%;max-height:100vh;display:block;margin:auto";
     img.onload = () => {
       w.focus();
       w.print();
@@ -294,7 +344,7 @@ export default function Viewer() {
         <Separator orientation="vertical" className="h-7 mx-1" />
 
         {/* Viewer Tools */}
-        {VIEWER_TOOLS.map((tool) => (
+        {VIEWER_TOOLS.map(tool => (
           <button
             key={tool.id}
             onClick={() => setActiveTool(tool.id)}
@@ -334,6 +384,39 @@ export default function Viewer() {
           <span className="text-[9px]">3D</span>
         </button>
 
+        {/* Slab controls — MPR only */}
+        {viewMode === "mpr" && (
+          <div className="flex items-center gap-2 px-2">
+            <label className="text-[10px] text-muted-foreground">Slab</label>
+            <input
+              type="range"
+              min={0}
+              max={50}
+              step={1}
+              value={slabThicknessMm}
+              onChange={e => setSlabThicknessMm(Number(e.target.value))}
+              title="Épaisseur de coupe (mm)"
+            />
+            <span className="text-[10px] w-8">{slabThicknessMm}mm</span>
+            <select
+              className="bg-transparent text-[10px] border border-border rounded"
+              value={slabMode}
+              onChange={e => setSlabMode(e.target.value as SlabMode)}
+            >
+              {SLAB_MODES.map(m => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {orthancError && viewMode === "mpr" && (
+          <span className="text-[10px] text-destructive px-2">
+            {orthancError}
+          </span>
+        )}
+
         <Separator orientation="vertical" className="h-7 mx-1" />
 
         {/* Image manipulation */}
@@ -353,15 +436,27 @@ export default function Viewer() {
         <div className="flex-1" />
 
         {/* Export actions */}
-        <button className="toolbar-btn" title="Screenshot (PNG)" onClick={handleCapture}>
+        <button
+          className="toolbar-btn"
+          title="Screenshot (PNG)"
+          onClick={handleCapture}
+        >
           <Camera className="w-4 h-4" />
           <span className="text-[9px]">Capture</span>
         </button>
-        <button className="toolbar-btn" title="Export study (DICOM ZIP)" onClick={handleExport}>
+        <button
+          className="toolbar-btn"
+          title="Export study (DICOM ZIP)"
+          onClick={handleExport}
+        >
           <Download className="w-4 h-4" />
           <span className="text-[9px]">Export</span>
         </button>
-        <button className="toolbar-btn" title="Print current view" onClick={handlePrint}>
+        <button
+          className="toolbar-btn"
+          title="Print current view"
+          onClick={handlePrint}
+        >
           <Printer className="w-4 h-4" />
           <span className="text-[9px]">Print</span>
         </button>
@@ -372,7 +467,9 @@ export default function Viewer() {
           disabled={sendReportMutation.isPending}
         >
           <Mail className="w-4 h-4" />
-          <span className="text-[9px]">{sendReportMutation.isPending ? "…" : "Email"}</span>
+          <span className="text-[9px]">
+            {sendReportMutation.isPending ? "…" : "Email"}
+          </span>
         </button>
       </div>
 
@@ -415,7 +512,9 @@ export default function Viewer() {
               {(!seriesList || seriesList.length === 0) && (
                 <div className="text-center py-8">
                   <Layers className="w-8 h-8 text-muted-foreground/20 mx-auto mb-2" />
-                  <p className="text-[10px] text-muted-foreground">No series available</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    No series available
+                  </p>
                 </div>
               )}
             </div>
@@ -431,13 +530,18 @@ export default function Viewer() {
             onWheel={handleWheel}
           >
             {/* DICOM Viewport - Cornerstone3D */}
-            <div className="absolute inset-0 dicom-viewport" id="cornerstone-viewport">
+            <div
+              className="absolute inset-0 dicom-viewport"
+              id="cornerstone-viewport"
+            >
               {!instancesList || instancesList.length === 0 ? (
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="text-center">
                     <Layers className="w-16 h-16 text-muted-foreground/20 mx-auto mb-4" />
                     <p className="text-sm text-muted-foreground">
-                      {studyId ? "Select a series to view" : "No study selected"}
+                      {studyId
+                        ? "Select a series to view"
+                        : "No study selected"}
                     </p>
                     <p className="text-xs text-muted-foreground/60 mt-1">
                       Double-click a study from the main list to open it
@@ -446,7 +550,9 @@ export default function Viewer() {
                 </div>
               ) : viewMode === "2d" ? (
                 <CornerstoneViewer
-                  imageUrls={instancesList.map((inst: any) => inst.storageUrl || '')}
+                  imageUrls={instancesList.map(
+                    (inst: any) => inst.storageUrl || ""
+                  )}
                   currentSlice={currentSlice}
                   onSliceChange={setCurrentSlice}
                   activeTool={activeTool}
@@ -460,8 +566,14 @@ export default function Viewer() {
                 />
               ) : (
                 <VolumeViewer
-                  imageUrls={instancesList.map((inst: any) => inst.storageUrl || '')}
-                  mode={viewMode}
+                  mode={viewMode === "3d" ? "3d" : "mpr"}
+                  imageUrls={instancesList.map(
+                    (inst: any) => inst.storageUrl || ""
+                  )}
+                  orthancImageIds={orthancImageIds}
+                  volumeId={orthancVolumeId ?? undefined}
+                  slabThicknessMm={slabThicknessMm}
+                  slabMode={slabMode}
                 />
               )}
             </div>
@@ -490,15 +602,19 @@ export default function Viewer() {
               <div>Zoom: {zoomPercent}%</div>
               {huStats && (
                 <div className="mt-1 border border-green-400/30 rounded px-2 py-1 bg-black/60">
-                  <div className="text-green-400/90 font-semibold text-[9px] mb-0.5">ROI Statistics (HU)</div>
+                  <div className="text-green-400/90 font-semibold text-[9px] mb-0.5">
+                    ROI Statistics (HU)
+                  </div>
                   <div>Mean: {huStats.mean.toFixed(1)} HU</div>
                   <div>StdDev: {huStats.stdDev.toFixed(1)} HU</div>
-                  <div>Min: {huStats.min.toFixed(0)} / Max: {huStats.max.toFixed(0)}</div>
+                  <div>
+                    Min: {huStats.min.toFixed(0)} / Max:{" "}
+                    {huStats.max.toFixed(0)}
+                  </div>
                   <div>Area: {huStats.area.toFixed(1)} mm²</div>
                 </div>
               )}
             </div>
-
           </div>
 
           {/* Bottom Controls */}
@@ -516,7 +632,7 @@ export default function Viewer() {
               variant="ghost"
               size="icon"
               className="h-6 w-6"
-              onClick={() => setCurrentSlice((prev) => Math.max(0, prev - 1))}
+              onClick={() => setCurrentSlice(prev => Math.max(0, prev - 1))}
             >
               <ChevronLeft className="w-3 h-3" />
             </Button>
@@ -538,7 +654,9 @@ export default function Viewer() {
               variant="ghost"
               size="icon"
               className="h-6 w-6"
-              onClick={() => setCurrentSlice((prev) => Math.min(totalSlices - 1, prev + 1))}
+              onClick={() =>
+                setCurrentSlice(prev => Math.min(totalSlices - 1, prev + 1))
+              }
             >
               <ChevronRight className="w-3 h-3" />
             </Button>
@@ -555,7 +673,7 @@ export default function Viewer() {
 
             {/* W/L Presets */}
             <div className="flex items-center gap-1">
-              {WL_PRESETS.slice(0, 4).map((preset) => (
+              {WL_PRESETS.slice(0, 4).map(preset => (
                 <button
                   key={preset.name}
                   onClick={() => {
@@ -587,18 +705,38 @@ export default function Viewer() {
                   <InfoRow label="DOB" value={study.birthDate || "-"} />
                   <InfoRow label="Study Date" value={study.studyDate || "-"} />
                   <InfoRow label="Modality" value={study.modality || "-"} />
-                  <InfoRow label="Description" value={study.studyDescription || "-"} />
-                  <InfoRow label="Institution" value={study.institution || "-"} />
-                  <InfoRow label="Referring" value={study.referringPhysician || "-"} />
-                  <InfoRow label="Series" value={String(study.numberOfSeries || 0)} />
-                  <InfoRow label="Images" value={String(study.numberOfInstances || 0)} />
+                  <InfoRow
+                    label="Description"
+                    value={study.studyDescription || "-"}
+                  />
+                  <InfoRow
+                    label="Institution"
+                    value={study.institution || "-"}
+                  />
+                  <InfoRow
+                    label="Referring"
+                    value={study.referringPhysician || "-"}
+                  />
+                  <InfoRow
+                    label="Series"
+                    value={String(study.numberOfSeries || 0)}
+                  />
+                  <InfoRow
+                    label="Images"
+                    value={String(study.numberOfInstances || 0)}
+                  />
                   <Separator className="my-2" />
                   <InfoRow label="Window Width" value={String(windowWidth)} />
                   <InfoRow label="Window Center" value={String(windowCenter)} />
-                  <InfoRow label="Current Slice" value={`${currentSlice + 1}/${totalSlices}`} />
+                  <InfoRow
+                    label="Current Slice"
+                    value={`${currentSlice + 1}/${totalSlices}`}
+                  />
                 </>
               ) : (
-                <p className="text-xs text-muted-foreground">No study selected</p>
+                <p className="text-xs text-muted-foreground">
+                  No study selected
+                </p>
               )}
             </div>
           </ScrollArea>
@@ -609,7 +747,7 @@ export default function Viewer() {
               W/L Presets
             </h3>
             <div className="space-y-1">
-              {WL_PRESETS.map((preset) => (
+              {WL_PRESETS.map(preset => (
                 <button
                   key={preset.name}
                   onClick={() => {
@@ -635,8 +773,12 @@ export default function Viewer() {
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between items-start gap-2">
-      <span className="text-[10px] text-muted-foreground shrink-0">{label}</span>
-      <span className="text-[10px] text-foreground text-right truncate">{value}</span>
+      <span className="text-[10px] text-muted-foreground shrink-0">
+        {label}
+      </span>
+      <span className="text-[10px] text-foreground text-right truncate">
+        {value}
+      </span>
     </div>
   );
 }

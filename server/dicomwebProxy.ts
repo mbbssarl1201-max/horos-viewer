@@ -20,25 +20,40 @@ import { orthancFetch } from "./orthanc";
 import { recordAccess } from "./db";
 
 /**
- * Découpe le chemin DICOMweb capturé (`studies/{uid}/series/{uid}/instances/{uid}[/frames/{n}]`
- * ou `.../metadata`) et valide chaque UID. Renvoie null si un segment UID est invalide.
+ * Grammaire DICOMweb STRICTE : n'accepte QUE les chemins attendus de la forme
+ *   studies/{uid}[/series/{uid}[/instances/{uid}[/frames/{n}]]][/metadata]
+ *
+ * Reconstruit l'URL upstream à partir des pièces validées et encodées individuel-
+ * lement — JAMAIS à partir du reste brut — pour fermer tout path traversal / SSRF
+ * vers l'API admin d'Orthanc (ex. `/tools/execute-script`, `../system`, etc.).
  */
-export function parseDicomwebPath(
+export function buildOrthancPath(
   rest: string
-): { study?: string; series?: string; isMetadata: boolean } | null {
-  const clean = decodeURIComponent(rest).replace(/^\/+/, "");
-  const isMetadata = clean.endsWith("/metadata");
-  const parts = clean.split("/");
-  let study: string | undefined;
-  let series: string | undefined;
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (parts[i] === "studies") study = parts[i + 1];
-    if (parts[i] === "series") series = parts[i + 1];
-    if (parts[i] === "instances" && !isValidDicomUid(parts[i + 1])) return null;
+): { path: string; study: string; isMetadata: boolean } | null {
+  // Rejet préalable de tout caractère dangereux / double-encodage suspect.
+  if (/(\.\.|\\|\?|#|%2e|%2f|%5c)/i.test(rest)) return null;
+
+  const m = rest
+    .replace(/^\/+/, "")
+    .match(
+      /^studies\/([^/]+)(?:\/series\/([^/]+)(?:\/instances\/([^/]+)(?:\/frames\/(\d+))?)?)?(\/metadata)?$/
+    );
+  if (!m) return null;
+
+  const [, study, series, inst, frame, meta] = m;
+  for (const uid of [study, series, inst].filter(Boolean) as string[]) {
+    if (!isValidDicomUid(uid)) return null;
   }
-  if (study !== undefined && !isValidDicomUid(study)) return null;
-  if (series !== undefined && !isValidDicomUid(series)) return null;
-  return { study, series, isMetadata };
+
+  // Reconstruction encodée segment par segment — aucune interpolation de `rest`.
+  let path = `/dicom-web/studies/${encodeURIComponent(study)}`;
+  if (series) path += `/series/${encodeURIComponent(series)}`;
+  if (inst) path += `/instances/${encodeURIComponent(inst)}`;
+  if (frame) path += `/frames/${encodeURIComponent(frame)}`;
+  const isMetadata = !!meta;
+  if (isMetadata) path += `/metadata`;
+
+  return { path, study, isMetadata };
 }
 
 export async function handleDicomwebRequest(
@@ -59,30 +74,30 @@ export async function handleDicomwebRequest(
   }
 
   const rest = (req.params as Record<string, string>)[0] ?? "";
-  const parsed = parseDicomwebPath(rest);
-  if (!parsed) {
-    res.status(400).send("Invalid DICOM UID");
+  const built = buildOrthancPath(rest);
+  if (!built) {
+    res.status(400).send("Bad path");
     return;
   }
 
   // Audit : une seule entrée par chargement de volume, sur la requête metadata
   // (qui identifie l'étude). On n'a que l'UID DICOM ici → studyId null, UID en detail.
-  if (parsed.isMetadata && parsed.study) {
+  if (built.isMetadata) {
     await recordAccess({
       userId: (user as any).id,
       action: "mpr_volume_view",
       studyId: null,
-      detail: `study=${parsed.study}`,
+      detail: `study=${built.study}`,
       ipAddress:
         (req.headers["x-forwarded-for"] as string) ?? (req as any).ip ?? null,
     });
   }
 
   try {
-    const orthancPath = `/dicom-web/${decodeURIComponent(rest).replace(/^\/+/, "")}`;
     const accept =
       (req.headers["accept"] as string) || "application/dicom+json";
-    const upstream = await orthancFetch(orthancPath, {
+    // Utiliser UNIQUEMENT built.path (reconstruit et encodé), jamais `rest`.
+    const upstream = await orthancFetch(built.path, {
       method: "GET",
       headers: { Accept: accept },
     });

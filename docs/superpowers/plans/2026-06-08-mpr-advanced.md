@@ -105,6 +105,8 @@ git commit -m "feat(dicomweb): validation stricte des UID DICOM (anti-SSRF)"
 
 ## Task 2 : Handler proxy WADO-RS authentifié + montage
 
+> **⚠️ CORRECTIF SÉCURITÉ (appliqué post-implémentation) :** la version initiale reconstruisait l'URL Orthanc à partir du chemin brut `rest` après une validation partielle (`parseDicomwebPath`), permettant à des chemins sans segment `studies/` (ex. `tools/execute-script`, `../system`) d'échapper à la validation et d'atteindre l'API admin Orthanc (SSRF/path traversal). La version corrigée remplace `parseDicomwebPath` par `buildOrthancPath` : grammaire regex stricte + rejet préalable des caractères dangereux (`..`, `\`, `%2f`, `%2e`, `%5c`, `?`, `#`) + reconstruction URL segment par segment (jamais interpolation de `rest`). Voir commit `fix(dicomweb): durcir le proxy contre path traversal/SSRF`.
+
 **Files:**
 
 - Modify: `server/dicomwebProxy.ts`

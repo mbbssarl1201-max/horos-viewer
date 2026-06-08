@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { isValidDicomUid } from "./dicomwebProxy";
+import { isValidDicomUid, buildOrthancPath } from "./dicomwebProxy";
 
 describe("isValidDicomUid", () => {
   it("accepte un UID DICOM valide", () => {
@@ -15,6 +15,41 @@ describe("isValidDicomUid", () => {
   it("rejette le vide et les UID trop longs (>64)", () => {
     expect(isValidDicomUid("")).toBe(false);
     expect(isValidDicomUid("1".repeat(65))).toBe(false);
+  });
+});
+
+describe("buildOrthancPath — grammaire stricte anti-SSRF", () => {
+  it("construit correctement le chemin metadata", () => {
+    const r = buildOrthancPath("studies/1.2.3/series/4.5.6/metadata");
+    expect(r).not.toBeNull();
+    expect(r!.path).toBe("/dicom-web/studies/1.2.3/series/4.5.6/metadata");
+    expect(r!.study).toBe("1.2.3");
+    expect(r!.isMetadata).toBe(true);
+  });
+
+  it("construit le chemin frames", () => {
+    const r = buildOrthancPath("studies/1.2/series/3.4/instances/5.6/frames/1");
+    expect(r).not.toBeNull();
+    expect(r!.path).toBe(
+      "/dicom-web/studies/1.2/series/3.4/instances/5.6/frames/1"
+    );
+    expect(r!.isMetadata).toBe(false);
+  });
+
+  it("rejette tools/execute-script (SSRF admin)", () => {
+    expect(buildOrthancPath("tools/execute-script")).toBeNull();
+  });
+
+  it("rejette studies/../system (path traversal)", () => {
+    expect(buildOrthancPath("studies/1.2/../../system")).toBeNull();
+  });
+
+  it("rejette le double-encodage %2f", () => {
+    expect(buildOrthancPath("studies/1.2/series/3.4/..%2f")).toBeNull();
+  });
+
+  it("rejette un chemin contenant un backslash", () => {
+    expect(buildOrthancPath("studies/1.2\\etc\\passwd")).toBeNull();
   });
 });
 
@@ -106,6 +141,69 @@ describe("handleDicomwebRequest", () => {
     expect(orthancFetch).not.toHaveBeenCalled();
   });
 
+  it("400 et orthancFetch non appelé pour tools/execute-script (SSRF)", async () => {
+    (sdk.authenticateRequest as any).mockResolvedValue({
+      id: 7,
+      role: "radiologist",
+    });
+    (hasMedicalAccess as any).mockReturnValue(true);
+    const res = mockRes();
+    await handleDicomwebRequest(
+      { params: { 0: "tools/execute-script" }, headers: {} } as any,
+      res as any
+    );
+    expect(res.statusCode).toBe(400);
+    expect(orthancFetch).not.toHaveBeenCalled();
+  });
+
+  it("400 et orthancFetch non appelé pour studies/1.2/../../system", async () => {
+    (sdk.authenticateRequest as any).mockResolvedValue({
+      id: 7,
+      role: "radiologist",
+    });
+    (hasMedicalAccess as any).mockReturnValue(true);
+    const res = mockRes();
+    await handleDicomwebRequest(
+      { params: { 0: "studies/1.2/../../system" }, headers: {} } as any,
+      res as any
+    );
+    expect(res.statusCode).toBe(400);
+    expect(orthancFetch).not.toHaveBeenCalled();
+  });
+
+  it("400 et orthancFetch non appelé pour chemin avec %2f", async () => {
+    (sdk.authenticateRequest as any).mockResolvedValue({
+      id: 7,
+      role: "radiologist",
+    });
+    (hasMedicalAccess as any).mockReturnValue(true);
+    const res = mockRes();
+    await handleDicomwebRequest(
+      {
+        params: { 0: "studies/1.2/series/3.4/..%2f" },
+        headers: {},
+      } as any,
+      res as any
+    );
+    expect(res.statusCode).toBe(400);
+    expect(orthancFetch).not.toHaveBeenCalled();
+  });
+
+  it("400 et orthancFetch non appelé pour chemin avec backslash", async () => {
+    (sdk.authenticateRequest as any).mockResolvedValue({
+      id: 7,
+      role: "radiologist",
+    });
+    (hasMedicalAccess as any).mockReturnValue(true);
+    const res = mockRes();
+    await handleDicomwebRequest(
+      { params: { 0: "studies/1.2\\etc\\passwd" }, headers: {} } as any,
+      res as any
+    );
+    expect(res.statusCode).toBe(400);
+    expect(orthancFetch).not.toHaveBeenCalled();
+  });
+
   it("relaie la metadata et journalise l'accès une fois", async () => {
     (sdk.authenticateRequest as any).mockResolvedValue({
       id: 7,
@@ -126,6 +224,8 @@ describe("handleDicomwebRequest", () => {
       } as any,
       res as any
     );
+    // Le path transmis à orthancFetch doit être le chemin reconstruit encodé,
+    // pas le `rest` brut.
     expect(orthancFetch).toHaveBeenCalledWith(
       "/dicom-web/studies/1.2.3/series/4.5.6/metadata",
       expect.objectContaining({

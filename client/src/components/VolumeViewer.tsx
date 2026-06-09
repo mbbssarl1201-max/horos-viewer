@@ -30,9 +30,28 @@ interface VolumeViewerProps {
   slabThicknessMm?: number;
   /** Mode de projection slab. */
   slabMode?: SlabMode;
+  /** Preset de rendu volumique 3D (id de PRESETS_3D). Défaut "os". */
+  preset3d?: string;
 }
 
 const VOLUME_ENGINE_ID = "horosVolumeEngine";
+
+/**
+ * Presets de volume rendering 3D exposés à l'utilisateur. `preset` = nom du preset
+ * Cornerstone3D (cf. constants/viewportPresets). `mip:true` → projection d'intensité
+ * maximale (blend mode MAXIMUM_INTENSITY_BLEND), pas un simple transfer function.
+ */
+export const PRESETS_3D = [
+  { id: "os", label: "Os", preset: "CT-Bone", mip: false },
+  { id: "mous", label: "Tissus mous", preset: "CT-Soft-Tissue", mip: false },
+  { id: "angio", label: "Angio", preset: "CT-Coronary-Arteries-2", mip: false },
+  { id: "poumon", label: "Poumon", preset: "CT-Lung", mip: false },
+  { id: "mip", label: "MIP", preset: "CT-MIP", mip: true },
+] as const;
+
+function presetParId(id: string | undefined) {
+  return PRESETS_3D.find(p => p.id === (id ?? "os")) ?? PRESETS_3D[0];
+}
 
 export default function VolumeViewer({
   imageUrls,
@@ -41,6 +60,7 @@ export default function VolumeViewer({
   mode,
   slabThicknessMm,
   slabMode,
+  preset3d,
 }: VolumeViewerProps) {
   const axialRef = useRef<HTMLDivElement>(null);
   const sagittalRef = useRef<HTMLDivElement>(null);
@@ -257,8 +277,16 @@ export default function VolumeViewer({
           );
           const vp = engine.getViewport("VR_3D") as any;
           const applyPreset = () => {
+            const p = presetParId(preset3d);
             try {
-              vp.setProperties({ preset: "CT-Bone" });
+              vp.setBlendMode?.(
+                p.mip
+                  ? Enums.BlendModes.MAXIMUM_INTENSITY_BLEND
+                  : Enums.BlendModes.COMPOSITE
+              );
+            } catch {}
+            try {
+              vp.setProperties({ preset: p.preset });
             } catch {}
             vp.render();
           };
@@ -308,6 +336,35 @@ export default function VolumeViewer({
       engineRef.current = null;
     };
   }, [imageUrls, orthancImageIds, volumeId, mode, slabThicknessMm, slabMode]);
+
+  // Changement de preset 3D : ré-appliquer SANS reconstruire le moteur (rapide).
+  // `preset3d` est volontairement HORS du tableau de deps du useEffect principal.
+  useEffect(() => {
+    if (mode !== "3d") return;
+    let cancelled = false;
+    (async () => {
+      const engine = engineRef.current;
+      const vp = engine?.getViewport?.("VR_3D");
+      if (!vp) return;
+      const cs = await import("@cornerstonejs/core");
+      if (cancelled) return;
+      const p = presetParId(preset3d);
+      try {
+        vp.setBlendMode?.(
+          p.mip
+            ? cs.Enums.BlendModes.MAXIMUM_INTENSITY_BLEND
+            : cs.Enums.BlendModes.COMPOSITE
+        );
+      } catch {}
+      try {
+        vp.setProperties({ preset: p.preset });
+      } catch {}
+      vp.render();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [preset3d, mode]);
 
   if (error) {
     return (

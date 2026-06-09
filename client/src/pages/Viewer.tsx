@@ -1,6 +1,6 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import CornerstoneViewer from "@/components/CornerstoneViewer";
-import VolumeViewer from "@/components/VolumeViewer";
+import VolumeViewer, { PRESETS_3D } from "@/components/VolumeViewer";
 import { useOrthancVolume } from "@/hooks/useOrthancVolume";
 import { SLAB_MODES, type SlabMode } from "@/lib/slabBlend";
 import { trpc } from "@/lib/trpc";
@@ -104,6 +104,7 @@ export default function Viewer() {
     "1x1"
   );
   const [viewMode, setViewMode] = useState<"2d" | "mpr" | "3d">("2d");
+  const [preset3d, setPreset3d] = useState<string>("os");
   const [huStats, setHuStats] = useState<{
     mean: number;
     stdDev: number;
@@ -411,6 +412,22 @@ export default function Viewer() {
             </select>
           </div>
         )}
+        {/* Presets de rendu volumique — 3D only */}
+        {viewMode === "3d" && (
+          <div className="flex items-center gap-1 px-2">
+            <label className="text-[10px] text-muted-foreground">Preset</label>
+            {PRESETS_3D.map(p => (
+              <button
+                key={p.id}
+                onClick={() => setPreset3d(p.id)}
+                className={`toolbar-btn ${preset3d === p.id ? "active" : ""}`}
+                title={`Rendu 3D — ${p.label}`}
+              >
+                <span className="text-[10px]">{p.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {orthancError && viewMode === "mpr" && (
           <span className="text-[10px] text-destructive px-2">
             {orthancError}
@@ -574,6 +591,7 @@ export default function Viewer() {
                   volumeId={orthancVolumeId ?? undefined}
                   slabThicknessMm={slabThicknessMm}
                   slabMode={slabMode}
+                  preset3d={preset3d}
                 />
               )}
             </div>

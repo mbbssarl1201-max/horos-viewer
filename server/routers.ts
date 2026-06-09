@@ -20,7 +20,7 @@ import {
   createNotification,
   recordAccess,
 } from "./db";
-import { storagePut } from "./storage";
+import { storagePut, storageDelete } from "./storage";
 import { hasMedicalAccess, isAdmin } from "./rbac";
 import { checkOrthancConnection, qidoSearchStudies, cFind, cMove, listModalities } from "./orthanc";
 import { sendEmail, notifyNewStudy, notifyStatUrgent, notifyReportFinalized, getSmtpStatus } from "./email";
@@ -376,6 +376,14 @@ export const appRouter = router({
         for (const s of studySeries) {
           const seriesInstances = await db.select().from(instances).where(eq(instances.seriesId, s.id));
           for (const inst of seriesInstances) {
+            // Remove the DICOM object from storage so deleted studies leave no
+            // orphaned PHI in the bucket. Best-effort: a storage hiccup must not
+            // block the DB erasure — the study still disappears from the app.
+            try {
+              await storageDelete(inst.storageKey);
+            } catch (err) {
+              console.warn(`[studies.delete] could not remove object ${inst.storageKey}:`, err);
+            }
             await db.delete(annotations).where(eq(annotations.instanceId, inst.id));
           }
           await db.delete(instances).where(eq(instances.seriesId, s.id));

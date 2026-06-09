@@ -1,27 +1,71 @@
 import { useEffect, useRef, useState } from "react";
+import { slabModeToBlend, type SlabMode } from "@/lib/slabBlend";
 
 /**
  * VolumeViewer — real volumetric rendering with Cornerstone3D.
  *
  * mode="mpr": builds a 3D volume from the stack and shows 3 orthogonal
- *             reconstructions (axial / sagittal / coronal).
+ *             reconstructions (axial / sagittal / coronal) + 1 oblique quad.
+ *             Supports ToolGroup (CrosshairsTool, WindowLevelTool, etc.),
+ *             VOI synchronizer, and slab thickness/blend-mode.
  * mode="3d" : volume rendering (VR) in a single viewport with a CT preset.
+ *
+ * Source priority:
+ *   1. orthancImageIds (wadors: scheme, from Orthanc via proxy) if provided
+ *   2. imageUrls (wadouri: scheme, from MinIO) otherwise
  *
  * Uses its own rendering engine so it never collides with the 2D stack viewer.
  * Cornerstone core must already be initialized (the 2D viewer's initCornerstone
  * registers the streaming volume loader via cornerstone.init()).
  */
 interface VolumeViewerProps {
-  imageUrls: string[];
+  /** Source locale (MinIO, schéma wadouri:) — conservée pour compat. */
+  imageUrls?: string[];
+  /** Source Orthanc (imageIds wadors déjà préfixés). Prioritaire si fournie. */
+  orthancImageIds?: string[];
+  /** volumeId stable fourni par useOrthancVolume (sinon valeur locale par défaut). */
+  volumeId?: string;
   mode: "mpr" | "3d";
+  /** Épaisseur de coupe en mm (0 = coupe fine). */
+  slabThicknessMm?: number;
+  /** Mode de projection slab. */
+  slabMode?: SlabMode;
+  /** Preset de rendu volumique 3D (id de PRESETS_3D). Défaut "os". */
+  preset3d?: string;
 }
 
 const VOLUME_ENGINE_ID = "horosVolumeEngine";
 
-export default function VolumeViewer({ imageUrls, mode }: VolumeViewerProps) {
+/**
+ * Presets de volume rendering 3D exposés à l'utilisateur. `preset` = nom du preset
+ * Cornerstone3D (cf. constants/viewportPresets). `mip:true` → projection d'intensité
+ * maximale (blend mode MAXIMUM_INTENSITY_BLEND), pas un simple transfer function.
+ */
+export const PRESETS_3D = [
+  { id: "os", label: "Os", preset: "CT-Bone", mip: false },
+  { id: "mous", label: "Tissus mous", preset: "CT-Soft-Tissue", mip: false },
+  { id: "angio", label: "Angio", preset: "CT-Coronary-Arteries-2", mip: false },
+  { id: "poumon", label: "Poumon", preset: "CT-Lung", mip: false },
+  { id: "mip", label: "MIP", preset: "CT-MIP", mip: true },
+] as const;
+
+function presetParId(id: string | undefined) {
+  return PRESETS_3D.find(p => p.id === (id ?? "os")) ?? PRESETS_3D[0];
+}
+
+export default function VolumeViewer({
+  imageUrls,
+  orthancImageIds,
+  volumeId,
+  mode,
+  slabThicknessMm,
+  slabMode,
+  preset3d,
+}: VolumeViewerProps) {
   const axialRef = useRef<HTMLDivElement>(null);
   const sagittalRef = useRef<HTMLDivElement>(null);
   const coronalRef = useRef<HTMLDivElement>(null);
+  const obliqueRef = useRef<HTMLDivElement>(null);
   const vr3dRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,17 +87,23 @@ export default function VolumeViewer({ imageUrls, mode }: VolumeViewerProps) {
           await cornerstone.init?.();
         }
 
-        const imageIds = imageUrls.map((u) => `wadouri:${u}`);
+        // Source priority: orthancImageIds (wadors) > imageUrls (wadouri)
+        const imageIds =
+          orthancImageIds && orthancImageIds.length
+            ? orthancImageIds
+            : (imageUrls ?? []).map(u => `wadouri:${u}`);
+
         if (imageIds.length < 2) {
           throw new Error("Need at least 2 slices to build a volume");
         }
 
-        const volumeId = `cornerstoneStreamingImageVolume:HOROS_VOL`;
+        const volId = volumeId ?? `cornerstoneStreamingImageVolume:HOROS_VOL`;
+
         // Drop any cached volume from a previous mount so we rebuild cleanly.
         try {
-          cornerstone.cache?.removeVolumeLoadObject?.(volumeId);
+          cornerstone.cache?.removeVolumeLoadObject?.(volId);
         } catch {}
-        const volume = await volumeLoader.createAndCacheVolume(volumeId, {
+        const volume = await volumeLoader.createAndCacheVolume(volId, {
           imageIds,
         });
 
@@ -69,6 +119,35 @@ export default function VolumeViewer({ imageUrls, mode }: VolumeViewerProps) {
         if (cancelled) return;
 
         if (mode === "mpr") {
+          // ── Init @cornerstonejs/tools ────────────────────────────────────
+          const csTools = await import("@cornerstonejs/tools");
+          const {
+            init: toolsInit,
+            ToolGroupManager,
+            CrosshairsTool,
+            WindowLevelTool,
+            StackScrollTool,
+            PanTool,
+            ZoomTool,
+            Enums: csToolsEnums,
+            addTool,
+            synchronizers,
+          } = csTools as any;
+
+          await toolsInit();
+          for (const t of [
+            CrosshairsTool,
+            WindowLevelTool,
+            StackScrollTool,
+            PanTool,
+            ZoomTool,
+          ]) {
+            try {
+              addTool(t);
+            } catch {} // addTool throws if already registered — ignore
+          }
+
+          // ── 4 viewports : axial / sagittal / coronal / oblique ───────────
           const inputs = [
             {
               viewportId: "MPR_AXIAL",
@@ -88,44 +167,126 @@ export default function VolumeViewer({ imageUrls, mode }: VolumeViewerProps) {
               type: Enums.ViewportType.ORTHOGRAPHIC,
               defaultOptions: { orientation: Enums.OrientationAxis.CORONAL },
             },
+            {
+              viewportId: "MPR_OBLIQUE",
+              element: obliqueRef.current!,
+              type: Enums.ViewportType.ORTHOGRAPHIC,
+              defaultOptions: {
+                orientation: Enums.OrientationAxis.ACQUISITION,
+              },
+            },
           ];
           engine.setViewports(inputs);
-          const mprIds = ["MPR_AXIAL", "MPR_SAGITTAL", "MPR_CORONAL"];
-          await setVolumesForViewports(engine, [{ volumeId }], mprIds);
-          // Apply a CT soft-tissue window (WW 400 / WC 40). The streaming
-          // volume resets the VOI to a wide default when it finishes loading,
-          // so apply it now AND again from the load-completion callback,
-          // otherwise the reconstructions end up flat mid-grey.
+
+          const allIds = [
+            "MPR_AXIAL",
+            "MPR_SAGITTAL",
+            "MPR_CORONAL",
+            "MPR_OBLIQUE",
+          ];
+          await setVolumesForViewports(engine, [{ volumeId: volId }], allIds);
+
+          // ── ToolGroup ─────────────────────────────────────────────────────
+          const TOOLGROUP_ID = "HOROS_MPR_TG";
+          ToolGroupManager.destroyToolGroup?.(TOOLGROUP_ID);
+          const tg = ToolGroupManager.createToolGroup(TOOLGROUP_ID)!;
+          for (const t of [
+            CrosshairsTool,
+            WindowLevelTool,
+            StackScrollTool,
+            PanTool,
+            ZoomTool,
+          ]) {
+            tg.addTool(t.toolName);
+          }
+          allIds.forEach((id: string) => tg.addViewport(id, VOLUME_ENGINE_ID));
+
+          const { MouseBindings } = csToolsEnums;
+          tg.setToolActive(CrosshairsTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Primary }],
+          });
+          tg.setToolActive(WindowLevelTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Secondary }],
+          });
+          tg.setToolActive(ZoomTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Auxiliary }],
+          });
+          tg.setToolActive(StackScrollTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Wheel }],
+          });
+
+          // ── VOI Synchronizer (W/L cohérent sur les 4 vues) ───────────────
+          const voiSync = synchronizers.createVOISynchronizer(
+            "HOROS_VOI_SYNC",
+            { syncInvertState: false, syncColormap: false }
+          );
+          allIds.forEach((id: string) =>
+            voiSync.add({ renderingEngineId: VOLUME_ENGINE_ID, viewportId: id })
+          );
+
+          // ── W/L par défaut (CT soft-tissue) ──────────────────────────────
           const applyMprWindow = () => {
-            for (const id of mprIds) {
+            for (const id of allIds) {
               try {
                 engine
                   .getViewport(id)
                   .setProperties({ voiRange: { lower: -160, upper: 240 } });
               } catch {}
             }
-            engine.renderViewports(mprIds);
+            engine.renderViewports(allIds);
           };
+
+          // ── Slab thickness + blend mode ───────────────────────────────────
+          const applySlab = () => {
+            if (!slabThicknessMm || slabThicknessMm <= 0) return;
+            const blendKey = slabModeToBlend(slabMode ?? "mip");
+            // BlendModes est dans Enums du core (pas dans csToolsEnums)
+            const blend = (Enums as any).BlendModes?.[blendKey];
+            for (const id of allIds) {
+              try {
+                const vp = engine.getViewport(id) as any;
+                vp.setSlabThickness(slabThicknessMm);
+                if (blend !== undefined) vp.setBlendMode(blend);
+              } catch {}
+            }
+            engine.renderViewports(allIds);
+          };
+
           engine.resize(true, false);
           applyMprWindow();
-          volume.load(() => applyMprWindow());
+          applySlab();
+          volume.load(() => {
+            applyMprWindow();
+            applySlab();
+          });
         } else {
           engine.setViewports([
             {
               viewportId: "VR_3D",
               element: vr3dRef.current!,
               type: Enums.ViewportType.VOLUME_3D,
-              defaultOptions: { background: [0, 0, 0] as [number, number, number] },
+              defaultOptions: {
+                background: [0, 0, 0] as [number, number, number],
+              },
             },
           ]);
-          await setVolumesForViewports(engine, [{ volumeId }], ["VR_3D"]);
+          await setVolumesForViewports(
+            engine,
+            [{ volumeId: volId }],
+            ["VR_3D"]
+          );
           const vp = engine.getViewport("VR_3D") as any;
-          // A bone preset gives a recognizable VR; fall back silently if the
-          // preset name isn't available in this build. Apply now and again once
-          // the volume has fully streamed in.
           const applyPreset = () => {
+            const p = presetParId(preset3d);
             try {
-              vp.setProperties({ preset: "CT-Bone" });
+              vp.setBlendMode?.(
+                p.mip
+                  ? Enums.BlendModes.MAXIMUM_INTENSITY_BLEND
+                  : Enums.BlendModes.COMPOSITE
+              );
+            } catch {}
+            try {
+              vp.setProperties({ preset: p.preset });
             } catch {}
             vp.render();
           };
@@ -147,12 +308,63 @@ export default function VolumeViewer({ imageUrls, mode }: VolumeViewerProps) {
     setup();
     return () => {
       cancelled = true;
+      // Purge du volume du cache pour libérer la mémoire GPU entre changements de série.
+      const capturedVolId =
+        volumeId ?? `cornerstoneStreamingImageVolume:HOROS_VOL`;
+      import("@cornerstonejs/core")
+        .then((cs: any) => {
+          try {
+            cs.cache?.removeVolumeLoadObject?.(capturedVolId);
+          } catch {}
+        })
+        .catch(() => {});
+      import("@cornerstonejs/tools")
+        .then((csTools: any) => {
+          try {
+            csTools.ToolGroupManager?.destroyToolGroup?.("HOROS_MPR_TG");
+          } catch {}
+          try {
+            csTools.SynchronizerManager?.destroySynchronizer?.(
+              "HOROS_VOI_SYNC"
+            );
+          } catch {}
+        })
+        .catch(() => {});
       try {
         engineRef.current?.destroy();
       } catch {}
       engineRef.current = null;
     };
-  }, [imageUrls, mode]);
+  }, [imageUrls, orthancImageIds, volumeId, mode, slabThicknessMm, slabMode]);
+
+  // Changement de preset 3D : ré-appliquer SANS reconstruire le moteur (rapide).
+  // `preset3d` est volontairement HORS du tableau de deps du useEffect principal.
+  useEffect(() => {
+    if (mode !== "3d") return;
+    let cancelled = false;
+    (async () => {
+      const engine = engineRef.current;
+      const vp = engine?.getViewport?.("VR_3D");
+      if (!vp) return;
+      const cs = await import("@cornerstonejs/core");
+      if (cancelled) return;
+      const p = presetParId(preset3d);
+      try {
+        vp.setBlendMode?.(
+          p.mip
+            ? cs.Enums.BlendModes.MAXIMUM_INTENSITY_BLEND
+            : cs.Enums.BlendModes.COMPOSITE
+        );
+      } catch {}
+      try {
+        vp.setProperties({ preset: p.preset });
+      } catch {}
+      vp.render();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [preset3d, mode]);
 
   if (error) {
     return (
@@ -173,10 +385,26 @@ export default function VolumeViewer({ imageUrls, mode }: VolumeViewerProps) {
       )}
       {mode === "mpr" ? (
         <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-px bg-border">
-          <div ref={axialRef} className="relative bg-black" data-label="Axial" />
-          <div ref={sagittalRef} className="relative bg-black" data-label="Sagittal" />
-          <div ref={coronalRef} className="relative bg-black" data-label="Coronal" />
-          <div className="bg-black" />
+          <div
+            ref={axialRef}
+            className="relative bg-black"
+            data-label="Axial"
+          />
+          <div
+            ref={sagittalRef}
+            className="relative bg-black"
+            data-label="Sagittal"
+          />
+          <div
+            ref={coronalRef}
+            className="relative bg-black"
+            data-label="Coronal"
+          />
+          <div
+            ref={obliqueRef}
+            className="relative bg-black"
+            data-label="Oblique"
+          />
         </div>
       ) : (
         <div ref={vr3dRef} className="absolute inset-0 bg-black" />

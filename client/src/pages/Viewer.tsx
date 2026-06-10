@@ -1,5 +1,7 @@
 import { useAuth } from "@/_core/hooks/useAuth";
-import CornerstoneViewer from "@/components/CornerstoneViewer";
+import CornerstoneViewer, {
+  type CornerstoneViewerHandle,
+} from "@/components/CornerstoneViewer";
 import VolumeViewer, { PRESETS_3D } from "@/components/VolumeViewer";
 import { SLAB_MODES, type SlabMode } from "@/lib/slabBlend";
 import { trpc } from "@/lib/trpc";
@@ -47,6 +49,9 @@ import {
   Spline,
   Columns2,
   Grid2x2,
+  Brush,
+  Eraser,
+  Trash2,
 } from "lucide-react";
 import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
 import SeriesThumbnail from "@/components/SeriesThumbnail";
@@ -137,6 +142,19 @@ const VIEWER_TOOLS = [
     icon: Spline,
     description: "ROI à main levée",
   },
+  // Segmentation (MVP, côté client — labelmap en mémoire, non persisté).
+  {
+    id: "brush",
+    label: "Pinceau",
+    icon: Brush,
+    description: "Pinceau — peindre la segmentation",
+  },
+  {
+    id: "eraser",
+    label: "Gomme",
+    icon: Eraser,
+    description: "Gomme — effacer sous le curseur",
+  },
   // NB : pas d'outil « crosshair » ici — il n'existe pas dans le toolMap 2D et
   // sélectionnait un outil inconnu (cassait le changement d'outil). La MPR
   // s'active via le bouton de mode « MPR » dédié (VolumeViewport), pas un outil.
@@ -181,6 +199,14 @@ export default function Viewer() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const viewportRef = useRef<HTMLDivElement>(null);
+  // Réf vers le viewer ACTIF (1x1 → l'unique ; mosaïque → la cellule active) pour
+  // déclencher l'effacement de sa segmentation depuis la barre d'outils.
+  const activeViewerRef = useRef<CornerstoneViewerHandle | null>(null);
+
+  // Efface le labelmap du viewer actif (bouton « Effacer seg. »).
+  const handleClearSegmentation = useCallback(() => {
+    activeViewerRef.current?.clearSegmentation();
+  }, []);
 
   // Fetch study data
   const { data: study } = trpc.studies.get.useQuery(
@@ -322,7 +348,9 @@ export default function Viewer() {
   const handleSaveAnnotation = useCallback(
     (a: { instanceId: number; type: any; data: unknown }) => {
       saveAnnotationMutation.mutate(
-        { instanceId: a.instanceId, type: a.type, data: a.data },
+        // L'objet annotation Cornerstone est dynamique (typé `any` côté lib) ;
+        // le serveur le valide à l'exécution via annotationDataSchema (zod).
+        { instanceId: a.instanceId, type: a.type, data: a.data as any },
         {
           onError: err => {
             // Best-effort: a failed save must not interrupt the reading workflow.
@@ -492,6 +520,19 @@ export default function Viewer() {
             <span className="text-[9px]">{tool.label}</span>
           </button>
         ))}
+
+        {/* Effacer la segmentation du viewport actif (2D uniquement). Action, pas
+            un outil : ne change pas `activeTool`. */}
+        {viewMode === "2d" && (
+          <button
+            className="toolbar-btn"
+            title="Effacer la segmentation (labelmap) du viewport actif"
+            onClick={handleClearSegmentation}
+          >
+            <Trash2 className="w-4 h-4" />
+            <span className="text-[9px]">Effacer seg.</span>
+          </button>
+        )}
 
         <Separator orientation="vertical" className="h-7 mx-1" />
 
@@ -790,6 +831,7 @@ export default function Viewer() {
                   // CornerstoneViewer, sans instanceKey (ids historiques),
                   // remplissant le conteneur #cornerstone-viewport.
                   <CornerstoneViewer
+                    ref={activeViewerRef}
                     imageUrls={cellImageUrls}
                     currentSlice={currentSlice}
                     onSliceChange={setCurrentSlice}
@@ -833,6 +875,7 @@ export default function Viewer() {
                           }`}
                         >
                           <CornerstoneViewer
+                            ref={isActive ? activeViewerRef : undefined}
                             instanceKey={`cell${i}`}
                             imageUrls={cellImageUrls}
                             currentSlice={currentSlice}

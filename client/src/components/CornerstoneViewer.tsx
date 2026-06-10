@@ -1,10 +1,32 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { patchImagerPixelSpacing } from "@/lib/imagerPixelSpacing";
+import {
+  toolNameToDbType,
+  resolveInstanceId,
+  extractRoiStats,
+  type AnnotationDbType,
+  type RoiStats,
+  type InstanceLike,
+} from "@/lib/annotationMapping";
 
 /**
  * CornerstoneViewer - Renders DICOM images using Cornerstone3D
  * Handles initialization, image loading, and tool interactions
  */
+
+// One annotation the parent asks us to persist. `data` is the full,
+// JSON-serializable Cornerstone annotation object.
+export interface AnnotationToSave {
+  instanceId: number;
+  type: AnnotationDbType;
+  data: unknown;
+}
+
+// A previously-saved annotation row used for re-hydration. `data` is the
+// serialized Cornerstone annotation object stored at save time.
+export interface SavedAnnotation {
+  data: unknown;
+}
 
 interface CornerstoneViewerProps {
   imageUrls: string[];
@@ -15,6 +37,14 @@ interface CornerstoneViewerProps {
   windowCenter: number;
   onWindowLevelChange: (ww: number, wc: number) => void;
   onZoomChange?: (zoomPercent: number) => void;
+  /** Series instances (id + storageUrl) used to map annotations → DB rows. */
+  instances?: InstanceLike[];
+  /** Saved annotations to re-draw once the viewport is ready. */
+  savedAnnotations?: SavedAnnotation[];
+  /** Called when a measurement is completed/modified and should be persisted. */
+  onSaveAnnotation?: (annotation: AnnotationToSave) => void;
+  /** Called with ROI HU stats (or null) so the parent can show/hide the overlay. */
+  onRoiStats?: (stats: RoiStats | null) => void;
 }
 
 // Cornerstone3D initialization state
@@ -192,6 +222,10 @@ export default function CornerstoneViewer({
   windowCenter,
   onWindowLevelChange,
   onZoomChange,
+  instances,
+  savedAnnotations,
+  onSaveAnnotation,
+  onRoiStats,
 }: CornerstoneViewerProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -200,6 +234,28 @@ export default function CornerstoneViewer({
   const viewportIdRef = useRef("CT_VIEWPORT");
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const listenersCleanupRef = useRef<(() => void) | null>(null);
+
+  // Latest props/state read by the annotation event handler. Kept in refs so
+  // the event subscription effect doesn't tear down and re-subscribe on every
+  // slice change or callback identity change.
+  const instancesRef = useRef<InstanceLike[]>([]);
+  const currentSliceRef = useRef(0);
+  const onSaveAnnotationRef = useRef<typeof onSaveAnnotation>(undefined);
+  const onRoiStatsRef = useRef<typeof onRoiStats>(undefined);
+  // annotationUID → JSON of last-saved data, so a small drag (MODIFIED) that
+  // doesn't actually change the measurement isn't re-inserted, and so the
+  // exact same annotation isn't saved twice in a row.
+  const savedSnapshotRef = useRef<Map<string, string>>(new Map());
+  // annotationUIDs we hydrated from the DB → never re-save those.
+  const hydratedUidsRef = useRef<Set<string>>(new Set());
+  const modifiedDebounceRef = useRef<
+    Map<string, ReturnType<typeof setTimeout>>
+  >(new Map());
+
+  instancesRef.current = instances ?? [];
+  currentSliceRef.current = currentSlice;
+  onSaveAnnotationRef.current = onSaveAnnotation;
+  onRoiStatsRef.current = onRoiStats;
 
   // Initialize Cornerstone3D
   useEffect(() => {
@@ -223,6 +279,103 @@ export default function CornerstoneViewer({
       mounted = false;
     };
   }, []);
+
+  // Event-driven annotation persistence + ROI stats.
+  //
+  // Replaces the old 1-second polling in Viewer.tsx. We subscribe ONCE (after
+  // init) on cornerstone-core's `eventTarget`, where annotation tool events
+  // fire. We listen to ANNOTATION_COMPLETED (user finished drawing) and
+  // ANNOTATION_MODIFIED (debounced — user edited an existing measurement).
+  //
+  // We deliberately do NOT listen to ANNOTATION_ADDED: that's what
+  // `addAnnotation` fires during hydration, so subscribing to COMPLETED keeps
+  // re-drawn annotations from looping back into a save. We also dedupe on
+  // annotationUID + a JSON snapshot, and skip any UID we hydrated ourselves.
+  useEffect(() => {
+    if (!isInitialized) return;
+    let disposed = false;
+    let cleanup: (() => void) | null = null;
+
+    (async () => {
+      const cornerstone = await import("@cornerstonejs/core");
+      const cornerstoneTools = await import("@cornerstonejs/tools");
+      if (disposed) return;
+      const { eventTarget } = cornerstone;
+      const Events = cornerstoneTools.Enums.Events;
+
+      const persist = (annotation: any) => {
+        if (!annotation) return;
+        const uid: string | undefined = annotation.annotationUID;
+        // Never re-save an annotation we hydrated from the DB.
+        if (uid && hydratedUidsRef.current.has(uid)) return;
+
+        // ROI stats overlay (best-effort) — replaces the old polling read.
+        const stats = extractRoiStats(annotation);
+        if (stats) onRoiStatsRef.current?.(stats);
+
+        const save = onSaveAnnotationRef.current;
+        if (!save) return;
+        const dbType = toolNameToDbType(annotation?.metadata?.toolName);
+        if (!dbType) return;
+        const instanceId = resolveInstanceId(
+          annotation?.metadata?.referencedImageId,
+          instancesRef.current,
+          currentSliceRef.current
+        );
+        if (instanceId == null) return;
+
+        // Dedupe: don't re-insert an identical snapshot for the same UID.
+        let snapshot: string;
+        try {
+          snapshot = JSON.stringify(annotation);
+        } catch {
+          snapshot = String(uid ?? Math.random());
+        }
+        if (uid && savedSnapshotRef.current.get(uid) === snapshot) return;
+        if (uid) savedSnapshotRef.current.set(uid, snapshot);
+
+        save({ instanceId, type: dbType, data: annotation });
+      };
+
+      const onCompleted = (evt: any) => {
+        persist(evt?.detail?.annotation);
+      };
+      // MODIFIED fires repeatedly during a drag → debounce per annotation so we
+      // save at most once shortly after the user stops editing (still a new row
+      // per save, but not one per mousemove).
+      const onModified = (evt: any) => {
+        const annotation = evt?.detail?.annotation;
+        const uid: string | undefined = annotation?.annotationUID;
+        const key = uid ?? "_anon";
+        const prev = modifiedDebounceRef.current.get(key);
+        if (prev) clearTimeout(prev);
+        modifiedDebounceRef.current.set(
+          key,
+          setTimeout(() => {
+            modifiedDebounceRef.current.delete(key);
+            persist(annotation);
+          }, 600)
+        );
+      };
+
+      eventTarget.addEventListener(Events.ANNOTATION_COMPLETED, onCompleted);
+      eventTarget.addEventListener(Events.ANNOTATION_MODIFIED, onModified);
+      cleanup = () => {
+        eventTarget.removeEventListener(
+          Events.ANNOTATION_COMPLETED,
+          onCompleted
+        );
+        eventTarget.removeEventListener(Events.ANNOTATION_MODIFIED, onModified);
+        modifiedDebounceRef.current.forEach(t => clearTimeout(t));
+        modifiedDebounceRef.current.clear();
+      };
+    })();
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [isInitialized]);
 
   // Setup rendering engine and viewport
   useEffect(() => {
@@ -389,6 +542,76 @@ export default function CornerstoneViewer({
       listenersCleanupRef.current = null;
     };
   }, [isInitialized, imageUrls]);
+
+  // Re-hydration: re-draw previously-saved annotations once the viewport is
+  // ready. Runs when the saved set or the loaded stack changes. addAnnotation
+  // fires ANNOTATION_ADDED (NOT ANNOTATION_COMPLETED), so this never loops back
+  // into a save; we also record each UID in hydratedUidsRef as a belt-and-
+  // suspenders guard against re-persisting.
+  useEffect(() => {
+    if (!isInitialized || imageUrls.length === 0) return;
+    if (!savedAnnotations || savedAnnotations.length === 0) return;
+    let disposed = false;
+
+    (async () => {
+      try {
+        const cornerstone = await import("@cornerstonejs/core");
+        const cornerstoneTools = await import("@cornerstonejs/tools");
+        if (disposed) return;
+        const { annotation: annotationModule } = cornerstoneTools;
+        const el = viewportRef.current;
+        if (!el) return;
+
+        let added = 0;
+        for (const row of savedAnnotations) {
+          const ann = row?.data as any;
+          if (!ann || !ann.metadata) continue;
+          const uid: string | undefined = ann.annotationUID;
+          // Skip if this annotation is already present (avoid duplicate redraws
+          // on re-runs) or already hydrated.
+          if (uid) {
+            if (hydratedUidsRef.current.has(uid)) continue;
+            const existing = annotationModule.state.getAnnotation?.(uid);
+            if (existing) {
+              hydratedUidsRef.current.add(uid);
+              continue;
+            }
+          }
+          try {
+            // annotationGroupSelector = the viewport element (FrameOfReference
+            // is resolved from it). Mark as not-invalidated so cached stats are
+            // kept rather than recomputed against a not-yet-loaded image.
+            annotationModule.state.addAnnotation(ann, el);
+            if (uid) hydratedUidsRef.current.add(uid);
+            added++;
+          } catch (e) {
+            console.warn("[Cornerstone3D] hydratation annotation ignorée:", e);
+          }
+        }
+
+        if (added > 0) {
+          try {
+            const engine = renderingEngineRef.current;
+            cornerstoneTools.utilities.triggerAnnotationRenderForViewportIds?.([
+              viewportIdRef.current,
+            ]);
+            engine?.renderViewports?.([viewportIdRef.current]);
+          } catch {
+            renderingEngineRef.current?.render?.();
+          }
+        }
+      } catch (e) {
+        console.warn(
+          "[Cornerstone3D] re-hydratation des annotations échouée:",
+          e
+        );
+      }
+    })();
+
+    return () => {
+      disposed = true;
+    };
+  }, [isInitialized, imageUrls, savedAnnotations]);
 
   // Handle slice change
   useEffect(() => {

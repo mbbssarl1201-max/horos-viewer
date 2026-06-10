@@ -56,26 +56,26 @@ export default function Login() {
           <CardTitle>MediView</CardTitle>
           <CardDescription>
             {mode === "login"
-              ? "Sign in to access the DICOM viewer"
-              : "Create an account"}
+              ? "Connectez-vous pour accéder au visualiseur DICOM"
+              : "Créer un compte"}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {mode === "register" && (
               <div className="space-y-2">
-                <Label htmlFor="name">Name</Label>
+                <Label htmlFor="name">Nom</Label>
                 <Input
                   id="name"
                   value={name}
                   onChange={e => setName(e.target.value)}
                   autoComplete="name"
-                  placeholder="Dr. Jane Smith"
+                  placeholder="Dr Jean Dupont"
                 />
               </div>
             )}
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email">E-mail</Label>
               <Input
                 id="email"
                 type="email"
@@ -86,7 +86,7 @@ export default function Login() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">Mot de passe</Label>
               <Input
                 id="password"
                 type="password"
@@ -100,7 +100,7 @@ export default function Login() {
               />
               {mode === "register" && (
                 <p className="text-xs text-muted-foreground">
-                  At least 8 characters.
+                  Au moins 8 caractères.
                 </p>
               )}
             </div>
@@ -109,10 +109,10 @@ export default function Login() {
 
             <Button type="submit" className="w-full" disabled={pending}>
               {pending
-                ? "Please wait…"
+                ? "Veuillez patienter…"
                 : mode === "login"
-                  ? "Sign in"
-                  : "Create account"}
+                  ? "Se connecter"
+                  : "Créer le compte"}
             </Button>
           </form>
 
@@ -126,7 +126,7 @@ export default function Login() {
                   setError(null);
                 }}
               >
-                Need an account? Register
+                Pas encore de compte ? S'inscrire
               </button>
             ) : (
               <button
@@ -137,7 +137,7 @@ export default function Login() {
                   setError(null);
                 }}
               >
-                Already have an account? Sign in
+                Déjà un compte ? Se connecter
               </button>
             )}
           </div>

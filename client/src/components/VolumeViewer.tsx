@@ -216,6 +216,17 @@ export default function VolumeViewer({
           });
 
           // ── VOI Synchronizer (W/L cohérent sur les 4 vues) ───────────────
+          // Détruire un éventuel synchroniseur résiduel AVANT de recréer : le
+          // cleanup du démontage précédent le détruit de façon asynchrone (via
+          // import().then()), donc quand l'effet se relance (nouvelle réf de
+          // imageUrls, changement de mode/slab…) le create peut précéder ce
+          // destroy → "Synchronizer already exists" → setup MPR avorté → écran
+          // noir. On garantit ici l'unicité, comme le destroyToolGroup défensif.
+          try {
+            (csTools as any).SynchronizerManager?.destroySynchronizer?.(
+              "HOROS_VOI_SYNC"
+            );
+          } catch {}
           const voiSync = synchronizers.createVOISynchronizer(
             "HOROS_VOI_SYNC",
             { syncInvertState: false, syncColormap: false }

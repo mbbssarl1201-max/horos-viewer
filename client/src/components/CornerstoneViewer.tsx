@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { patchImagerPixelSpacing } from "@/lib/imagerPixelSpacing";
 
 /**
  * CornerstoneViewer - Renders DICOM images using Cornerstone3D
@@ -41,6 +42,12 @@ async function initCornerstone() {
       // nothing and the viewport stays blank.
       dicomImageLoader.init();
 
+      // Calibration des mesures sur les radios standard (CR/DX) : le loader ne
+      // lit que PixelSpacing (0028,0030). Quand il manque mais que
+      // l'ImagerPixelSpacing (0018,1164) est présent, on fournit le spacing
+      // détecteur pour que Length/Angle/ROI mesurent en mm (et non en pixels).
+      registerImagerPixelSpacingFallback(cornerstone, dicomImageLoader);
+
       // Initialize tools
       cornerstoneTools.init();
 
@@ -65,6 +72,61 @@ async function initCornerstone() {
   })();
 
   return initPromise;
+}
+
+// Enregistre un provider de métadonnées PRIORITAIRE qui calibre les mesures à
+// partir de l'ImagerPixelSpacing (0018,1164) quand le PixelSpacing (0028,0030)
+// est absent — cas fréquent des radios standard (CR/DX). Réutilise la logique
+// exacte du loader (`metadataForDataset`) puis ne corrige QUE le pixel spacing
+// via `patchImagerPixelSpacing`. Renvoie `undefined` dans tous les autres cas
+// (CT/IRM calibrés, image non chargée, tag absent) → le provider par défaut fait
+// foi : aucun changement de comportement hors radios non calibrées.
+function registerImagerPixelSpacingFallback(
+  cornerstone: any,
+  dicomImageLoader: any
+) {
+  const wadouri = dicomImageLoader?.wadouri;
+  const csMeta = cornerstone?.metaData;
+  const meta = wadouri?.metaData;
+  if (
+    !csMeta?.addProvider ||
+    !wadouri?.parseImageId ||
+    !wadouri?.dataSetCacheManager?.get ||
+    !meta?.metadataForDataset ||
+    !meta?.getNumberValues
+  ) {
+    // API du loader indisponible (changement de version) : on ne casse rien,
+    // on garde le comportement par défaut.
+    console.warn(
+      "[Cornerstone3D] Repli ImagerPixelSpacing non enregistré (API loader absente)"
+    );
+    return;
+  }
+
+  const IMAGE_PLANE = "imagePlaneModule";
+  const IMAGER_PIXEL_SPACING_TAG = "x00181164";
+
+  // priorité > 0 : exécuté avant le provider par défaut du loader.
+  csMeta.addProvider((type: string, imageId: unknown) => {
+    if (type !== IMAGE_PLANE || typeof imageId !== "string") return undefined;
+    let parsed: { url?: string; frame?: number } | undefined;
+    try {
+      parsed = wadouri.parseImageId(imageId);
+    } catch {
+      return undefined;
+    }
+    if (!parsed?.url) return undefined;
+    let url = parsed.url;
+    if (parsed.frame) url = `${url}&frame=${parsed.frame}`;
+    const dataSet = wadouri.dataSetCacheManager.get(url);
+    if (!dataSet) return undefined; // pas encore décodé → provider par défaut
+
+    // Module calculé par le loader (NB : appel direct, pas via metaData.get →
+    // aucune récursion à travers la chaîne de providers).
+    const mod = meta.metadataForDataset(IMAGE_PLANE, imageId, dataSet);
+    const imager = meta.getNumberValues(dataSet, IMAGER_PIXEL_SPACING_TAG, 2);
+    return patchImagerPixelSpacing(mod, imager);
+  }, 100);
 }
 
 const TOOL_GROUP_ID = "horosToolGroup";

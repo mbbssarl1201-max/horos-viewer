@@ -21,6 +21,9 @@ export const ENV = {
   orthancUrl: process.env.ORTHANC_URL ?? "http://localhost:8042",
   orthancUser: process.env.ORTHANC_USER ?? "",
   orthancPassword: process.env.ORTHANC_PASSWORD ?? "",
+  // IA locale (Ollama auto-hébergé) — pré-analyse vision des images clés.
+  ollamaUrl: process.env.OLLAMA_URL ?? "http://ollama-hermes:11434",
+  ollamaVisionModel: process.env.OLLAMA_VISION_MODEL ?? "qwen2.5-vl:3b",
   // SMTP Email
   smtpHost: process.env.SMTP_HOST ?? "",
   smtpPort: parseInt(process.env.SMTP_PORT ?? "587"),

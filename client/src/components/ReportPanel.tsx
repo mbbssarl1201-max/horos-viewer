@@ -1,10 +1,17 @@
 import { useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
+import { findBoneSeries, BONE_WINDOW } from "@/lib/boneSeries";
 
 export interface ReportKeyImage {
   pngBase64: string;
   sliceIndex: number;
   measurements?: string;
+}
+
+export interface SeriesInfo {
+  id: number;
+  seriesDescription?: string | null;
+  numberOfInstances?: number;
 }
 
 interface ReportPanelProps {
@@ -13,6 +20,7 @@ interface ReportPanelProps {
   windowWidth: number;
   windowCenter: number;
   keyImages: ReportKeyImage[];
+  seriesList?: SeriesInfo[];
   onRemoveKeyImage: (index: number) => void;
   onAddKeyImage?: (img: ReportKeyImage) => void;
   onClose: () => void;
@@ -24,6 +32,7 @@ export default function ReportPanel({
   windowWidth,
   windowCenter,
   keyImages,
+  seriesList,
   onRemoveKeyImage,
   onAddKeyImage,
   onClose,
@@ -44,16 +53,29 @@ export default function ReportPanel({
   const [aiAssisted, setAiAssisted] = useState(false);
   const [aiAbnormal, setAiAbnormal] = useState<boolean | null>(null);
   const [aiKeySlice, setAiKeySlice] = useState<number | null>(null);
+  // Série réellement analysée (peut différer de la série ouverte, ex. bouton
+  // « Analyser les fractures » qui force la série osseuse).
+  const [analyzedSeriesId, setAnalyzedSeriesId] = useState<number | null>(null);
 
-  const runPreanalysis = async (antecedentsArg = antecedents) => {
+  const runPreanalysis = async (
+    antecedentsArg = antecedents,
+    override?: {
+      seriesId?: number;
+      windowCenter?: number;
+      windowWidth?: number;
+    }
+  ) => {
+    const sid = override?.seriesId ?? seriesId;
+    const wc = override?.windowCenter ?? windowCenter;
+    const ww = override?.windowWidth ?? windowWidth;
     const res = await preanalyze.mutateAsync({
       studyId,
-      // Le serveur échantillonne toute la série ; on transmet la série courante
+      // Le serveur échantillonne toute la série ; on transmet la série analysée
       // et la fenêtre W/L (fractures visibles en fenêtre osseuse). Les images
       // clés capturées servent de repli si l'échantillonnage échoue.
-      seriesId,
-      windowCenter,
-      windowWidth,
+      seriesId: sid,
+      windowCenter: wc,
+      windowWidth: ww,
       keyImages: keyImages.map(k => ({
         pngBase64: k.pngBase64,
         sliceIndex: k.sliceIndex,
@@ -61,6 +83,7 @@ export default function ReportPanel({
       indication: indication || undefined,
       antecedents: antecedentsArg || undefined,
     });
+    setAnalyzedSeriesId(sid);
     if (res.technique) setTechnique(res.technique);
     setResultats(res.resultats);
     setConclusion(res.conclusion);
@@ -167,19 +190,50 @@ export default function ReportPanel({
       />
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium">Résultats / Conclusion</span>
-        <button
-          type="button"
-          onClick={() => runPreanalysis()}
-          disabled={preanalyze.isPending || keyImages.length === 0}
-          className="text-[11px] rounded bg-primary/15 text-primary px-2 py-1 disabled:opacity-50"
-          title="Pré-remplir via l'IA locale à partir des images clés"
-        >
-          {preanalyze.isPending ? "Analyse en cours…" : "Pré-analyse IA"}
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() =>
+              runPreanalysis(antecedents, {
+                seriesId: (findBoneSeries(seriesList) ?? { id: seriesId }).id,
+                ...BONE_WINDOW,
+              })
+            }
+            disabled={preanalyze.isPending}
+            className="text-[11px] rounded bg-amber-500/15 text-amber-600 px-2 py-1 disabled:opacity-50"
+            title="Analyse la série osseuse en fenêtre Bone (2000/500) — recherche de fracture"
+          >
+            Analyser les fractures
+          </button>
+          <button
+            type="button"
+            onClick={() => runPreanalysis()}
+            disabled={preanalyze.isPending || keyImages.length === 0}
+            className="text-[11px] rounded bg-primary/15 text-primary px-2 py-1 disabled:opacity-50"
+            title="Analyse la série affichée dans la fenêtre courante"
+          >
+            {preanalyze.isPending ? "Analyse en cours…" : "Pré-analyse IA"}
+          </button>
+        </div>
       </div>
       {aiAssisted && (
         <p className="text-[10px] text-amber-500">
           Brouillon généré par IA — à valider et corriger avant signature.
+        </p>
+      )}
+      {aiAssisted && analyzedSeriesId != null && (
+        <p className="text-[10px] text-muted-foreground">
+          Analyse basée sur :{" "}
+          <span className="font-medium text-foreground">
+            {seriesList?.find(s => s.id === analyzedSeriesId)
+              ?.seriesDescription || `Série ${analyzedSeriesId}`}
+          </span>
+          {(() => {
+            const n = seriesList?.find(
+              s => s.id === analyzedSeriesId
+            )?.numberOfInstances;
+            return n ? ` (${n} coupes)` : "";
+          })()}
         </p>
       )}
       {aiAssisted && aiAbnormal !== null && (

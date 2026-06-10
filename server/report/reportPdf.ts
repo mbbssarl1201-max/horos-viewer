@@ -27,6 +27,7 @@ export interface ReportPdfInput {
   report: ReportSections;
   signature: string;
   keyImages: KeyImage[];
+  aiAssisted?: boolean;
 }
 
 const MARGIN = 14;
@@ -144,6 +145,16 @@ export function buildReportPdf(input: ReportPdfInput): Buffer {
   doc.setFontSize(10);
   doc.setTextColor(0);
   doc.text(`Dr ${input.signature}`, MARGIN, y);
+  if (input.aiAssisted) {
+    y += 6;
+    doc.setFontSize(7);
+    doc.setTextColor(150);
+    doc.text(
+      "Pré-analyse assistée par IA, validée par le médecin signataire.",
+      MARGIN,
+      y
+    );
+  }
   doc.setFontSize(8);
   doc.setTextColor(130);
   doc.text(CHAMPEL_HEADER.motto, W - MARGIN, y, { align: "right" });

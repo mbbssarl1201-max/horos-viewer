@@ -1088,6 +1088,7 @@ export const appRouter = router({
             .max(20),
           includeVideo: z.boolean(),
           message: z.string().max(500).optional(),
+          aiAssisted: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {

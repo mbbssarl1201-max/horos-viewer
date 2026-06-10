@@ -27,6 +27,18 @@ describe("buildReportPdf", () => {
     expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
     expect(pdf.length).toBeGreaterThan(800);
   });
+  it("ajoute la mention IA quand aiAssisted=true", () => {
+    const base = {
+      study: { id: 1 } as any,
+      report: { indication: "", technique: "", resultats: "", conclusion: "" },
+      signature: "T",
+      keyImages: [],
+    };
+    const withoutAi = buildReportPdf({ ...base, aiAssisted: false });
+    const withAi = buildReportPdf({ ...base, aiAssisted: true });
+    expect(withAi.length).toBeGreaterThan(withoutAi.length);
+    expect(withAi.subarray(0, 4).toString()).toBe("%PDF");
+  });
   it("n'échoue pas avec une image clé PNG", () => {
     const onePx =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";

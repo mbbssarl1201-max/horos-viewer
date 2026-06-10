@@ -11,6 +11,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import DicomImport from "@/components/DicomImport";
 import NotificationsPanel from "@/components/NotificationsPanel";
 import ExportPanel from "@/components/ExportPanel";
@@ -141,8 +148,57 @@ export default function Home() {
     onError: err => toast.error(err.message),
   });
   const [showAddServer, setShowAddServer] = useState(false);
+  const [showSendDialog, setShowSendDialog] = useState(false);
+  const [sendTargetAet, setSendTargetAet] = useState<string>("");
+
+  // Clinical roles (admin/radiologist) may change RIS workflow state.
+  const canEditWorkflow =
+    user?.role === "admin" || user?.role === "radiologist";
+
+  const { data: modalitiesList } = trpc.orthanc.modalities.useQuery(undefined, {
+    enabled: isAuthenticated && showSendDialog,
+  });
+
+  const updateStatus = trpc.studies.updateStatus.useMutation({
+    onSuccess: () => {
+      toast.success("Statut mis à jour");
+      utils.studies.list.invalidate();
+    },
+    onError: err =>
+      toast.error(
+        err.data?.code === "FORBIDDEN"
+          ? "Action réservée aux radiologues/administrateurs"
+          : err.message
+      ),
+  });
+  const updatePriority = trpc.studies.updatePriority.useMutation({
+    onSuccess: () => {
+      toast.success("Priorité mise à jour");
+      utils.studies.list.invalidate();
+    },
+    onError: err =>
+      toast.error(
+        err.data?.code === "FORBIDDEN"
+          ? "Action réservée aux radiologues/administrateurs"
+          : err.message
+      ),
+  });
+  const cStore = trpc.orthanc.cStore.useMutation({
+    onSuccess: res => {
+      if (res.success) toast.success("Examen envoyé (C-STORE)");
+      else toast.error(`Échec de l'envoi : ${res.message}`);
+      setShowSendDialog(false);
+    },
+    onError: err =>
+      toast.error(
+        err.data?.code === "FORBIDDEN"
+          ? "Envoi DICOM réservé aux administrateurs"
+          : `Échec de l'envoi : ${err.message}`
+      ),
+  });
 
   const studies = studiesData ?? [];
+  const selectedStudy = studies.find((s: any) => s.id === selectedStudyId);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -380,7 +436,14 @@ export default function Home() {
         <ToolbarButton
           icon={Send}
           label="Send"
-          onClick={() => toast("DICOM Send (C-STORE) coming soon")}
+          onClick={() => {
+            if (!selectedStudyId) {
+              toast("Sélectionnez d'abord un examen");
+              return;
+            }
+            setSendTargetAet("");
+            setShowSendDialog(true);
+          }}
         />
         <ToolbarSep />
         <ToolbarButton
@@ -694,9 +757,11 @@ export default function Home() {
             ) : (
               <div className="divide-y divide-border/30">
                 {studies.map((study: any) => (
-                  <button
+                  <div
                     key={study.id}
-                    className={`w-full flex items-center px-2 py-1.5 text-[10px] hover:bg-accent/50 transition-colors text-left ${
+                    role="button"
+                    tabIndex={0}
+                    className={`w-full flex items-center px-2 py-1.5 text-[10px] hover:bg-accent/50 transition-colors text-left cursor-pointer ${
                       selectedStudyId === study.id
                         ? "bg-primary/15 ring-1 ring-primary/40"
                         : ""
@@ -707,8 +772,40 @@ export default function Home() {
                     <div className="w-36 px-1 font-medium truncate text-foreground">
                       {study.patientName || "-"}
                     </div>
-                    <div className="w-16 px-1 text-muted-foreground">
-                      {study.status === "reported" ? (
+                    <div
+                      className="w-24 px-1 text-muted-foreground"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      {canEditWorkflow ? (
+                        <Select
+                          value={study.status ?? "new"}
+                          onValueChange={value =>
+                            updateStatus.mutate({
+                              id: study.id,
+                              status: value as
+                                | "new"
+                                | "in_progress"
+                                | "reported"
+                                | "finalized",
+                            })
+                          }
+                        >
+                          <SelectTrigger
+                            size="sm"
+                            className="h-6 text-[9px] px-1.5"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="new">Nouveau</SelectItem>
+                            <SelectItem value="in_progress">
+                              En cours
+                            </SelectItem>
+                            <SelectItem value="reported">Rapporté</SelectItem>
+                            <SelectItem value="finalized">Finalisé</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : study.status === "reported" ? (
                         <Badge
                           variant="secondary"
                           className="text-[8px] px-1 py-0"
@@ -719,8 +816,33 @@ export default function Home() {
                         "-"
                       )}
                     </div>
-                    <div className="w-10 px-1 text-muted-foreground">
-                      {study.priority === "stat" ? (
+                    <div
+                      className="w-24 px-1 text-muted-foreground"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      {canEditWorkflow ? (
+                        <Select
+                          value={study.priority ?? "routine"}
+                          onValueChange={value =>
+                            updatePriority.mutate({
+                              id: study.id,
+                              priority: value as "routine" | "stat" | "urgent",
+                            })
+                          }
+                        >
+                          <SelectTrigger
+                            size="sm"
+                            className="h-6 text-[9px] px-1.5"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="routine">Routine</SelectItem>
+                            <SelectItem value="stat">STAT</SelectItem>
+                            <SelectItem value="urgent">Urgent</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : study.priority === "stat" ? (
                         <Lock className="w-3 h-3 text-destructive" />
                       ) : (
                         "-"
@@ -757,7 +879,7 @@ export default function Home() {
                         ? `${study.numberOfSeries}S/${study.numberOfInstances}I`
                         : "-"}
                     </div>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -898,6 +1020,73 @@ export default function Home() {
             ) : (
               <p>No study selected</p>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* DICOM Send (C-STORE) Dialog */}
+      <Dialog open={showSendDialog} onOpenChange={setShowSendDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Envoyer l'examen (C-STORE)</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-xs text-muted-foreground">
+              Envoyer{" "}
+              <span className="font-medium text-foreground">
+                {selectedStudy?.patientName || "l'examen sélectionné"}
+              </span>{" "}
+              vers une modalité distante (PACS). Réservé aux administrateurs.
+            </p>
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">
+                Modalité de destination (AE Title)
+              </label>
+              <Select value={sendTargetAet} onValueChange={setSendTargetAet}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Choisir une modalité…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(modalitiesList ?? []).length === 0 ? (
+                    <SelectItem value="__none" disabled>
+                      Aucune modalité configurée
+                    </SelectItem>
+                  ) : (
+                    (modalitiesList ?? []).map((aet: string) => (
+                      <SelectItem key={aet} value={aet}>
+                        {aet}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowSendDialog(false)}
+              >
+                Annuler
+              </Button>
+              <Button
+                size="sm"
+                disabled={
+                  !sendTargetAet ||
+                  !selectedStudy?.studyInstanceUid ||
+                  cStore.isPending
+                }
+                onClick={() => {
+                  if (!selectedStudy?.studyInstanceUid) return;
+                  cStore.mutate({
+                    targetAet: sendTargetAet,
+                    studyInstanceUID: selectedStudy.studyInstanceUid,
+                  });
+                }}
+              >
+                {cStore.isPending ? "Envoi…" : "Envoyer"}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

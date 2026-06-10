@@ -27,6 +27,7 @@ import {
   qidoSearchStudies,
   cFind,
   cMove,
+  cStoreStudy,
   listModalities,
 } from "./orthanc";
 import {
@@ -876,6 +877,25 @@ export const appRouter = router({
       )
       .mutation(async ({ input }) => {
         return cMove(input);
+      }),
+
+    // C-STORE pushes a whole study (PHI) to an external modality — admin only.
+    cStore: strictAdminProcedure
+      .input(
+        z.object({
+          targetAet: aeTitleSchema,
+          studyInstanceUID: z.string().min(1),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const result = await cStoreStudy(input);
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "study.cstore",
+          studyId: null,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return result;
       }),
   }),
 

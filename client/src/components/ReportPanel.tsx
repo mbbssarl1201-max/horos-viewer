@@ -36,6 +36,22 @@ export default function ReportPanel({
   const [message, setMessage] = useState("");
 
   const send = trpc.email.sendStudyReport.useMutation();
+  const preanalyze = trpc.email.aiPreanalysis.useMutation();
+  const [aiAssisted, setAiAssisted] = useState(false);
+
+  const runPreanalysis = async () => {
+    const res = await preanalyze.mutateAsync({
+      studyId,
+      keyImages: keyImages.map(k => ({
+        pngBase64: k.pngBase64,
+        sliceIndex: k.sliceIndex,
+      })),
+      indication: indication || undefined,
+    });
+    setResultats(res.resultats);
+    setConclusion(res.conclusion);
+    setAiAssisted(true);
+  };
 
   const submit = async () => {
     await send.mutateAsync({
@@ -49,6 +65,7 @@ export default function ReportPanel({
       keyImages,
       includeVideo,
       message: message || undefined,
+      aiAssisted,
     });
   };
 
@@ -83,6 +100,28 @@ export default function ReportPanel({
         value={technique}
         onChange={e => setTechnique(e.target.value)}
       />
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium">Résultats / Conclusion</span>
+        <button
+          type="button"
+          onClick={runPreanalysis}
+          disabled={preanalyze.isPending || keyImages.length === 0}
+          className="text-[11px] rounded bg-primary/15 text-primary px-2 py-1 disabled:opacity-50"
+          title="Pré-remplir via l'IA locale à partir des images clés"
+        >
+          {preanalyze.isPending ? "Analyse en cours…" : "Pré-analyse IA"}
+        </button>
+      </div>
+      {aiAssisted && (
+        <p className="text-[10px] text-amber-500">
+          Brouillon généré par IA — à valider et corriger avant signature.
+        </p>
+      )}
+      {preanalyze.isError && (
+        <p className="text-[10px] text-destructive">
+          IA indisponible, rédigez manuellement.
+        </p>
+      )}
       <textarea
         className={field}
         rows={5}

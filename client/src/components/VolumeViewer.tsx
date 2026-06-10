@@ -68,6 +68,9 @@ export default function VolumeViewer({
   const obliqueRef = useRef<HTMLDivElement>(null);
   const vr3dRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<any>(null);
+  // Module @cornerstonejs/tools capturé au setup pour un teardown SYNCHRONE dans
+  // le cleanup (l'ordre de destruction est critique, cf. cleanup ci-dessous).
+  const csToolsRef = useRef<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -133,6 +136,8 @@ export default function VolumeViewer({
             addTool,
             synchronizers,
           } = csTools as any;
+          // Capturer le module pour un teardown synchrone et ordonné au cleanup.
+          csToolsRef.current = csTools;
 
           await toolsInit();
           for (const t of [
@@ -319,9 +324,29 @@ export default function VolumeViewer({
     setup();
     return () => {
       cancelled = true;
-      // Purge du volume du cache pour libérer la mémoire GPU entre changements de série.
       const capturedVolId =
         volumeId ?? `cornerstoneStreamingImageVolume:HOROS_VOL`;
+      // ── ORDRE DE TEARDOWN CRITIQUE ───────────────────────────────────────
+      // Synchronizer.destroy() et ToolGroup accèdent aux viewports via
+      // getRenderingEngine(id).getViewport(id). Si on détruit le moteur AVANT,
+      // ces destroy lèvent (viewportsInfo/context undefined), destroySynchronizer
+      // n'atteint jamais son splice → le synchroniseur FUIT dans
+      // state.synchronizers → "Synchronizer already exists" au prochain create,
+      // et ses listeners zombies spamment la console. On détruit donc, de façon
+      // SYNCHRONE (module capturé, pas d'import async qui s'ordonnerait après) :
+      //   1) synchroniseur  2) toolgroup  3) moteur de rendu — dans cet ordre.
+      const csTools = csToolsRef.current;
+      try {
+        csTools?.SynchronizerManager?.destroySynchronizer?.("HOROS_VOI_SYNC");
+      } catch {}
+      try {
+        csTools?.ToolGroupManager?.destroyToolGroup?.("HOROS_MPR_TG");
+      } catch {}
+      try {
+        engineRef.current?.destroy();
+      } catch {}
+      engineRef.current = null;
+      // Purge du volume du cache (mémoire GPU) — peut rester asynchrone.
       import("@cornerstonejs/core")
         .then((cs: any) => {
           try {
@@ -329,22 +354,6 @@ export default function VolumeViewer({
           } catch {}
         })
         .catch(() => {});
-      import("@cornerstonejs/tools")
-        .then((csTools: any) => {
-          try {
-            csTools.ToolGroupManager?.destroyToolGroup?.("HOROS_MPR_TG");
-          } catch {}
-          try {
-            csTools.SynchronizerManager?.destroySynchronizer?.(
-              "HOROS_VOI_SYNC"
-            );
-          } catch {}
-        })
-        .catch(() => {});
-      try {
-        engineRef.current?.destroy();
-      } catch {}
-      engineRef.current = null;
     };
   }, [imageUrls, orthancImageIds, volumeId, mode, slabThicknessMm, slabMode]);
 

@@ -153,7 +153,7 @@ describe("generatePreanalysis", () => {
     expect(downscalePngBase64(b64, 1000)).toBe(b64);
   });
 
-  it("plafonne à 3 images envoyées au VLM", async () => {
+  it("plafonne à 6 images envoyées au VLM (Ollama)", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({
@@ -162,15 +162,56 @@ describe("generatePreanalysis", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
     const { generatePreanalysis } = await import("./aiPreanalysis");
-    const many = Array.from({ length: 6 }, (_, i) => ({
+    const many = Array.from({ length: 8 }, (_, i) => ({
       pngBase64: `IMG${i}`,
       sliceIndex: i,
     }));
     await generatePreanalysis(many, {});
     const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
     const userMsg = body.messages.find((m: any) => m.role === "user");
-    expect(userMsg.images).toHaveLength(3);
-    expect(userMsg.images).toEqual(["IMG0", "IMG1", "IMG2"]);
+    expect(userMsg.images).toHaveLength(6);
+    expect(userMsg.images).toEqual([
+      "IMG0",
+      "IMG1",
+      "IMG2",
+      "IMG3",
+      "IMG4",
+      "IMG5",
+    ]);
+  });
+
+  it("parse l'anomalie et le numéro de coupe-clé, sans fuite dans la conclusion", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          message: {
+            content:
+              "Technique:\nCT.\n\nRésultats:\nFracture du radius.\n\nConclusion:\nFracture distale.\n\nAnomalie:\noui\n\nCoupe-clé:\n123",
+          },
+        }),
+      }))
+    );
+    const { generatePreanalysis } = await import("./aiPreanalysis");
+    const out = await generatePreanalysis(
+      [{ pngBase64: "AAAA", sliceIndex: 0 }],
+      {}
+    );
+    expect(out.abnormal).toBe(true);
+    expect(out.keySliceNumber).toBe(123);
+    // les lignes méta ne doivent PAS contaminer la conclusion
+    expect(out.conclusion).toBe("Fracture distale.");
+    expect(out.conclusion).not.toMatch(/Anomalie|Coupe/i);
+  });
+
+  it("parseKeySlice : « aucune » → pas de coupe-clé, anomalie non", async () => {
+    const { parseKeySlice } = await import("./aiPreanalysis");
+    const out = parseKeySlice(
+      "Conclusion:\nExamen normal.\n\nAnomalie:\nnon\n\nCoupe-clé:\naucune"
+    );
+    expect(out.abnormal).toBe(false);
+    expect(out.keySliceNumber).toBeNull();
   });
 
   it("backend claude : appelle l'API Anthropic et parse 3 sections", async () => {

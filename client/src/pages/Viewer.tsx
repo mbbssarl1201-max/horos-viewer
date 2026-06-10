@@ -681,6 +681,7 @@ export default function Viewer() {
                 onRemoveKeyImage={i =>
                   setReportKeyImages(p => p.filter((_, idx) => idx !== i))
                 }
+                onAddKeyImage={img => setReportKeyImages(p => [...p, img])}
                 onClose={() => setReportOpen(false)}
               />
             )}

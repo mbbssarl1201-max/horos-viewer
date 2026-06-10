@@ -1130,6 +1130,11 @@ export const appRouter = router({
             .max(20),
           indication: z.string().max(5000).optional(),
           antecedents: z.string().max(5000).optional(),
+          // Échantillonnage serveur du volume (analyse de toute la série).
+          seriesId: z.number().int().optional(),
+          windowCenter: z.number().optional(),
+          windowWidth: z.number().optional(),
+          sampleCount: z.number().int().min(1).max(24).optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {

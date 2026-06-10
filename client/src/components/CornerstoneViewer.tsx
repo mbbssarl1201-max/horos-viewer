@@ -28,7 +28,9 @@ async function initCornerstone() {
     try {
       const cornerstone = await import("@cornerstonejs/core");
       const cornerstoneTools = await import("@cornerstonejs/tools");
-      const dicomImageLoader = await import("@cornerstonejs/dicom-image-loader");
+      const dicomImageLoader = await import(
+        "@cornerstonejs/dicom-image-loader"
+      );
 
       // Initialize cornerstone core
       await cornerstone.init();
@@ -88,7 +90,7 @@ function applyActiveTool(cst: any, toolGroup: any, activeTool: string) {
   const map = buildToolMap(cst);
   const csName = map[activeTool];
   if (!csName) return;
-  Object.values(map).forEach((name) => {
+  Object.values(map).forEach(name => {
     try {
       toolGroup.setToolPassive(name);
     } catch {}
@@ -146,7 +148,8 @@ export default function CornerstoneViewer({
 
   // Setup rendering engine and viewport
   useEffect(() => {
-    if (!isInitialized || !viewportRef.current || imageUrls.length === 0) return;
+    if (!isInitialized || !viewportRef.current || imageUrls.length === 0)
+      return;
 
     let mounted = true;
 
@@ -173,10 +176,12 @@ export default function CornerstoneViewer({
         renderingEngine.enableElement(viewportInput);
 
         // Get viewport and set images
-        const viewport = renderingEngine.getViewport(viewportIdRef.current) as any;
+        const viewport = renderingEngine.getViewport(
+          viewportIdRef.current
+        ) as any;
 
         // Convert URLs to wadouri format for cornerstone
-        const imageIds = imageUrls.map((url) => `wadouri:${url}`);
+        const imageIds = imageUrls.map(url => `wadouri:${url}`);
 
         await viewport.setStack(imageIds, currentSlice);
 
@@ -185,10 +190,22 @@ export default function CornerstoneViewer({
         // 300x150 size and the image renders invisibly small (blank viewport).
         // Fit it to the now-laid-out container, and keep it fitted on resize.
         renderingEngine.resize(true, true);
+        // ResizeObserver : on rafraîchit le viewport au changement de taille,
+        // MAIS on ignore les tailles nulles (sinon Cornerstone calcule un zoom
+        // NaN → overlay « Zoom: NaN% » + flot de warnings) et on débounce via
+        // rAF (resize() peut modifier le layout et re-déclencher l'observer →
+        // boucle de rendu). Ce cas arrive quand un panneau recouvre/redimensionne
+        // la zone (ex. ouverture du panneau « Compte rendu »).
+        let roRaf = 0;
         const ro = new ResizeObserver(() => {
-          try {
-            renderingEngine.resize(true, true);
-          } catch {}
+          const elx = viewportRef.current;
+          if (!elx || elx.clientWidth === 0 || elx.clientHeight === 0) return;
+          if (roRaf) cancelAnimationFrame(roRaf);
+          roRaf = requestAnimationFrame(() => {
+            try {
+              renderingEngine.resize(true, true);
+            } catch {}
+          });
         });
         ro.observe(viewportRef.current!);
         resizeObserverRef.current = ro;
@@ -226,7 +243,7 @@ export default function CornerstoneViewer({
           cornerstoneTools.EllipticalROITool,
           cornerstoneTools.RectangleROITool,
           cornerstoneTools.ArrowAnnotateTool,
-        ].forEach((T) => toolGroup.addTool(T.toolName));
+        ].forEach(T => toolGroup.addTool(T.toolName));
         toolGroup.addViewport(viewportIdRef.current, RENDERING_ENGINE_ID);
         applyActiveTool(cornerstoneTools, toolGroup, activeTool);
 
@@ -239,14 +256,15 @@ export default function CornerstoneViewer({
           if (range) {
             onWindowLevelChange(
               Math.round(range.upper - range.lower),
-              Math.round((range.upper + range.lower) / 2),
+              Math.round((range.upper + range.lower) / 2)
             );
           }
         };
         const onCamera = () => {
           try {
             const z = viewport.getZoom?.();
-            if (typeof z === "number") onZoomChange?.(Math.round(z * 100));
+            if (typeof z === "number" && Number.isFinite(z))
+              onZoomChange?.(Math.round(z * 100));
           } catch {}
         };
         el.addEventListener(Enums.Events.VOI_MODIFIED, onVoi);
@@ -257,7 +275,11 @@ export default function CornerstoneViewer({
           el.removeEventListener(Enums.Events.CAMERA_MODIFIED, onCamera);
         };
 
-        console.log("[Cornerstone3D] Viewport setup complete with", imageIds.length, "images");
+        console.log(
+          "[Cornerstone3D] Viewport setup complete with",
+          imageIds.length,
+          "images"
+        );
       } catch (err: any) {
         console.error("[Cornerstone3D] Viewport setup failed:", err);
         if (mounted) {
@@ -283,7 +305,9 @@ export default function CornerstoneViewer({
 
     const updateSlice = async () => {
       try {
-        const viewport = renderingEngineRef.current.getViewport(viewportIdRef.current);
+        const viewport = renderingEngineRef.current.getViewport(
+          viewportIdRef.current
+        );
         if (viewport) {
           viewport.setImageIdIndex(currentSlice);
           viewport.render();
@@ -301,7 +325,9 @@ export default function CornerstoneViewer({
     if (!isInitialized || !renderingEngineRef.current) return;
 
     try {
-      const viewport = renderingEngineRef.current.getViewport(viewportIdRef.current);
+      const viewport = renderingEngineRef.current.getViewport(
+        viewportIdRef.current
+      );
       if (viewport) {
         viewport.setProperties({
           voiRange: {
@@ -324,7 +350,8 @@ export default function CornerstoneViewer({
     (async () => {
       try {
         const cornerstoneTools = await import("@cornerstonejs/tools");
-        const toolGroup = cornerstoneTools.ToolGroupManager.getToolGroup(TOOL_GROUP_ID);
+        const toolGroup =
+          cornerstoneTools.ToolGroupManager.getToolGroup(TOOL_GROUP_ID);
         if (toolGroup) {
           applyActiveTool(cornerstoneTools, toolGroup, activeTool);
         }

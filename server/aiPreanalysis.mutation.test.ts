@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mocks = {
   getStudyById: vi.fn(),
+  listSeriesByStudy: vi.fn(),
   countRecentAccess: vi.fn(),
   recordAccess: vi.fn(),
 };
 vi.mock("./db", () => ({
   getStudyById: (...a: any) => mocks.getStudyById(...a),
+  listSeriesByStudy: (...a: any) => mocks.listSeriesByStudy(...a),
   countRecentAccess: (...a: any) => mocks.countRecentAccess(...a),
   recordAccess: (...a: any) => mocks.recordAccess(...a),
 }));
@@ -27,6 +29,7 @@ beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.countRecentAccess.mockResolvedValue(0);
   mocks.getStudyById.mockResolvedValue({ id: 1, patientName: "P" });
+  mocks.listSeriesByStudy.mockResolvedValue([{ id: 10 }, { id: 11 }]);
   vi.spyOn(ai._internal, "generatePreanalysis").mockResolvedValue({
     resultats: "R",
     conclusion: "C",
@@ -54,6 +57,11 @@ describe("runAiPreanalysis", () => {
         ctx
       )
     ).rejects.toThrow(/png/i);
+  });
+  it("anti-IDOR : refuse une série n'appartenant pas à l'étude", async () => {
+    await expect(
+      runAiPreanalysis({ ...baseInput, seriesId: 999 }, ctx)
+    ).rejects.toThrow(/inconnue|forbidden/i);
   });
   it("succès : renvoie le brouillon + audit", async () => {
     const out = await runAiPreanalysis(baseInput, ctx);

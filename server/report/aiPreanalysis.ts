@@ -1,7 +1,12 @@
 import { TRPCError } from "@trpc/server";
 import { PNG } from "pngjs";
 import { ENV } from "../_core/env";
-import { getStudyById, countRecentAccess, recordAccess } from "../db";
+import {
+  getStudyById,
+  listSeriesByStudy,
+  countRecentAccess,
+  recordAccess,
+} from "../db";
 
 /**
  * Réduit une image PNG (base64) à `maxDim` px sur son plus grand côté, par
@@ -267,6 +272,19 @@ export async function runAiPreanalysis(
   const study = await getStudyById(input.studyId);
   if (!study)
     throw new TRPCError({ code: "NOT_FOUND", message: "Étude introuvable" });
+
+  // Anti-IDOR : la série demandée DOIT appartenir à l'étude (sinon un client
+  // pourrait faire rendre/exfiltrer les coupes d'une série arbitraire — PHI).
+  // Même garde que l'envoi de compte rendu.
+  if (input.seriesId) {
+    const series = await listSeriesByStudy(input.studyId);
+    if (!series.some((s: any) => s.id === input.seriesId)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Série inconnue pour cette étude",
+      });
+    }
+  }
 
   const wc = input.windowCenter ?? 40;
   const ww = input.windowWidth ?? 400;

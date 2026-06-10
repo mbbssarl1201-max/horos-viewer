@@ -34,6 +34,29 @@ describe("generatePreanalysis", () => {
     expect(out.model).toBe("qwen2.5-vl:3b");
   });
 
+  it("parse les 3 sections Technique/Résultats/Conclusion", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          message: {
+            content:
+              "Technique:\nAcquisition tomodensitométrique, coupes axiales.\n\nRésultats:\nPas de fracture visible.\n\nConclusion:\nExamen normal.",
+          },
+        }),
+      }))
+    );
+    const { generatePreanalysis } = await import("./aiPreanalysis");
+    const out = await generatePreanalysis(
+      [{ pngBase64: "AAAA", sliceIndex: 0 }],
+      {}
+    );
+    expect(out.technique).toMatch(/tomodensitométrique/);
+    expect(out.resultats).toMatch(/Pas de fracture/);
+    expect(out.conclusion).toMatch(/Examen normal/);
+  });
+
   it("repli : réponse hors-format -> tout dans resultats", async () => {
     vi.stubGlobal(
       "fetch",

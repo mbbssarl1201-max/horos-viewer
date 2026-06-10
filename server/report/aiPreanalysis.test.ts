@@ -81,5 +81,26 @@ describe("generatePreanalysis", () => {
     expect(userMsg.images).toContain("IMG1");
     expect(body.model).toBe("qwen2.5-vl:3b");
     expect(body.stream).toBe(false);
+    expect(body.options.num_ctx).toBeGreaterThanOrEqual(4096);
+  });
+
+  it("plafonne à 3 images envoyées au VLM", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        message: { content: "Résultats:\nx\nConclusion:\ny" },
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { generatePreanalysis } = await import("./aiPreanalysis");
+    const many = Array.from({ length: 6 }, (_, i) => ({
+      pngBase64: `IMG${i}`,
+      sliceIndex: i,
+    }));
+    await generatePreanalysis(many, {});
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    const userMsg = body.messages.find((m: any) => m.role === "user");
+    expect(userMsg.images).toHaveLength(3);
+    expect(userMsg.images).toEqual(["IMG0", "IMG1", "IMG2"]);
   });
 });

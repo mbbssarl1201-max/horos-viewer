@@ -51,7 +51,7 @@ interface CornerstoneViewerProps {
 let cornerstoneInitialized = false;
 let initPromise: Promise<void> | null = null;
 
-async function initCornerstone() {
+export async function initCornerstone() {
   if (cornerstoneInitialized) return;
   if (initPromise) return initPromise;
 

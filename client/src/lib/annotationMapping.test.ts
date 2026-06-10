@@ -16,6 +16,15 @@ describe("toolNameToDbType", () => {
     expect(toolNameToDbType("ArrowAnnotate")).toBe("text");
   });
 
+  it("maps extended measurement tools to the closest existing DB enum", () => {
+    // No dedicated enum exists for these (server enum is fixed); each is
+    // mapped to the closest clinically-reasonable value so it still persists.
+    expect(toolNameToDbType("CobbAngle")).toBe("angle");
+    expect(toolNameToDbType("Bidirectional")).toBe("length");
+    expect(toolNameToDbType("Probe")).toBe("text");
+    expect(toolNameToDbType("PlanarFreehandROI")).toBe("ellipse_roi");
+  });
+
   it("returns null for unknown / non-persisted tools", () => {
     expect(toolNameToDbType("WindowLevel")).toBeNull();
     expect(toolNameToDbType(undefined)).toBeNull();

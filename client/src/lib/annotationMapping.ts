@@ -25,6 +25,17 @@ export interface InstanceLike {
  * "EllipticalROI", "RectangleROI", "ArrowAnnotate"). Returns null for any tool
  * we don't persist (e.g. WindowLevel/Pan/Zoom never produce annotations, but
  * be defensive against unknown tools so we never save a bad enum).
+ *
+ * Extended measurement tools have no dedicated DB enum value (the server enum
+ * is fixed to length/angle/rect_roi/ellipse_roi/text and we must NOT migrate
+ * it). We map each to the closest clinically-reasonable existing enum so they
+ * still persist & re-hydrate (the full Cornerstone annotation — including its
+ * real toolName — is stored in `data`, so the drawing is preserved exactly;
+ * only the coarse `type` tag is approximated):
+ *   - "CobbAngle"        → "angle"  (an inter-line angle, rachis)
+ *   - "Bidirectional"    → "length" (perpendicular long/short axis linear extents, RECIST)
+ *   - "Probe"            → "text"   (a labeled point carrying a punctual HU value)
+ *   - "PlanarFreehandROI"→ "ellipse_roi" (a closed region-of-interest with ROI stats)
  */
 export function toolNameToDbType(
   toolName: string | undefined | null
@@ -40,6 +51,14 @@ export function toolNameToDbType(
       return "ellipse_roi";
     case "ArrowAnnotate":
       return "text";
+    case "CobbAngle":
+      return "angle";
+    case "Bidirectional":
+      return "length";
+    case "Probe":
+      return "text";
+    case "PlanarFreehandROI":
+      return "ellipse_roi";
     default:
       return null;
   }

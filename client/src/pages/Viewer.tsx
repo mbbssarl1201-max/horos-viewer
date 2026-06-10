@@ -41,6 +41,10 @@ import {
   ImagePlus,
   FileText,
   Keyboard,
+  Triangle,
+  MoveDiagonal,
+  MapPin,
+  Spline,
 } from "lucide-react";
 import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
 import {
@@ -100,6 +104,30 @@ const VIEWER_TOOLS = [
   },
   { id: "rect", label: "Rect", icon: Square, description: "Rectangular ROI" },
   { id: "text", label: "Text", icon: Type, description: "Text Annotation" },
+  {
+    id: "cobb",
+    label: "Cobb",
+    icon: Triangle,
+    description: "Angle de Cobb (rachis)",
+  },
+  {
+    id: "bidirectional",
+    label: "Bidir.",
+    icon: MoveDiagonal,
+    description: "Mesure bidirectionnelle (RECIST)",
+  },
+  {
+    id: "probe",
+    label: "Sonde",
+    icon: MapPin,
+    description: "Sonde — valeur HU ponctuelle",
+  },
+  {
+    id: "freehand",
+    label: "Main levée",
+    icon: Spline,
+    description: "ROI à main levée",
+  },
   // NB : pas d'outil « crosshair » ici — il n'existe pas dans le toolMap 2D et
   // sélectionnait un outil inconnu (cassait le changement d'outil). La MPR
   // s'active via le bouton de mode « MPR » dédié (VolumeViewport), pas un outil.

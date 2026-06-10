@@ -104,6 +104,12 @@ async function initCornerstone() {
       cornerstoneTools.addTool(cornerstoneTools.EllipticalROITool);
       cornerstoneTools.addTool(cornerstoneTools.RectangleROITool);
       cornerstoneTools.addTool(cornerstoneTools.ArrowAnnotateTool);
+      // Outils de mesure étendus : angle de Cobb (rachis), bidirectionnel
+      // (RECIST), sonde HU ponctuelle, ROI à main levée.
+      cornerstoneTools.addTool(cornerstoneTools.CobbAngleTool);
+      cornerstoneTools.addTool(cornerstoneTools.BidirectionalTool);
+      cornerstoneTools.addTool(cornerstoneTools.ProbeTool);
+      cornerstoneTools.addTool(cornerstoneTools.PlanarFreehandROITool);
 
       cornerstoneInitialized = true;
       console.log("[Cornerstone3D] Initialized successfully");
@@ -187,6 +193,10 @@ function buildToolMap(cst: any): Record<string, string> {
     ellipse: cst.EllipticalROITool.toolName,
     rect: cst.RectangleROITool.toolName,
     text: cst.ArrowAnnotateTool.toolName,
+    cobb: cst.CobbAngleTool.toolName,
+    bidirectional: cst.BidirectionalTool.toolName,
+    probe: cst.ProbeTool.toolName,
+    freehand: cst.PlanarFreehandROITool.toolName,
   };
 }
 
@@ -474,6 +484,10 @@ export default function CornerstoneViewer({
           cornerstoneTools.EllipticalROITool,
           cornerstoneTools.RectangleROITool,
           cornerstoneTools.ArrowAnnotateTool,
+          cornerstoneTools.CobbAngleTool,
+          cornerstoneTools.BidirectionalTool,
+          cornerstoneTools.ProbeTool,
+          cornerstoneTools.PlanarFreehandROITool,
         ].forEach(T => toolGroup.addTool(T.toolName));
         toolGroup.addViewport(viewportIdRef.current, RENDERING_ENGINE_ID);
         applyActiveTool(cornerstoneTools, toolGroup, activeTool);

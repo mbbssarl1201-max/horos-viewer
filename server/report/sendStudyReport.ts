@@ -134,6 +134,17 @@ export async function sendStudyReportImpl(
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+  // Audit AVANT l'envoi : on trace l'egress PHI tenté quoi qu'il advienne du
+  // transport email (si recordAccess était après sendEmail, un envoi réussi
+  // suivi d'un échec d'écriture d'audit laisserait l'egress non tracé).
+  await recordAccess({
+    userId: ctx.user.id,
+    action: "study.email.report",
+    studyId: study.id,
+    detail: input.to,
+    ipAddress: ctx.req?.ip ?? null,
+  });
+
   const result = await sendEmail({
     to: input.to,
     subject: `Compte rendu d'imagerie${subjectName}`,
@@ -147,14 +158,6 @@ export async function sendStudyReportImpl(
       `<p style="color:#888;font-size:12px">Document médical confidentiel — destiné au seul destinataire.</p>` +
       `</div>`,
     attachments,
-  });
-
-  await recordAccess({
-    userId: ctx.user.id,
-    action: "study.email.report",
-    studyId: study.id,
-    detail: input.to,
-    ipAddress: ctx.req?.ip ?? null,
   });
 
   if (!result.success)

@@ -14,6 +14,7 @@ interface ReportPanelProps {
   windowCenter: number;
   keyImages: ReportKeyImage[];
   onRemoveKeyImage: (index: number) => void;
+  onAddKeyImage?: (img: ReportKeyImage) => void;
   onClose: () => void;
 }
 
@@ -24,6 +25,7 @@ export default function ReportPanel({
   windowCenter,
   keyImages,
   onRemoveKeyImage,
+  onAddKeyImage,
   onClose,
 }: ReportPanelProps) {
   const [to, setTo] = useState("");
@@ -40,10 +42,18 @@ export default function ReportPanel({
   const preanalyze = trpc.email.aiPreanalysis.useMutation();
   const history = trpc.studies.patientHistory.useQuery({ studyId });
   const [aiAssisted, setAiAssisted] = useState(false);
+  const [aiAbnormal, setAiAbnormal] = useState<boolean | null>(null);
+  const [aiKeySlice, setAiKeySlice] = useState<number | null>(null);
 
   const runPreanalysis = async (antecedentsArg = antecedents) => {
     const res = await preanalyze.mutateAsync({
       studyId,
+      // Le serveur échantillonne toute la série ; on transmet la série courante
+      // et la fenêtre W/L (fractures visibles en fenêtre osseuse). Les images
+      // clés capturées servent de repli si l'échantillonnage échoue.
+      seriesId,
+      windowCenter,
+      windowWidth,
       keyImages: keyImages.map(k => ({
         pngBase64: k.pngBase64,
         sliceIndex: k.sliceIndex,
@@ -55,6 +65,20 @@ export default function ReportPanel({
     setResultats(res.resultats);
     setConclusion(res.conclusion);
     setAiAssisted(true);
+    setAiAbnormal(res.abnormal ?? null);
+    setAiKeySlice(res.keySliceNumber ?? null);
+    // Coupe désignée par l'IA → ajoutée comme image clé du compte rendu
+    // (dédup par numéro de coupe pour ne pas l'ajouter en double si on relance).
+    if (
+      res.keyImage &&
+      onAddKeyImage &&
+      !keyImages.some(k => k.sliceIndex === res.keyImage!.sliceIndex)
+    ) {
+      onAddKeyImage({
+        pngBase64: res.keyImage.pngBase64,
+        sliceIndex: res.keyImage.sliceIndex,
+      });
+    }
   };
 
   // Pré-remplit le champ Antécédents avec l'historique d'imagerie récupéré,
@@ -156,6 +180,21 @@ export default function ReportPanel({
       {aiAssisted && (
         <p className="text-[10px] text-amber-500">
           Brouillon généré par IA — à valider et corriger avant signature.
+        </p>
+      )}
+      {aiAssisted && aiAbnormal !== null && (
+        <p
+          className={`text-[11px] font-medium ${
+            aiAbnormal ? "text-destructive" : "text-green-500"
+          }`}
+        >
+          {aiAbnormal
+            ? `⚠ Anomalie possible repérée par l'IA${
+                aiKeySlice
+                  ? ` — coupe n° ${aiKeySlice} (ajoutée aux images clés)`
+                  : ""
+              }. À confirmer par le médecin.`
+            : "Aucune anomalie manifeste repérée par l'IA (à confirmer)."}
         </p>
       )}
       {preanalyze.isError && (

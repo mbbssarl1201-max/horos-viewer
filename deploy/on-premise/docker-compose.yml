@@ -1,0 +1,176 @@
+# MediView — déploiement ON-PREMISE (cabinet)
+# Stack auto-suffisante : tout reste sur le réseau local, aucune donnée patient
+# ne sort. IA en local (Ollama). Pont vers le PACS du cabinet via Orthanc.
+#
+# Démarrage : voir README.md. En résumé :
+#   ./setup.sh          # génère les secrets (.env) + la config Orthanc
+#   docker compose pull
+#   docker compose up -d
+#
+# Accès clinique : https://${MEDIVIEW_HOSTNAME} (TLS interne Caddy, sur le LAN).
+
+services:
+  # ── Base de données ───────────────────────────────────────────────────────
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - db-data:/var/lib/mysql
+    networks: [internal]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-p${MYSQL_ROOT_PASSWORD}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  # ── Stockage objet (DICOM + captures) ─────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    volumes:
+      - minio-data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  createbucket:
+    image: minio/mc:latest
+    depends_on: [minio]
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - "until mc alias set h http://minio:9000 $$S3_ACCESS_KEY $$S3_SECRET_KEY; do echo waiting-minio; sleep 2; done && mc mb --ignore-existing h/$$S3_BUCKET && echo bucket-ready"
+    networks: [internal]
+    restart: "no"
+
+  # ── Pont PACS : Orthanc parle DICOMweb + DIMSE (C-FIND/C-MOVE) au dcm4chee ──
+  orthanc:
+    image: orthancteam/orthanc:24.10.1
+    restart: unless-stopped
+    volumes:
+      - ./orthanc/orthanc.json:/etc/orthanc/orthanc.json:ro
+      - orthanc-data:/var/lib/orthanc/db
+    ports:
+      # Port DICOM publié sur le LAN : nécessaire pour que le dcm4chee puisse
+      # renvoyer les images via C-MOVE vers l'AE « MEDIVIEW » (voir README §PACS).
+      - "4242:4242"
+    networks: [internal]
+
+  # ── IA locale (PHI-safe) : analyse vision des images clés ─────────────────
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [internal]
+    # GPU NVIDIA (fortement recommandé). Nécessite nvidia-container-toolkit sur
+    # l'hôte. EN CPU SEUL : commenter tout le bloc `deploy:` ci-dessous (l'IA
+    # fonctionnera mais lentement, ~1–2 min/analyse, et avec un modèle réduit).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ── Migrations DB (one-shot) ──────────────────────────────────────────────
+  migrate:
+    image: ghcr.io/mbbssarl1201-max/horos-viewer:${MEDIVIEW_IMAGE_TAG}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["pnpm", "db:migrate"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    networks: [internal]
+    restart: "no"
+
+  # ── Application ───────────────────────────────────────────────────────────
+  app:
+    image: ghcr.io/mbbssarl1201-max/horos-viewer:${MEDIVIEW_IMAGE_TAG}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      JWT_SECRET: ${JWT_SECRET}
+      AUTH_MODE: local
+      DATABASE_URL: ${DATABASE_URL}
+      # Stockage objet
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ${S3_REGION}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_FORCE_PATH_STYLE: "true"
+      # Pont PACS (Orthanc)
+      ORTHANC_URL: http://orthanc:8042
+      ORTHANC_USER: ${ORTHANC_USER}
+      ORTHANC_PASSWORD: ${ORTHANC_PASSWORD}
+      # IA 100 % LOCALE — aucune donnée patient ne sort du cabinet
+      AI_BACKEND: ollama
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL}
+      # SMTP (envoi des comptes rendus au confrère). Laisser vide si non utilisé.
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_FROM: ${SMTP_FROM}
+    networks: [internal]
+
+  # ── Reverse proxy + HTTPS interne (LAN) ───────────────────────────────────
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      MEDIVIEW_HOSTNAME: ${MEDIVIEW_HOSTNAME}
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [internal]
+
+volumes:
+  db-data:
+  minio-data:
+  orthanc-data:
+  ollama-models:
+  caddy-data:
+  caddy-config:
+
+networks:
+  internal:

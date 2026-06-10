@@ -1,0 +1,29 @@
+{
+  "Name": "MediView-Cabinet",
+
+  "// Accès REST/DICOMweb": "Réservé au réseau Docker interne (non publié sur le LAN). L'app s'y connecte avec les identifiants ci-dessous.",
+  "RemoteAccessAllowed": true,
+  "AuthenticationEnabled": true,
+  "RegisteredUsers": {
+    "${ORTHANC_USER}": "${ORTHANC_PASSWORD}"
+  },
+
+  "// Identité DICOM d'Orthanc": "Le dcm4chee renvoie les images (C-MOVE) vers cet AE Title sur le port 4242 publié.",
+  "DicomAet": "MEDIVIEW",
+  "DicomPort": 4242,
+  "DicomCheckCalledAet": false,
+  "DicomScuTimeout": 60,
+  "DicomScpTimeout": 60,
+
+  "// PACS du cabinet": "Coordonnées validées (C-ECHO/C-FIND OK).",
+  "DicomModalities": {
+    "dcm4chee": ["${DCM4CHEE_AET}", "${DCM4CHEE_HOST}", ${DCM4CHEE_PORT}]
+  },
+
+  "// DICOMweb": "Sert WADO-RS/QIDO-RS/STOW-RS à l'app via le proxy /api/dicomweb/*.",
+  "DicomWeb": {
+    "Enable": true,
+    "Root": "/dicom-web/",
+    "EnableMetadata": true
+  }
+}

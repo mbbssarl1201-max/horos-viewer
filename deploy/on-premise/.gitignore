@@ -1,0 +1,4 @@
+.env
+orthanc/orthanc.json
+backups/
+*-root-CA.crt

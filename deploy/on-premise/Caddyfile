@@ -1,0 +1,16 @@
+# Reverse proxy + HTTPS interne pour l'accès clinique sur le LAN.
+# `tls internal` : Caddy génère une autorité de certification locale et un
+# certificat pour le nom d'hôte. Aucune connexion Internet requise.
+# (Voir README §HTTPS pour faire confiance à la CA sur les postes du cabinet.)
+
+{$MEDIVIEW_HOSTNAME} {
+	tls internal
+
+	# Les imports DICOM (fichiers volumineux encodés en base64 dans tRPC) peuvent
+	# être lourds — on relève la limite de taille du corps de requête.
+	request_body {
+		max_size 4GB
+	}
+
+	reverse_proxy app:3000
+}

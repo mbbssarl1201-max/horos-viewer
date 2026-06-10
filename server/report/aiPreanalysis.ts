@@ -37,6 +37,13 @@ export async function generatePreanalysis(
     ? `Indication clinique : ${opts.indication}\nDécris tes observations puis conclus.`
     : "Décris tes observations puis conclus.";
 
+  // Un VLM ne traite que quelques images, et chaque image vision coûte ~4000
+  // tokens de contexte : le défaut Ollama (num_ctx=4096) est dépassé dès UNE
+  // image (sinon "request exceeds context size" + crash du runner). On plafonne
+  // donc à 3 images et on dimensionne num_ctx en conséquence (borné à 16384).
+  const images = keyImages.slice(0, 3).map(k => k.pngBase64);
+  const numCtx = Math.min(16384, 4096 + 4500 * Math.max(1, images.length));
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000);
   let content = "";
@@ -49,12 +56,13 @@ export async function generatePreanalysis(
         model,
         stream: false,
         keep_alive: "30s",
+        options: { num_ctx: numCtx },
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           {
             role: "user",
             content: userText,
-            images: keyImages.map(k => k.pngBase64),
+            images,
           },
         ],
       }),

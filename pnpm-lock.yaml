@@ -37,6 +37,9 @@ importers:
       '@hookform/resolvers':
         specifier: ^5.2.2
         version: 5.2.2(react-hook-form@7.64.0(react@19.2.1))
+      '@kitware/vtk.js':
+        specifier: 34.15.1
+        version: 34.15.1(@babel/preset-env@7.29.7(@babel/core@7.28.4))(autoprefixer@10.4.21(postcss@8.5.6))(webpack@5.107.2(esbuild@0.25.10)(lightningcss@1.30.1)(postcss@8.5.6))(wslink@2.5.0)
       '@radix-ui/react-accordion':
         specifier: ^1.2.12
         version: 1.2.12(@types/react-dom@19.2.1(@types/react@19.2.1))(@types/react@19.2.1)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
@@ -7549,7 +7552,7 @@ snapshots:
   '@kitware/vtk.js@34.15.1(@babel/preset-env@7.29.7(@babel/core@7.28.4))(autoprefixer@10.4.21(postcss@8.5.6))(webpack@5.107.2(esbuild@0.25.10)(lightningcss@1.30.1)(postcss@8.5.6))(wslink@2.5.0)':
     dependencies:
       '@babel/preset-env': 7.29.7(@babel/core@7.28.4)
-      '@babel/runtime': 7.28.4
+      '@babel/runtime': 7.29.7
       '@types/webxr': 0.5.24
       autoprefixer: 10.4.21(postcss@8.5.6)
       commander: 9.2.0

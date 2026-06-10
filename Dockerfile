@@ -9,6 +9,8 @@ COPY . .
 RUN pnpm build
 
 FROM node:22-alpine AS production
+# ffmpeg : assemblage du ciné MP4 de la série (compte rendu confrère).
+RUN apk add --no-cache ffmpeg
 WORKDIR /app
 ENV HUSKY=0
 RUN npm install -g pnpm@10

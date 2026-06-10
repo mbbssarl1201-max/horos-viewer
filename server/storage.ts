@@ -20,7 +20,7 @@ let _s3: S3Client | null = null;
 function getS3(): { client: S3Client; bucket: string } {
   if (!ENV.s3Endpoint || !ENV.s3AccessKey || !ENV.s3SecretKey) {
     throw new Error(
-      "Storage config missing: set S3_ENDPOINT, S3_ACCESS_KEY and S3_SECRET_KEY",
+      "Storage config missing: set S3_ENDPOINT, S3_ACCESS_KEY and S3_SECRET_KEY"
     );
   }
   if (!_s3) {
@@ -56,7 +56,7 @@ function appendHashSuffix(relKey: string): string {
 export async function storagePut(
   relKey: string,
   data: Buffer | Uint8Array | string,
-  contentType = "application/octet-stream",
+  contentType = "application/octet-stream"
 ): Promise<{ key: string; url: string }> {
   const { client, bucket } = getS3();
   const key = appendHashSuffix(normalizeKey(relKey));
@@ -69,14 +69,14 @@ export async function storagePut(
       Key: key,
       Body: body,
       ContentType: contentType,
-    }),
+    })
   );
 
   return { key, url: `/manus-storage/${key}` };
 }
 
 export async function storageGet(
-  relKey: string,
+  relKey: string
 ): Promise<{ key: string; url: string }> {
   const key = normalizeKey(relKey);
   return { key, url: `/manus-storage/${key}` };
@@ -92,7 +92,7 @@ export async function storageGetSignedUrl(relKey: string): Promise<string> {
   return getSignedUrl(
     client,
     new GetObjectCommand({ Bucket: bucket, Key: key }),
-    { expiresIn: 300 },
+    { expiresIn: 300 }
   );
 }
 
@@ -101,17 +101,30 @@ export async function storageGetSignedUrl(relKey: string): Promise<string> {
  * pipe to the client, keeping the bucket private.
  */
 export async function storageGetObject(
-  relKey: string,
+  relKey: string
 ): Promise<{ body: Readable; contentType?: string }> {
   const { client, bucket } = getS3();
   const key = normalizeKey(relKey);
   const out = await client.send(
-    new GetObjectCommand({ Bucket: bucket, Key: key }),
+    new GetObjectCommand({ Bucket: bucket, Key: key })
   );
   return {
     body: out.Body as Readable,
     contentType: out.ContentType,
   };
+}
+
+/**
+ * Récupère un objet en Buffer complet (usage serveur interne : rastérisation
+ * DICOM pour le compte rendu). Lit le stream renvoyé par storageGetObject.
+ */
+export async function storageGetBuffer(relKey: string): Promise<Buffer> {
+  const { body } = await storageGetObject(relKey);
+  const chunks: Buffer[] = [];
+  for await (const chunk of body) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }
 
 /**

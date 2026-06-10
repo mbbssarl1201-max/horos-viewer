@@ -37,7 +37,10 @@ import {
   FlipHorizontal,
   FlipVertical,
   TriangleAlert,
+  ImagePlus,
+  FileText,
 } from "lucide-react";
+import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
 import { toast } from "sonner";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 
@@ -113,6 +116,8 @@ export default function Viewer() {
   } | null>(null);
   const [slabThicknessMm, setSlabThicknessMm] = useState(0);
   const [slabMode, setSlabMode] = useState<SlabMode>("mip");
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportKeyImages, setReportKeyImages] = useState<ReportKeyImage[]>([]);
 
   const viewportRef = useRef<HTMLDivElement>(null);
 
@@ -252,6 +257,28 @@ export default function Viewer() {
   // Grab the rendered viewport canvas (the onscreen 2D copy Cornerstone keeps).
   const getViewportCanvas = () =>
     document.querySelector<HTMLCanvasElement>("#cornerstone-viewport canvas");
+
+  // Grab the current view as PNG base64 WITHOUT the data:image/png;base64, prefix
+  // (same mechanism as Email/Capture). Returns null if no canvas is rendered.
+  const captureCurrentPng = (): string | null => {
+    const canvas = getViewportCanvas();
+    if (!canvas) return null;
+    return canvas.toDataURL("image/png").split(",")[1] ?? null;
+  };
+
+  // Add the current slice as a key image for the report.
+  const addKeyImage = () => {
+    const b64 = captureCurrentPng();
+    if (!b64) {
+      toast.error("Aucune image à capturer");
+      return;
+    }
+    setReportKeyImages(prev => [
+      ...prev,
+      { pngBase64: b64, sliceIndex: currentSlice },
+    ]);
+    toast.success("Image clé ajoutée au compte rendu");
+  };
 
   // Capture: download the current view as a PNG.
   const handleCapture = useCallback(() => {
@@ -472,6 +499,22 @@ export default function Viewer() {
             {sendReportMutation.isPending ? "…" : "Email"}
           </span>
         </button>
+        <button
+          className="toolbar-btn"
+          title="Ajouter la coupe courante au compte rendu"
+          onClick={addKeyImage}
+        >
+          <ImagePlus className="w-4 h-4" />
+          <span className="text-[9px]">Ajouter l'image</span>
+        </button>
+        <button
+          className="toolbar-btn"
+          title="Compte rendu (envoi à un confrère)"
+          onClick={() => setReportOpen(true)}
+        >
+          <FileText className="w-4 h-4" />
+          <span className="text-[9px]">Compte rendu</span>
+        </button>
       </div>
 
       {/* Main Content */}
@@ -613,6 +656,21 @@ export default function Viewer() {
                 </div>
               )}
             </div>
+
+            {/* Report panel — overlays the right side of the viewport */}
+            {reportOpen && study && (
+              <ReportPanel
+                studyId={study.id}
+                seriesId={selectedSeries!}
+                windowWidth={windowWidth}
+                windowCenter={windowCenter}
+                keyImages={reportKeyImages}
+                onRemoveKeyImage={i =>
+                  setReportKeyImages(p => p.filter((_, idx) => idx !== i))
+                }
+                onClose={() => setReportOpen(false)}
+              />
+            )}
           </div>
 
           {/* Bottom Controls */}

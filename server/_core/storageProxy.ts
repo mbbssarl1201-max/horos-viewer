@@ -40,12 +40,19 @@ export function registerStorageProxy(app: Express) {
       // the app origin. Force an opaque, non-sniffable, download-only response
       // and ignore the stored Content-Type. Cornerstone loads via fetch/XHR,
       // so `attachment` doesn't affect viewing.
-      res.set("Cache-Control", "no-store");
+      // Les objets DICOM sont IMMUABLES (clé de stockage = contenu) et volumineux
+      // (CT non compressé ~150 Mo/série). On autorise le cache PRIVÉ du navigateur
+      // (jamais un cache partagé/CDN) pour que la ré-ouverture, le scroll et les
+      // bascules 2D/MPR/3D ne re-téléchargent pas la série → chargement quasi
+      // instantané après le 1er affichage. `private` + l'auth same-origin gardent
+      // la PHI hors des caches partagés ; le cache disque reste sur la machine du
+      // clinicien (comportement standard d'un viewer PACS).
+      res.set("Cache-Control", "private, max-age=86400, immutable");
       res.set("Content-Type", "application/octet-stream");
       res.set("Content-Disposition", "attachment");
       res.set("X-Content-Type-Options", "nosniff");
       res.set("Content-Security-Policy", "default-src 'none'; sandbox");
-      body.on("error", (err) => {
+      body.on("error", err => {
         console.error("[StorageProxy] stream error:", err);
         if (!res.headersSent) res.status(502).send("Storage stream error");
         else res.destroy(err);

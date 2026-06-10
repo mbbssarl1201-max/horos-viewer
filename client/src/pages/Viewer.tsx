@@ -280,6 +280,19 @@ export default function Viewer() {
     toast.success("Image clé ajoutée au compte rendu");
   };
 
+  // Ouvre le compte rendu : si aucune image clé n'a été ajoutée, capture
+  // automatiquement la coupe affichée pour que la pré-analyse IA puisse démarrer
+  // toute seule (le panneau lance l'IA automatiquement dans ce cas).
+  const openReport = () => {
+    if (reportKeyImages.length === 0) {
+      const b64 = captureCurrentPng();
+      if (b64) {
+        setReportKeyImages([{ pngBase64: b64, sliceIndex: currentSlice }]);
+      }
+    }
+    setReportOpen(true);
+  };
+
   // Capture: download the current view as a PNG.
   const handleCapture = useCallback(() => {
     const canvas = getViewportCanvas();
@@ -510,7 +523,7 @@ export default function Viewer() {
         <button
           className="toolbar-btn"
           title="Compte rendu (envoi à un confrère)"
-          onClick={() => setReportOpen(true)}
+          onClick={openReport}
         >
           <FileText className="w-4 h-4" />
           <span className="text-[9px]">Compte rendu</span>

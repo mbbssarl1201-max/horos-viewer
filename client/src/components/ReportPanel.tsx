@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 
 export interface ReportKeyImage {
@@ -53,6 +53,24 @@ export default function ReportPanel({
     setConclusion(res.conclusion);
     setAiAssisted(true);
   };
+
+  // Lancement AUTOMATIQUE de la pré-analyse à l'ouverture : dès qu'au moins une
+  // image clé est disponible (capturée auto par le bouton « Compte rendu »), on
+  // génère le brouillon une seule fois, sans clic. Fail-soft : en cas d'échec,
+  // le médecin peut relancer via le bouton « Pré-analyse IA ».
+  const autoRan = useRef(false);
+  useEffect(() => {
+    if (
+      !autoRan.current &&
+      keyImages.length > 0 &&
+      !aiAssisted &&
+      !preanalyze.isPending
+    ) {
+      autoRan.current = true;
+      void runPreanalysis().catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyImages.length]);
 
   const submit = async () => {
     await send.mutateAsync({

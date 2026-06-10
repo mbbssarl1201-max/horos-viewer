@@ -1,6 +1,40 @@
 import { TRPCError } from "@trpc/server";
+import { PNG } from "pngjs";
 import { ENV } from "../_core/env";
 import { getStudyById, countRecentAccess, recordAccess } from "../db";
+
+/**
+ * Réduit une image PNG (base64) à `maxDim` px sur son plus grand côté, par
+ * sous-échantillonnage au plus proche voisin (pur JS, pas de dépendance native).
+ * Indispensable AVANT l'envoi au VLM : sur CPU, une grande image vision coûte
+ * des milliers de tokens et plusieurs minutes d'encodage. En cas d'échec de
+ * décodage, renvoie l'image d'origine (best-effort).
+ */
+export function downscalePngBase64(b64: string, maxDim: number): string {
+  try {
+    const src = PNG.sync.read(Buffer.from(b64, "base64"));
+    const scale = Math.min(1, maxDim / Math.max(src.width, src.height));
+    if (scale >= 1) return b64;
+    const w = Math.max(1, Math.round(src.width * scale));
+    const h = Math.max(1, Math.round(src.height * scale));
+    const dst = new PNG({ width: w, height: h });
+    for (let y = 0; y < h; y++) {
+      const sy = Math.min(src.height - 1, Math.floor(y / scale));
+      for (let x = 0; x < w; x++) {
+        const sx = Math.min(src.width - 1, Math.floor(x / scale));
+        const si = (sy * src.width + sx) * 4;
+        const di = (y * w + x) * 4;
+        dst.data[di] = src.data[si];
+        dst.data[di + 1] = src.data[si + 1];
+        dst.data[di + 2] = src.data[si + 2];
+        dst.data[di + 3] = src.data[si + 3];
+      }
+    }
+    return PNG.sync.write(dst).toString("base64");
+  } catch {
+    return b64;
+  }
+}
 
 export interface PreanalysisKeyImage {
   pngBase64: string;
@@ -41,11 +75,13 @@ export async function generatePreanalysis(
   // tokens de contexte : le défaut Ollama (num_ctx=4096) est dépassé dès UNE
   // image (sinon "request exceeds context size" + crash du runner). On plafonne
   // donc à 3 images et on dimensionne num_ctx en conséquence (borné à 16384).
-  const images = keyImages.slice(0, 3).map(k => k.pngBase64);
+  const images = keyImages
+    .slice(0, 3)
+    .map(k => downscalePngBase64(k.pngBase64, 512));
   const numCtx = Math.min(16384, 4096 + 4500 * Math.max(1, images.length));
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120_000);
+  const timeout = setTimeout(() => controller.abort(), 180_000);
   let content = "";
   try {
     const resp = await fetch(`${ENV.ollamaUrl}/api/chat`, {

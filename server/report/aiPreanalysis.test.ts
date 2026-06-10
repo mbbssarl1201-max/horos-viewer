@@ -84,6 +84,18 @@ describe("generatePreanalysis", () => {
     expect(body.options.num_ctx).toBeGreaterThanOrEqual(4096);
   });
 
+  it("downscalePngBase64 réduit une grande image au plus grand côté = maxDim", async () => {
+    const { PNG } = await import("pngjs");
+    const { downscalePngBase64 } = await import("./aiPreanalysis");
+    const big = new PNG({ width: 200, height: 100 });
+    const b64 = PNG.sync.write(big).toString("base64");
+    const out = downscalePngBase64(b64, 50);
+    const decoded = PNG.sync.read(Buffer.from(out, "base64"));
+    expect(Math.max(decoded.width, decoded.height)).toBeLessThanOrEqual(50);
+    // image déjà petite -> inchangée
+    expect(downscalePngBase64(b64, 1000)).toBe(b64);
+  });
+
   it("plafonne à 3 images envoyées au VLM", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,

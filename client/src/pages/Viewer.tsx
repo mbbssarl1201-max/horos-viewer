@@ -1,7 +1,6 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import CornerstoneViewer from "@/components/CornerstoneViewer";
 import VolumeViewer, { PRESETS_3D } from "@/components/VolumeViewer";
-import { useOrthancVolume } from "@/hooks/useOrthancVolume";
 import { SLAB_MODES, type SlabMode } from "@/lib/slabBlend";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -135,22 +134,13 @@ export default function Viewer() {
     { enabled: !!selectedSeries }
   );
 
-  // DICOM UIDs de la série sélectionnée pour le volume Orthanc (MPR avancé)
-  const currentStudyUid = (study as any)?.studyInstanceUid as
-    | string
-    | undefined;
-  const selectedSeriesObj = seriesList?.find(
-    (s: any) => s.id === selectedSeries
+  // Volume MPR/3D reconstruit depuis les coupes locales (MinIO, schéma wadouri:).
+  // Mémoïsé : sinon une nouvelle référence de tableau à chaque rendu (scroll,
+  // W/L, zoom…) relancerait l'effet de VolumeViewer et reconstruirait le volume.
+  const volumeImageUrls = useMemo(
+    () => (instancesList ?? []).map((inst: any) => inst.storageUrl || ""),
+    [instancesList]
   );
-  const currentSeriesUid = (selectedSeriesObj as any)?.seriesInstanceUid as
-    | string
-    | undefined;
-
-  const {
-    imageIds: orthancImageIds,
-    volumeId: orthancVolumeId,
-    error: orthancError,
-  } = useOrthancVolume(currentStudyUid, currentSeriesUid);
 
   // Auto-select first series
   useEffect(() => {
@@ -428,12 +418,6 @@ export default function Viewer() {
             ))}
           </div>
         )}
-        {orthancError && viewMode === "mpr" && (
-          <span className="text-[10px] text-destructive px-2">
-            {orthancError}
-          </span>
-        )}
-
         <Separator orientation="vertical" className="h-7 mx-1" />
 
         {/* Image manipulation */}
@@ -584,11 +568,7 @@ export default function Viewer() {
               ) : (
                 <VolumeViewer
                   mode={viewMode === "3d" ? "3d" : "mpr"}
-                  imageUrls={instancesList.map(
-                    (inst: any) => inst.storageUrl || ""
-                  )}
-                  orthancImageIds={orthancImageIds}
-                  volumeId={orthancVolumeId ?? undefined}
+                  imageUrls={volumeImageUrls}
                   slabThicknessMm={slabThicknessMm}
                   slabMode={slabMode}
                   preset3d={preset3d}

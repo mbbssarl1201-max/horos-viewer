@@ -11,7 +11,7 @@ Aujourd'hui Horos ne sait envoyer par email qu'**une seule image capturée** (`e
 
 ## 2. Objectifs (critères de succès)
 
-1. **Composer un compte rendu structuré** dans le viewer et l'exporter en **PDF** : en-tête cabinet + identité patient/étude (auto depuis DICOM/DB), sections _Indication / Technique / Résultats / Conclusion_ (saisies par le médecin), **images clés** sélectionnées + **mesures** associées (Length/Angle/ROI/HU reportées en texte), **signature** du médecin.
+1. **Composer un compte rendu structuré** dans le viewer et l'exporter en **PDF** : **en-tête fixe Institut de Champel** (blason/logo + coordonnées du cabinet) + identité patient/étude (auto depuis DICOM/DB), sections _Indication / Technique / Résultats / Conclusion_ (saisies par le médecin), **images clés** sélectionnées + **mesures** associées (Length/Angle/ROI/HU reportées en texte), **signature** du médecin.
 2. **Générer un MP4** : ciné du défilement de **toute la série** (avec le fenêtrage W/L choisi appliqué).
 3. **Envoyer les deux** (PDF + MP4) au confrère par **email**, en étendant l'infrastructure email existante (nodemailer/Mailu).
 
@@ -69,7 +69,7 @@ Le client ne transmet **jamais** d'identité patient ni de PDF fabriqué : seule
 
 - **Fichier** : `server/report/reportPdf.ts`.
 - **Fonction** : `buildReportPdf({ study, report, signature, keyImages }) → Buffer`.
-- **Détail** : jsPDF — en-tête (institution depuis l'étude), bloc identité patient/étude (auto), 4 sections titrées (texte échappé, retour à la ligne), images clés (chaque PNG + sa légende/mesures), ligne de signature + date, pagination. Renvoie le buffer PDF.
+- **Détail** : jsPDF — **en-tête fixe Institut de Champel** (blason/logo embarqué + coordonnées du cabinet, indépendant du champ Institution du DICOM ; réutiliser l'asset blason déjà recréé pour les modèles de documents Champel), bloc identité patient/étude (auto), 4 sections titrées (texte échappé, retour à la ligne), images clés (chaque PNG + sa légende/mesures), ligne de signature + date, pagination. Renvoie le buffer PDF.
 
 ### 6.5 Serveur — mutation `report.sendStudyReport` _(nouveau, étend l'esprit de `email.sendReport`)_
 

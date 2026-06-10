@@ -38,9 +38,10 @@ export default function ReportPanel({
 
   const send = trpc.email.sendStudyReport.useMutation();
   const preanalyze = trpc.email.aiPreanalysis.useMutation();
+  const history = trpc.studies.patientHistory.useQuery({ studyId });
   const [aiAssisted, setAiAssisted] = useState(false);
 
-  const runPreanalysis = async () => {
+  const runPreanalysis = async (antecedentsArg = antecedents) => {
     const res = await preanalyze.mutateAsync({
       studyId,
       keyImages: keyImages.map(k => ({
@@ -48,13 +49,22 @@ export default function ReportPanel({
         sliceIndex: k.sliceIndex,
       })),
       indication: indication || undefined,
-      antecedents: antecedents || undefined,
+      antecedents: antecedentsArg || undefined,
     });
     if (res.technique) setTechnique(res.technique);
     setResultats(res.resultats);
     setConclusion(res.conclusion);
     setAiAssisted(true);
   };
+
+  // Pré-remplit le champ Antécédents avec l'historique d'imagerie récupéré,
+  // uniquement s'il est encore vide (pour ne pas écraser les saisies du médecin).
+  useEffect(() => {
+    if (history.data?.antecedents && !antecedents) {
+      setAntecedents(history.data.antecedents);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history.data]);
 
   // Lancement AUTOMATIQUE de la pré-analyse à l'ouverture : dès qu'au moins une
   // image clé est disponible (capturée auto par le bouton « Compte rendu »), on
@@ -65,14 +75,16 @@ export default function ReportPanel({
     if (
       !autoRan.current &&
       keyImages.length > 0 &&
+      history.isFetched &&
       !aiAssisted &&
       !preanalyze.isPending
     ) {
       autoRan.current = true;
-      void runPreanalysis().catch(() => {});
+      const auto = history.data?.antecedents || "";
+      void runPreanalysis(auto).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyImages.length]);
+  }, [keyImages.length, history.isFetched]);
 
   const submit = async () => {
     await send.mutateAsync({
@@ -133,7 +145,7 @@ export default function ReportPanel({
         <span className="text-xs font-medium">Résultats / Conclusion</span>
         <button
           type="button"
-          onClick={runPreanalysis}
+          onClick={() => runPreanalysis()}
           disabled={preanalyze.isPending || keyImages.length === 0}
           className="text-[11px] rounded bg-primary/15 text-primary px-2 py-1 disabled:opacity-50"
           title="Pré-remplir via l'IA locale à partir des images clés"

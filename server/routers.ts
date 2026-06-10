@@ -306,6 +306,22 @@ export const appRouter = router({
         return study;
       }),
 
+    patientHistory: medicalProcedure
+      .input(z.object({ studyId: z.number() }))
+      .query(async ({ input }) => {
+        const { listPriorStudiesForStudy } = await import("./db");
+        const prior = await listPriorStudiesForStudy(input.studyId);
+        const lines = prior.map(
+          (s: any) =>
+            `- ${s.studyDate || "?"} : ${s.modality || "?"}${s.studyDescription ? " — " + s.studyDescription : ""}`
+        );
+        const antecedents = lines.length
+          ? "Antécédents d'imagerie (examens antérieurs du patient) :\n" +
+            lines.join("\n")
+          : "";
+        return { antecedents, count: prior.length };
+      }),
+
     updateStatus: adminProcedure
       .input(
         z.object({

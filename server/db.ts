@@ -1,7 +1,19 @@
-import { eq, desc, and, like, sql, gte } from "drizzle-orm";
+import { eq, desc, and, like, sql, gte, ne } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, patients, studies, series, instances, albums, albumStudies, notifications, annotations, accessLogs } from "../drizzle/schema";
-import { ENV } from './_core/env';
+import {
+  InsertUser,
+  users,
+  patients,
+  studies,
+  series,
+  instances,
+  albums,
+  albumStudies,
+  notifications,
+  annotations,
+  accessLogs,
+} from "../drizzle/schema";
+import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -49,8 +61,8 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'admin';
-      updateSet.role = 'admin';
+      values.role = "admin";
+      updateSet.role = "admin";
     }
     if (!values.lastSignedIn) {
       values.lastSignedIn = new Date();
@@ -58,7 +70,10 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     if (Object.keys(updateSet).length === 0) {
       updateSet.lastSignedIn = new Date();
     }
-    await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
+    await db
+      .insert(users)
+      .values(values)
+      .onDuplicateKeyUpdate({ set: updateSet });
   } catch (error) {
     console.error("[Database] Failed to upsert user:", error);
     throw error;
@@ -68,14 +83,22 @@ export async function upsertUser(user: InsertUser): Promise<void> {
 export async function getUserByOpenId(openId: string) {
   const db = await getDb();
   if (!db) return undefined;
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+  const result = await db
+    .select()
+    .from(users)
+    .where(eq(users.openId, openId))
+    .limit(1);
   return result.length > 0 ? result[0] : undefined;
 }
 
 export async function getUserByEmail(email: string) {
   const db = await getDb();
   if (!db) return undefined;
-  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  const result = await db
+    .select()
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
   return result.length > 0 ? result[0] : undefined;
 }
 
@@ -126,7 +149,11 @@ export async function bumpSessionVersion(openId: string): Promise<void> {
 
 // ============ STUDY QUERIES ============
 
-export async function listStudies(filters?: { modality?: string; search?: string; timeFilter?: string }) {
+export async function listStudies(filters?: {
+  modality?: string;
+  search?: string;
+  timeFilter?: string;
+}) {
   const db = await getDb();
   if (!db) return [];
   const conditions = [];
@@ -135,25 +162,46 @@ export async function listStudies(filters?: { modality?: string; search?: string
   }
   if (filters?.timeFilter && filters.timeFilter !== "none") {
     const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayStart = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate()
+    );
     switch (filters.timeFilter) {
       case "today":
         conditions.push(gte(studies.createdAt, todayStart));
         break;
       case "yesterday": {
-        const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+        const yesterdayStart = new Date(
+          todayStart.getTime() - 24 * 60 * 60 * 1000
+        );
         conditions.push(gte(studies.createdAt, yesterdayStart));
         conditions.push(sql`${studies.createdAt} < ${todayStart}`);
         break;
       }
       case "last_week":
-        conditions.push(gte(studies.createdAt, new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)));
+        conditions.push(
+          gte(
+            studies.createdAt,
+            new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+          )
+        );
         break;
       case "last_month":
-        conditions.push(gte(studies.createdAt, new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)));
+        conditions.push(
+          gte(
+            studies.createdAt,
+            new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+          )
+        );
         break;
       case "last_year":
-        conditions.push(gte(studies.createdAt, new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000)));
+        conditions.push(
+          gte(
+            studies.createdAt,
+            new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000)
+          )
+        );
         break;
     }
   }
@@ -214,6 +262,33 @@ export async function getStudyById(studyId: number) {
     .where(eq(studies.id, studyId))
     .limit(1);
   return result[0] || undefined;
+}
+
+/**
+ * Liste les AUTRES études du même patient (antécédents d'imagerie), hors étude
+ * courante, les plus récentes d'abord. Le patient est résolu via le patientId
+ * (FK int) de l'étude courante.
+ */
+export async function listPriorStudiesForStudy(studyId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const cur = await db
+    .select({ patientFk: studies.patientId })
+    .from(studies)
+    .where(eq(studies.id, studyId))
+    .limit(1);
+  const patientFk = cur[0]?.patientFk;
+  if (patientFk == null) return [];
+  return db
+    .select({
+      id: studies.id,
+      studyDate: studies.studyDate,
+      modality: studies.modality,
+      studyDescription: studies.studyDescription,
+    })
+    .from(studies)
+    .where(and(eq(studies.patientId, patientFk), ne(studies.id, studyId)))
+    .orderBy(desc(studies.studyDate));
 }
 
 // ============ SERIES QUERIES ============
@@ -398,14 +473,22 @@ export async function getUserNotifications(userId: number) {
     .limit(50);
 }
 
-export async function markNotificationRead(notificationId: number, userId: number) {
+export async function markNotificationRead(
+  notificationId: number,
+  userId: number
+) {
   const db = await getDb();
   if (!db) return;
   // Scope by userId so a user can only mark their own notifications as read.
   await db
     .update(notifications)
     .set({ isRead: 1 })
-    .where(and(eq(notifications.id, notificationId), eq(notifications.userId, userId)));
+    .where(
+      and(
+        eq(notifications.id, notificationId),
+        eq(notifications.userId, userId)
+      )
+    );
 }
 
 // ============ UPDATE COUNTS ============
@@ -455,7 +538,7 @@ export async function updateSeriesCount(seriesId: number) {
 export async function countRecentAccess(
   userId: number,
   action: string,
-  withinMinutes: number,
+  withinMinutes: number
 ): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
@@ -466,8 +549,8 @@ export async function countRecentAccess(
       and(
         eq(accessLogs.userId, userId),
         eq(accessLogs.action, action),
-        gte(accessLogs.createdAt, sql`NOW() - INTERVAL ${withinMinutes} MINUTE`),
-      ),
+        gte(accessLogs.createdAt, sql`NOW() - INTERVAL ${withinMinutes} MINUTE`)
+      )
     );
   return rows[0]?.count ?? 0;
 }
@@ -490,7 +573,10 @@ export async function recordAccess(event: AccessEvent): Promise<void> {
   try {
     const db = await getDb();
     if (!db) {
-      console.warn("[AccessLog] DB unavailable, access NOT recorded:", event.action);
+      console.warn(
+        "[AccessLog] DB unavailable, access NOT recorded:",
+        event.action
+      );
       return;
     }
     await db.insert(accessLogs).values({
@@ -501,6 +587,10 @@ export async function recordAccess(event: AccessEvent): Promise<void> {
       ipAddress: event.ipAddress ?? null,
     });
   } catch (err) {
-    console.error("[AccessLog] Failed to record access event:", event.action, err);
+    console.error(
+      "[AccessLog] Failed to record access event:",
+      event.action,
+      err
+    );
   }
 }

@@ -4,11 +4,18 @@ describe("generatePreanalysis", () => {
   beforeEach(() => {
     process.env.OLLAMA_URL = "http://ollama-test:11434";
     process.env.OLLAMA_VISION_MODEL = "qwen2.5-vl:3b";
+    // Backend explicite : les tests suivants exercent le chemin Ollama ; on
+    // empêche qu'un AI_BACKEND résiduel (ex. test Claude) ne bascule la
+    // fonction sur la branche Claude.
+    process.env.AI_BACKEND = "ollama";
     vi.resetModules();
   });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.doUnmock("@anthropic-ai/sdk");
+    delete process.env.AI_BACKEND;
+    delete process.env.ANTHROPIC_API_KEY;
   });
 
   it("parse Résultats/Conclusion depuis la réponse Ollama", async () => {
@@ -161,5 +168,36 @@ describe("generatePreanalysis", () => {
     const userMsg = body.messages.find((m: any) => m.role === "user");
     expect(userMsg.images).toHaveLength(3);
     expect(userMsg.images).toEqual(["IMG0", "IMG1", "IMG2"]);
+  });
+
+  it("backend claude : appelle l'API Anthropic et parse 3 sections", async () => {
+    vi.resetModules();
+    process.env.AI_BACKEND = "claude";
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    process.env.ANTHROPIC_MODEL = "claude-opus-4-8";
+    const createMock = vi.fn(async () => ({
+      content: [
+        {
+          type: "text",
+          text: "Technique:\nCT axial.\n\nRésultats:\nRAS.\n\nConclusion:\nNormal.",
+        },
+      ],
+    }));
+    vi.doMock("@anthropic-ai/sdk", () => ({
+      default: class {
+        messages = { create: createMock };
+        constructor(_: any) {}
+      },
+    }));
+    const { generatePreanalysis } = await import("./aiPreanalysis");
+    const out = await generatePreanalysis(
+      [{ pngBase64: "AAAA", sliceIndex: 0 }],
+      { modality: "CT" }
+    );
+    expect(createMock).toHaveBeenCalled();
+    expect(out.technique).toMatch(/CT/);
+    expect(out.resultats).toMatch(/RAS/);
+    expect(out.conclusion).toMatch(/Normal/);
+    expect(out.model).toBe("claude-opus-4-8");
   });
 });

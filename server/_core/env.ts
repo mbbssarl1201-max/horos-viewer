@@ -24,6 +24,11 @@ export const ENV = {
   // IA locale (Ollama auto-hébergé) — pré-analyse vision des images clés.
   ollamaUrl: process.env.OLLAMA_URL ?? "http://ollama-hermes:11434",
   ollamaVisionModel: process.env.OLLAMA_VISION_MODEL ?? "qwen2.5vl:3b",
+  // Backend IA pour l'analyse d'images : "claude" (Anthropic cloud, meilleure
+  // qualité) ou "ollama" (local, PHI-safe). Défaut "ollama".
+  aiBackend: process.env.AI_BACKEND ?? "ollama",
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
+  anthropicModel: process.env.ANTHROPIC_MODEL ?? "claude-opus-4-8",
   // SMTP Email
   smtpHost: process.env.SMTP_HOST ?? "",
   smtpPort: parseInt(process.env.SMTP_PORT ?? "587"),

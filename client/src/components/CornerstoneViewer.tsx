@@ -45,6 +45,14 @@ interface CornerstoneViewerProps {
   onSaveAnnotation?: (annotation: AnnotationToSave) => void;
   /** Called with ROI HU stats (or null) so the parent can show/hide the overlay. */
   onRoiStats?: (stats: RoiStats | null) => void;
+  /**
+   * Identifiant unique de l'instance pour les dispositions multi-viewports.
+   * Par défaut absent → ids historiques (viewport unique inchangé). Quand
+   * plusieurs CornerstoneViewer sont montés (grille 1x2/2x2), chaque cellule
+   * doit recevoir un instanceKey distinct pour ne pas entrer en collision sur
+   * le moteur de rendu / le tool group / l'id de viewport partagés.
+   */
+  instanceKey?: string;
 }
 
 // Cornerstone3D initialization state
@@ -178,8 +186,24 @@ function registerImagerPixelSpacingFallback(
   }, 100);
 }
 
+// Ids de base (comportement historique du viewport unique). Pour les
+// dispositions multi-viewports, on suffixe ces ids avec l'instanceKey afin que
+// chaque cellule possède son propre moteur de rendu / tool group / viewport.
 const TOOL_GROUP_ID = "horosToolGroup";
 const RENDERING_ENGINE_ID = "horosRenderingEngine";
+const VIEWPORT_ID = "CT_VIEWPORT";
+
+// Construit les trois ids uniques pour une instance donnée. Sans instanceKey,
+// retourne EXACTEMENT les ids historiques → viewport unique strictement
+// inchangé.
+function resolveIds(instanceKey?: string) {
+  const suffix = instanceKey ? `_${instanceKey}` : "";
+  return {
+    toolGroupId: `${TOOL_GROUP_ID}${suffix}`,
+    renderingEngineId: `${RENDERING_ENGINE_ID}${suffix}`,
+    viewportId: `${VIEWPORT_ID}${suffix}`,
+  };
+}
 
 // Maps our toolbar IDs to Cornerstone3D tool names.
 function buildToolMap(cst: any): Record<string, string> {
@@ -236,12 +260,18 @@ export default function CornerstoneViewer({
   savedAnnotations,
   onSaveAnnotation,
   onRoiStats,
+  instanceKey,
 }: CornerstoneViewerProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const renderingEngineRef = useRef<any>(null);
-  const viewportIdRef = useRef("CT_VIEWPORT");
+  // Ids uniques par instance, figés au montage (instanceKey ne change pas pour
+  // une cellule donnée). Sans instanceKey → ids historiques inchangés.
+  const ids = resolveIds(instanceKey);
+  const toolGroupIdRef = useRef(ids.toolGroupId);
+  const renderingEngineIdRef = useRef(ids.renderingEngineId);
+  const viewportIdRef = useRef(ids.viewportId);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const listenersCleanupRef = useRef<(() => void) | null>(null);
 
@@ -405,7 +435,9 @@ export default function CornerstoneViewer({
         }
 
         // Create rendering engine
-        const renderingEngine = new RenderingEngine(RENDERING_ENGINE_ID);
+        const renderingEngine = new RenderingEngine(
+          renderingEngineIdRef.current
+        );
         renderingEngineRef.current = renderingEngine;
 
         const viewportInput = {
@@ -470,10 +502,12 @@ export default function CornerstoneViewer({
         // so recreate the group to drop the stale viewport reference.
         const cornerstoneTools = await import("@cornerstonejs/tools");
         const { ToolGroupManager } = cornerstoneTools;
-        if (ToolGroupManager.getToolGroup(TOOL_GROUP_ID)) {
-          ToolGroupManager.destroyToolGroup(TOOL_GROUP_ID);
+        if (ToolGroupManager.getToolGroup(toolGroupIdRef.current)) {
+          ToolGroupManager.destroyToolGroup(toolGroupIdRef.current);
         }
-        const toolGroup = ToolGroupManager.createToolGroup(TOOL_GROUP_ID)!;
+        const toolGroup = ToolGroupManager.createToolGroup(
+          toolGroupIdRef.current
+        )!;
         [
           cornerstoneTools.WindowLevelTool,
           cornerstoneTools.PanTool,
@@ -489,7 +523,10 @@ export default function CornerstoneViewer({
           cornerstoneTools.ProbeTool,
           cornerstoneTools.PlanarFreehandROITool,
         ].forEach(T => toolGroup.addTool(T.toolName));
-        toolGroup.addViewport(viewportIdRef.current, RENDERING_ENGINE_ID);
+        toolGroup.addViewport(
+          viewportIdRef.current,
+          renderingEngineIdRef.current
+        );
         applyActiveTool(cornerstoneTools, toolGroup, activeTool);
 
         // Keep the WW/WC and Zoom overlays in sync with live tool interaction
@@ -556,6 +593,37 @@ export default function CornerstoneViewer({
       listenersCleanupRef.current = null;
     };
   }, [isInitialized, imageUrls]);
+
+  // Teardown au DÉMONTAGE réel uniquement (deps vides) et SEULEMENT pour les
+  // instances multi-viewports (instanceKey défini). À la disparition d'une
+  // cellule (réduction de la grille 2x2→1x1), on détruit explicitement SON
+  // moteur de rendu et SON tool group pour ne pas fuiter un moteur orphelin
+  // partageant un id. Le viewport unique (instanceKey absent) ne passe jamais
+  // par ici : son comportement historique (moteur réutilisé/détruit au prochain
+  // setupViewport) reste STRICTEMENT inchangé. Cet effet ne se ré-exécute jamais
+  // (deps figées), donc aucune course avec setupViewport sur un changement de
+  // série.
+  useEffect(() => {
+    return () => {
+      if (!instanceKey) return;
+      const reId = renderingEngineIdRef.current;
+      const tgId = toolGroupIdRef.current;
+      (async () => {
+        try {
+          const ct = await import("@cornerstonejs/tools");
+          if (ct.ToolGroupManager.getToolGroup(tgId)) {
+            ct.ToolGroupManager.destroyToolGroup(tgId);
+          }
+        } catch {}
+        try {
+          const cs = await import("@cornerstonejs/core");
+          const eng = (cs as any).getRenderingEngine?.(reId);
+          eng?.destroy?.();
+        } catch {}
+      })();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Re-hydration: re-draw previously-saved annotations once the viewport is
   // ready. Runs when the saved set or the loaded stack changes. addAnnotation
@@ -678,8 +746,9 @@ export default function CornerstoneViewer({
     (async () => {
       try {
         const cornerstoneTools = await import("@cornerstonejs/tools");
-        const toolGroup =
-          cornerstoneTools.ToolGroupManager.getToolGroup(TOOL_GROUP_ID);
+        const toolGroup = cornerstoneTools.ToolGroupManager.getToolGroup(
+          toolGroupIdRef.current
+        );
         if (toolGroup) {
           applyActiveTool(cornerstoneTools, toolGroup, activeTool);
         }

@@ -45,6 +45,8 @@ import {
   MoveDiagonal,
   MapPin,
   Spline,
+  Columns2,
+  Grid2x2,
 } from "lucide-react";
 import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
 import SeriesThumbnail from "@/components/SeriesThumbnail";
@@ -62,6 +64,12 @@ import {
   fpsToIntervalMs,
 } from "@/lib/cine";
 import { resolveShortcut, shortcutLegend } from "@/lib/keyboardShortcuts";
+import {
+  type ViewportLayout,
+  layoutCellCount,
+  layoutGridClass,
+  clampActiveCell,
+} from "@/lib/viewportLayout";
 import { toast } from "sonner";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 
@@ -147,9 +155,11 @@ export default function Viewer() {
   const [windowCenter, setWindowCenter] = useState(40);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [selectedSeries, setSelectedSeries] = useState<number | null>(null);
-  const [viewportLayout, setViewportLayout] = useState<"1x1" | "1x2" | "2x2">(
-    "1x1"
-  );
+  const [viewportLayout, setViewportLayout] = useState<ViewportLayout>("1x1");
+  // Cellule active de la grille multi-viewports : c'est elle que pilotent la
+  // barre d'outils, les presets W/L, les contrôles de coupe, la capture et le
+  // compte rendu. En 1x1 il n'y a qu'une cellule (index 0).
+  const [activeCell, setActiveCell] = useState(0);
   const [viewMode, setViewMode] = useState<"2d" | "mpr" | "3d">("2d");
   const [preset3d, setPreset3d] = useState<string>("os");
   const [huStats, setHuStats] = useState<{
@@ -198,6 +208,21 @@ export default function Viewer() {
     [instancesList]
   );
 
+  // Tableaux mémoïsés réutilisés par chaque cellule de la mosaïque (référence
+  // stable → pas de re-setup parasite du viewport au scroll/W/L).
+  const cellImageUrls = useMemo(
+    () => (instancesList ?? []).map((inst: any) => inst.storageUrl || ""),
+    [instancesList]
+  );
+  const cellInstances = useMemo(
+    () =>
+      (instancesList ?? []).map((inst: any) => ({
+        id: inst.id,
+        storageUrl: inst.storageUrl,
+      })),
+    [instancesList]
+  );
+
   // Auto-select first series
   useEffect(() => {
     if (seriesList && seriesList.length > 0 && !selectedSeries) {
@@ -216,6 +241,13 @@ export default function Viewer() {
 
   // Bascule lecture/pause du ciné (utilisée par le bouton et la touche Espace).
   const toggleCine = useCallback(() => setCinePlaying(p => !p), []);
+
+  // Change la disposition des viewports et borne la cellule active dans la
+  // nouvelle grille (ex. on était sur la cellule 3 en 2x2 puis on repasse 1x1).
+  const handleLayoutChange = useCallback((layout: ViewportLayout) => {
+    setViewportLayout(layout);
+    setActiveCell(prev => clampActiveCell(prev, layout));
+  }, []);
 
   // Ciné : avance automatiquement la coupe courante à la cadence choisie, en
   // boucle. Le timer est nettoyé au démontage et à la pause ; on s'appuie sur la
@@ -489,6 +521,37 @@ export default function Viewer() {
           <span className="text-[9px]">3D</span>
         </button>
 
+        {/* Disposition des viewports (mosaïque) — 2D uniquement */}
+        {viewMode === "2d" && (
+          <>
+            <Separator orientation="vertical" className="h-7 mx-1" />
+            <button
+              onClick={() => handleLayoutChange("1x1")}
+              className={`toolbar-btn ${viewportLayout === "1x1" ? "active" : ""}`}
+              title="Affichage simple (1×1)"
+            >
+              <Square className="w-4 h-4" />
+              <span className="text-[9px]">1×1</span>
+            </button>
+            <button
+              onClick={() => handleLayoutChange("1x2")}
+              className={`toolbar-btn ${viewportLayout === "1x2" ? "active" : ""}`}
+              title="Deux viewports côte à côte (1×2)"
+            >
+              <Columns2 className="w-4 h-4" />
+              <span className="text-[9px]">1×2</span>
+            </button>
+            <button
+              onClick={() => handleLayoutChange("2x2")}
+              className={`toolbar-btn ${viewportLayout === "2x2" ? "active" : ""}`}
+              title="Mosaïque de quatre viewports (2×2)"
+            >
+              <Grid2x2 className="w-4 h-4" />
+              <span className="text-[9px]">2×2</span>
+            </button>
+          </>
+        )}
+
         {/* Slab controls — MPR only */}
         {viewMode === "mpr" && (
           <div className="flex items-center gap-2 px-2">
@@ -695,9 +758,17 @@ export default function Viewer() {
             onWheel={handleWheel}
           >
             {/* DICOM Viewport - Cornerstone3D */}
+            {/* En 1x1 et en MPR/3D, l'id `cornerstone-viewport` reste sur ce
+                conteneur (capture/print/email/compte rendu inchangés). En
+                mosaïque 2D, l'id est déplacé sur la CELLULE ACTIVE (plus bas)
+                pour que la capture suive le viewport piloté. */}
             <div
               className="absolute inset-0 dicom-viewport"
-              id="cornerstone-viewport"
+              id={
+                viewMode === "2d" && viewportLayout !== "1x1"
+                  ? undefined
+                  : "cornerstone-viewport"
+              }
             >
               {!instancesList || instancesList.length === 0 ? (
                 <div className="absolute inset-0 flex items-center justify-center">
@@ -714,28 +785,89 @@ export default function Viewer() {
                   </div>
                 </div>
               ) : viewMode === "2d" ? (
-                <CornerstoneViewer
-                  imageUrls={instancesList.map(
-                    (inst: any) => inst.storageUrl || ""
-                  )}
-                  currentSlice={currentSlice}
-                  onSliceChange={setCurrentSlice}
-                  activeTool={activeTool}
-                  windowWidth={windowWidth}
-                  windowCenter={windowCenter}
-                  onWindowLevelChange={(ww, wc) => {
-                    setWindowWidth(ww);
-                    setWindowCenter(wc);
-                  }}
-                  onZoomChange={setZoomPercent}
-                  instances={instancesList.map((inst: any) => ({
-                    id: inst.id,
-                    storageUrl: inst.storageUrl,
-                  }))}
-                  savedAnnotations={savedAnnotations}
-                  onSaveAnnotation={handleSaveAnnotation}
-                  onRoiStats={setHuStats}
-                />
+                viewportLayout === "1x1" ? (
+                  // 1x1 : rendu STRICTEMENT identique à l'historique — un seul
+                  // CornerstoneViewer, sans instanceKey (ids historiques),
+                  // remplissant le conteneur #cornerstone-viewport.
+                  <CornerstoneViewer
+                    imageUrls={cellImageUrls}
+                    currentSlice={currentSlice}
+                    onSliceChange={setCurrentSlice}
+                    activeTool={activeTool}
+                    windowWidth={windowWidth}
+                    windowCenter={windowCenter}
+                    onWindowLevelChange={(ww, wc) => {
+                      setWindowWidth(ww);
+                      setWindowCenter(wc);
+                    }}
+                    onZoomChange={setZoomPercent}
+                    instances={cellInstances}
+                    savedAnnotations={savedAnnotations}
+                    onSaveAnnotation={handleSaveAnnotation}
+                    onRoiStats={setHuStats}
+                  />
+                ) : (
+                  // Mosaïque 2D : N cellules de la MÊME série, chacune avec son
+                  // propre moteur/tool group/viewport (instanceKey unique). Seule
+                  // la cellule active pilote la barre d'outils, persiste les
+                  // annotations et reçoit l'id #cornerstone-viewport (capture).
+                  <div
+                    className={`absolute inset-0 ${layoutGridClass(
+                      viewportLayout
+                    )} gap-0.5 bg-border`}
+                  >
+                    {Array.from({
+                      length: layoutCellCount(viewportLayout),
+                    }).map((_, i) => {
+                      const isActive = i === activeCell;
+                      return (
+                        <div
+                          key={`cell-${i}`}
+                          id={isActive ? "cornerstone-viewport" : undefined}
+                          onMouseDownCapture={() => setActiveCell(i)}
+                          onWheelCapture={() => setActiveCell(i)}
+                          className={`relative bg-black overflow-hidden ring-inset ${
+                            isActive
+                              ? "ring-2 ring-primary"
+                              : "ring-1 ring-border"
+                          }`}
+                        >
+                          <CornerstoneViewer
+                            instanceKey={`cell${i}`}
+                            imageUrls={cellImageUrls}
+                            currentSlice={currentSlice}
+                            onSliceChange={
+                              isActive ? setCurrentSlice : () => {}
+                            }
+                            activeTool={activeTool}
+                            windowWidth={windowWidth}
+                            windowCenter={windowCenter}
+                            onWindowLevelChange={
+                              isActive
+                                ? (ww, wc) => {
+                                    setWindowWidth(ww);
+                                    setWindowCenter(wc);
+                                  }
+                                : () => {}
+                            }
+                            onZoomChange={isActive ? setZoomPercent : undefined}
+                            instances={cellInstances}
+                            // Seule la cellule active hydrate/persiste les
+                            // annotations : évite la double-sauvegarde (les
+                            // événements d'annotation sont globaux à Cornerstone).
+                            savedAnnotations={
+                              isActive ? savedAnnotations : undefined
+                            }
+                            onSaveAnnotation={
+                              isActive ? handleSaveAnnotation : undefined
+                            }
+                            onRoiStats={isActive ? setHuStats : undefined}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
               ) : (
                 <VolumeViewer
                   mode={viewMode === "3d" ? "3d" : "mpr"}

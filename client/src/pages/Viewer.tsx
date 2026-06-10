@@ -678,6 +678,7 @@ export default function Viewer() {
                 windowWidth={windowWidth}
                 windowCenter={windowCenter}
                 keyImages={reportKeyImages}
+                seriesList={seriesList as any}
                 onRemoveKeyImage={i =>
                   setReportKeyImages(p => p.filter((_, idx) => idx !== i))
                 }

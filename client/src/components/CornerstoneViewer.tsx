@@ -40,7 +40,20 @@ async function initCornerstone() {
       // schemes, web workers and codecs, and the metadata provider. Without it
       // the `wadouri:` image IDs have no registered loader, so setStack loads
       // nothing and the viewport stays blank.
-      dicomImageLoader.init();
+      // Décodage parallèle (web workers) + plus de requêtes réseau simultanées :
+      // une série CT = des centaines de fichiers volumineux ; sans ça, les coupes
+      // se chargent quasi une par une. On sature la bande passante (surtout utile
+      // sur la démo cloud ; sur le LAN on-prem c'est quasi instantané).
+      const workers = Math.max(2, (navigator.hardwareConcurrency || 4) - 1);
+      dicomImageLoader.init({ maxWebWorkers: workers });
+      try {
+        const RT = (cornerstone as any).Enums.RequestType;
+        const pool = (cornerstone as any).imageLoadPoolManager;
+        pool.setMaxSimultaneousRequests(RT.Interaction, 10);
+        pool.setMaxSimultaneousRequests(RT.Prefetch, 10);
+      } catch (e) {
+        console.warn("[Cornerstone3D] réglage du pool de requêtes ignoré:", e);
+      }
 
       // Calibration des mesures sur les radios standard (CR/DX) : le loader ne
       // lit que PixelSpacing (0028,0030). Quand il manque mais que
@@ -313,6 +326,16 @@ export default function CornerstoneViewer({
         // (the WindowLevel and Zoom tools change the viewport directly, not the
         // React state). Translate Cornerstone events back to the parent.
         const el = viewportRef.current!;
+
+        // Préchargement progressif des coupes (autour de la position courante et
+        // dans le sens du scroll) en tâche de fond → le défilement devient fluide
+        // au lieu de télécharger chaque coupe au moment où on l'affiche.
+        try {
+          cornerstoneTools.utilities.stackContextPrefetch.enable(el);
+        } catch (e) {
+          console.warn("[Cornerstone3D] préchargement indisponible:", e);
+        }
+
         const onVoi = (e: any) => {
           const range = e?.detail?.range;
           if (range) {
@@ -335,6 +358,9 @@ export default function CornerstoneViewer({
         listenersCleanupRef.current = () => {
           el.removeEventListener(Enums.Events.VOI_MODIFIED, onVoi);
           el.removeEventListener(Enums.Events.CAMERA_MODIFIED, onCamera);
+          try {
+            cornerstoneTools.utilities.stackContextPrefetch.disable(el);
+          } catch {}
         };
 
         console.log(

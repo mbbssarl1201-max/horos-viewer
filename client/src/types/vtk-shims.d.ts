@@ -19,3 +19,13 @@ declare module "@kitware/vtk.js/Filters/General/ImageMarchingCubes" {
   };
   export default vtkImageMarchingCubes;
 }
+
+declare module "@kitware/vtk.js/Common/DataModel/ImageData" {
+  const vtkImageData: { newInstance(initialValues?: any): any };
+  export default vtkImageData;
+}
+
+declare module "@kitware/vtk.js/Common/Core/DataArray" {
+  const vtkDataArray: { newInstance(initialValues?: any): any };
+  export default vtkDataArray;
+}

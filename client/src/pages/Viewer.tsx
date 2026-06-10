@@ -514,18 +514,49 @@ export default function Viewer() {
       // → valeur locale par défaut).
       const volId = "cornerstoneStreamingImageVolume:HOROS_VOL";
       const volume = (cornerstone as any).cache?.getVolume?.(volId);
-      const imageData = volume?.imageData;
-      if (!imageData) {
+      if (!volume) {
         toast.error("Volume non chargé");
+        return;
+      }
+      // Cornerstone v4 : les voxels sont gérés par un voxelManager et NE sont PAS
+      // posés sur le PointData du vtkImageData (marching cubes recevait alors des
+      // scalaires null). On reconstruit un vtkImageData complet à partir de la
+      // géométrie du volume + le tableau scalaire du voxelManager.
+      const scalars: ArrayLike<number> | undefined =
+        volume.voxelManager?.getScalarData?.() ?? volume.getScalarData?.();
+      if (!scalars || (scalars as any).length === 0) {
+        toast.error(
+          "Données du volume indisponibles (réessayez après chargement)"
+        );
         return;
       }
 
       // Laisse le spinner se peindre avant l'appel bloquant (pas de web worker).
       await new Promise(r => setTimeout(r, 0));
 
-      const { default: vtkImageMarchingCubes } = await import(
-        "@kitware/vtk.js/Filters/General/ImageMarchingCubes"
+      const [
+        { default: vtkImageMarchingCubes },
+        { default: vtkImageData },
+        { default: vtkDataArray },
+      ] = await Promise.all([
+        import("@kitware/vtk.js/Filters/General/ImageMarchingCubes"),
+        import("@kitware/vtk.js/Common/DataModel/ImageData"),
+        import("@kitware/vtk.js/Common/Core/DataArray"),
+      ]);
+
+      const imageData = vtkImageData.newInstance();
+      imageData.setDimensions(volume.dimensions);
+      imageData.setSpacing(volume.spacing);
+      imageData.setOrigin(volume.origin);
+      if (volume.direction) imageData.setDirection(volume.direction);
+      imageData.getPointData().setScalars(
+        vtkDataArray.newInstance({
+          name: "scalars",
+          numberOfComponents: 1,
+          values: scalars,
+        })
       );
+
       const filter = vtkImageMarchingCubes.newInstance({
         contourValue: meshThreshold,
         computeNormals: false, // vitesse : normales inutiles pour l'export OBJ

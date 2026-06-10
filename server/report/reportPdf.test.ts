@@ -39,6 +39,26 @@ describe("buildReportPdf", () => {
     expect(withAi.length).toBeGreaterThan(withoutAi.length);
     expect(withAi.subarray(0, 4).toString()).toBe("%PDF");
   });
+  it("ajoute la section Antécédents quand antecedents est fourni", () => {
+    const base = {
+      study,
+      report: {
+        indication: "Douleur",
+        technique: "CT 0.5mm",
+        resultats: "RAS",
+        conclusion: "Normal",
+      },
+      signature: "Test",
+      keyImages: [],
+    };
+    const without = buildReportPdf(base);
+    const withAntecedents = buildReportPdf({
+      ...base,
+      antecedents: "Fracture 2024",
+    });
+    expect(withAntecedents.length).toBeGreaterThan(without.length);
+    expect(withAntecedents.subarray(0, 4).toString()).toBe("%PDF");
+  });
   it("n'échoue pas avec une image clé PNG", () => {
     const onePx =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";

@@ -28,6 +28,7 @@ export interface ReportPdfInput {
   signature: string;
   keyImages: KeyImage[];
   aiAssisted?: boolean;
+  antecedents?: string;
 }
 
 const MARGIN = 14;
@@ -99,6 +100,7 @@ export function buildReportPdf(input: ReportPdfInput): Buffer {
     y += 4;
   };
 
+  if (input.antecedents) section("Antécédents", input.antecedents);
   section("Indication", input.report.indication);
   section("Technique", input.report.technique);
   section("Résultats", input.report.resultats);

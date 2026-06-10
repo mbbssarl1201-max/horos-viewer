@@ -59,6 +59,7 @@ const SYSTEM_PROMPT = [
   "- Par défaut, privilégie une description NORMALE et rassurante ; ne sur-interprète pas. Mieux vaut « pas d'anomalie manifeste » qu'une fausse alerte.",
   "- Si rien d'anormal n'est clairement visible, dis-le explicitement (\"pas d'anomalie osseuse manifeste sur les coupes fournies\").",
   '- N\'invente AUCUNE mesure ni valeur chiffrée. Exprime toujours l\'incertitude ("aspect évocateur de", "à corréler à la clinique", "sous réserve des coupes non fournies").',
+  "- Si des ANTÉCÉDENTS médicaux du patient sont fournis, relie EXPLICITEMENT tes observations et ta conclusion à ces antécédents (évolution par rapport à une pathologie connue, recherche de complication ou de récidive, cohérence avec l'histoire clinique) — sans inventer d'antécédent non fourni.",
   "- N'identifie jamais le patient et n'invente aucun contexte clinique.",
   "",
   "Réponds UNIQUEMENT avec ces trois sections, exactement dans ce format (rien d'autre) :",
@@ -74,7 +75,12 @@ const SYSTEM_PROMPT = [
 
 export async function generatePreanalysis(
   keyImages: PreanalysisKeyImage[],
-  opts: { indication?: string; modality?: string; studyDescription?: string }
+  opts: {
+    indication?: string;
+    modality?: string;
+    studyDescription?: string;
+    antecedents?: string;
+  }
 ): Promise<PreanalysisResult> {
   // On plafonne à 3 images et on les réduit avant l'envoi au modèle vision.
   // 768 px : Claude tire parti d'un peu plus de détail tout en bornant le coût ;
@@ -92,6 +98,8 @@ export async function generatePreanalysis(
   if (opts.studyDescription) ctxLines.push(`Examen : ${opts.studyDescription}`);
   if (opts.indication)
     ctxLines.push(`Indication clinique : ${opts.indication}`);
+  if (opts.antecedents)
+    ctxLines.push(`Antécédents médicaux du patient : ${opts.antecedents}`);
   ctxLines.push(
     `${images.length} coupe(s) clé(s) sélectionnée(s) te sont fournies ; l'examen complet n'est PAS joint.`
   );
@@ -194,6 +202,7 @@ export interface RunAiPreanalysisInput {
   studyId: number;
   keyImages: PreanalysisKeyImage[];
   indication?: string;
+  antecedents?: string;
 }
 
 export async function runAiPreanalysis(
@@ -219,6 +228,7 @@ export async function runAiPreanalysis(
 
   const result = await _internal.generatePreanalysis(input.keyImages, {
     indication: input.indication,
+    antecedents: input.antecedents,
     modality: (study as any).modality ?? undefined,
     studyDescription: (study as any).studyDescription ?? undefined,
   });

@@ -81,12 +81,9 @@ const VIEWER_TOOLS = [
   },
   { id: "rect", label: "Rect", icon: Square, description: "Rectangular ROI" },
   { id: "text", label: "Text", icon: Type, description: "Text Annotation" },
-  {
-    id: "crosshair",
-    label: "MPR",
-    icon: Crosshair,
-    description: "Crosshair / MPR",
-  },
+  // NB : pas d'outil « crosshair » ici — il n'existe pas dans le toolMap 2D et
+  // sélectionnait un outil inconnu (cassait le changement d'outil). La MPR
+  // s'active via le bouton de mode « MPR » dédié (VolumeViewport), pas un outil.
 ];
 
 export default function Viewer() {

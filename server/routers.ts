@@ -22,8 +22,20 @@ import {
 } from "./db";
 import { storagePut, storageDelete } from "./storage";
 import { hasMedicalAccess, isAdmin } from "./rbac";
-import { checkOrthancConnection, qidoSearchStudies, cFind, cMove, listModalities } from "./orthanc";
-import { sendEmail, notifyNewStudy, notifyStatUrgent, notifyReportFinalized, getSmtpStatus } from "./email";
+import {
+  checkOrthancConnection,
+  qidoSearchStudies,
+  cFind,
+  cMove,
+  listModalities,
+} from "./orthanc";
+import {
+  sendEmail,
+  notifyNewStudy,
+  notifyStatUrgent,
+  notifyReportFinalized,
+  getSmtpStatus,
+} from "./email";
 import dcmjs from "dcmjs";
 
 // DICOM Application Entity Title: max 16 chars, no path separators or spaces.
@@ -108,7 +120,10 @@ export function anonymizeDicomBuffer(buffer: Buffer): Buffer {
 // "user" role: an account must be promoted to a clinical role first.
 const medicalProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (!hasMedicalAccess(ctx.user)) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Clinical role required" });
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Clinical role required",
+    });
   }
   return next({ ctx });
 });
@@ -116,7 +131,10 @@ const medicalProcedure = protectedProcedure.use(({ ctx, next }) => {
 // Reporting-level actions (admin or radiologist): status, priority, anonymize.
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin" && ctx.user.role !== "radiologist") {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Admin or radiologist access required" });
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Admin or radiologist access required",
+    });
   }
   return next({ ctx });
 });
@@ -124,7 +142,10 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
 // Destructive / system actions (delete, C-MOVE exfiltration) — admin only.
 const strictAdminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (!isAdmin(ctx.user)) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Administrator access required" });
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Administrator access required",
+    });
   }
   return next({ ctx });
 });
@@ -133,10 +154,11 @@ export const appRouter = router({
   system: systemRouter,
 
   auth: router({
-    me: publicProcedure.query((opts) => {
+    me: publicProcedure.query(opts => {
       // Never expose the password hash to the client.
       if (!opts.ctx.user) return null;
-      const { passwordHash, ...safeUser } = opts.ctx.user as typeof opts.ctx.user & {
+      const { passwordHash, ...safeUser } = opts.ctx
+        .user as typeof opts.ctx.user & {
         passwordHash?: string | null;
       };
       return safeUser;
@@ -146,23 +168,33 @@ export const appRouter = router({
     // becomes an admin; later accounts default to the unprivileged "user"
     // role and must be promoted to a clinical role to see PHI.
     register: publicProcedure
-      .input(z.object({
-        email: z.string().email(),
-        password: z.string().min(8, "Password must be at least 8 characters"),
-        name: z.string().min(1).max(128).optional(),
-      }))
+      .input(
+        z.object({
+          email: z.string().email(),
+          password: z.string().min(8, "Password must be at least 8 characters"),
+          name: z.string().min(1).max(128).optional(),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         const { ENV } = await import("./_core/env");
         if (ENV.authMode !== "local") {
-          throw new TRPCError({ code: "FORBIDDEN", message: "Registration disabled" });
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Registration disabled",
+          });
         }
-        const { getUserByEmail, countUsers, createLocalUser } = await import("./db");
+        const { getUserByEmail, countUsers, createLocalUser } = await import(
+          "./db"
+        );
         const { hashPassword } = await import("./localAuth");
         const { sdk } = await import("./_core/sdk");
 
         const email = input.email.trim().toLowerCase();
         if (await getUserByEmail(email)) {
-          throw new TRPCError({ code: "CONFLICT", message: "Email already registered" });
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Email already registered",
+          });
         }
 
         const isFirstUser = (await countUsers()) === 0;
@@ -176,20 +208,30 @@ export const appRouter = router({
           role: isFirstUser ? "admin" : "user",
         });
         if (!user) {
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "User creation failed" });
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "User creation failed",
+          });
         }
 
-        const token = await sdk.createSessionToken(openId, { name: input.name || "" });
+        const token = await sdk.createSessionToken(openId, {
+          name: input.name || "",
+        });
         const cookieOptions = getSessionCookieOptions(ctx.req);
-        ctx.res.cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: SEVEN_DAYS_MS });
+        ctx.res.cookie(COOKIE_NAME, token, {
+          ...cookieOptions,
+          maxAge: SEVEN_DAYS_MS,
+        });
         return { success: true, user: { id: user.id, email, role: user.role } };
       }),
 
     login: publicProcedure
-      .input(z.object({
-        email: z.string().email(),
-        password: z.string().min(1),
-      }))
+      .input(
+        z.object({
+          email: z.string().email(),
+          password: z.string().min(1),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         const { getUserByEmail } = await import("./db");
         const { verifyPassword } = await import("./localAuth");
@@ -198,13 +240,25 @@ export const appRouter = router({
         const email = input.email.trim().toLowerCase();
         const user = await getUserByEmail(email);
         // Generic error either way to avoid leaking which emails exist.
-        if (!user || !user.passwordHash || !(await verifyPassword(input.password, user.passwordHash))) {
-          throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
+        if (
+          !user ||
+          !user.passwordHash ||
+          !(await verifyPassword(input.password, user.passwordHash))
+        ) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "Invalid email or password",
+          });
         }
 
-        const token = await sdk.createSessionToken(user.openId, { name: user.name || "" });
+        const token = await sdk.createSessionToken(user.openId, {
+          name: user.name || "",
+        });
         const cookieOptions = getSessionCookieOptions(ctx.req);
-        ctx.res.cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: SEVEN_DAYS_MS });
+        ctx.res.cookie(COOKIE_NAME, token, {
+          ...cookieOptions,
+          maxAge: SEVEN_DAYS_MS,
+        });
         return { success: true, user: { id: user.id, email, role: user.role } };
       }),
 
@@ -224,9 +278,19 @@ export const appRouter = router({
   // Studies router
   studies: router({
     list: medicalProcedure
-      .input(z.object({ modality: z.string().optional(), timeFilter: z.string().optional() }).optional())
+      .input(
+        z
+          .object({
+            modality: z.string().optional(),
+            timeFilter: z.string().optional(),
+          })
+          .optional()
+      )
       .query(async ({ input }) => {
-        return listStudies({ modality: input?.modality, timeFilter: input?.timeFilter });
+        return listStudies({
+          modality: input?.modality,
+          timeFilter: input?.timeFilter,
+        });
       }),
 
     get: medicalProcedure
@@ -243,18 +307,27 @@ export const appRouter = router({
       }),
 
     updateStatus: adminProcedure
-      .input(z.object({
-        id: z.number(),
-        status: z.enum(["new", "in_progress", "reported", "finalized"]),
-      }))
+      .input(
+        z.object({
+          id: z.number(),
+          status: z.enum(["new", "in_progress", "reported", "finalized"]),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
         const { studies } = await import("../drizzle/schema");
         const { eq } = await import("drizzle-orm");
         const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        if (!db)
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "DB unavailable",
+          });
 
-        await db.update(studies).set({ status: input.status }).where(eq(studies.id, input.id));
+        await db
+          .update(studies)
+          .set({ status: input.status })
+          .where(eq(studies.id, input.id));
 
         // Notify if report finalized
         if (input.status === "finalized") {
@@ -271,18 +344,27 @@ export const appRouter = router({
       }),
 
     updatePriority: adminProcedure
-      .input(z.object({
-        id: z.number(),
-        priority: z.enum(["routine", "stat", "urgent"]),
-      }))
+      .input(
+        z.object({
+          id: z.number(),
+          priority: z.enum(["routine", "stat", "urgent"]),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
         const { studies } = await import("../drizzle/schema");
         const { eq } = await import("drizzle-orm");
         const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        if (!db)
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "DB unavailable",
+          });
 
-        await db.update(studies).set({ priority: input.priority }).where(eq(studies.id, input.id));
+        await db
+          .update(studies)
+          .set({ priority: input.priority })
+          .where(eq(studies.id, input.id));
 
         // Notify if STAT
         if (input.priority === "stat") {
@@ -299,24 +381,38 @@ export const appRouter = router({
       }),
 
     anonymize: adminProcedure
-      .input(z.object({
-        id: z.number(),
-        fields: z.array(z.string()),
-      }))
+      .input(
+        z.object({
+          id: z.number(),
+          fields: z.array(z.string()),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
         const { studies, patients } = await import("../drizzle/schema");
         const { eq } = await import("drizzle-orm");
         const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        if (!db)
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "DB unavailable",
+          });
 
         const PLACEHOLDER = "[ANONYMIZED]";
 
         // Patient-identity fields live on the `patients` table; only report
         // metadata lives on `studies`. studies.patientId is an int FK to
         // patients.id, NOT the DICOM identity — never overwrite it here.
-        const STUDY_FIELDS = new Set(["referringPhysician", "institution", "accessionNumber"]);
-        const PATIENT_FIELDS = new Set(["patientName", "patientId", "birthDate"]);
+        const STUDY_FIELDS = new Set([
+          "referringPhysician",
+          "institution",
+          "accessionNumber",
+        ]);
+        const PATIENT_FIELDS = new Set([
+          "patientName",
+          "patientId",
+          "birthDate",
+        ]);
 
         const studyUpdate: Partial<typeof studies.$inferInsert> = {};
         const patientUpdate: Partial<typeof patients.$inferInsert> = {};
@@ -335,7 +431,10 @@ export const appRouter = router({
         const patientCount = Object.keys(patientUpdate).length;
 
         if (studyCount > 0) {
-          await db.update(studies).set(studyUpdate).where(eq(studies.id, input.id));
+          await db
+            .update(studies)
+            .set(studyUpdate)
+            .where(eq(studies.id, input.id));
         }
 
         if (patientCount > 0) {
@@ -346,8 +445,15 @@ export const appRouter = router({
             .from(studies)
             .where(eq(studies.id, input.id))
             .limit(1);
-          if (!study) throw new TRPCError({ code: "NOT_FOUND", message: "Study not found" });
-          await db.update(patients).set(patientUpdate).where(eq(patients.id, study.patientId));
+          if (!study)
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Study not found",
+            });
+          await db
+            .update(patients)
+            .set(patientUpdate)
+            .where(eq(patients.id, study.patientId));
         }
 
         await recordAccess({
@@ -365,16 +471,33 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
-        const { studies, series, instances, annotations, notifications, albumStudies } = await import("../drizzle/schema");
+        const {
+          studies,
+          series,
+          instances,
+          annotations,
+          notifications,
+          albumStudies,
+        } = await import("../drizzle/schema");
         const { eq } = await import("drizzle-orm");
         const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        if (!db)
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "DB unavailable",
+          });
 
         // Delete child rows (no DB-level cascade), then the study itself,
         // so no annotations / notifications / album links are left orphaned.
-        const studySeries = await db.select().from(series).where(eq(series.studyId, input.id));
+        const studySeries = await db
+          .select()
+          .from(series)
+          .where(eq(series.studyId, input.id));
         for (const s of studySeries) {
-          const seriesInstances = await db.select().from(instances).where(eq(instances.seriesId, s.id));
+          const seriesInstances = await db
+            .select()
+            .from(instances)
+            .where(eq(instances.seriesId, s.id));
           for (const inst of seriesInstances) {
             // Remove the DICOM object from storage so deleted studies leave no
             // orphaned PHI in the bucket. Best-effort: a storage hiccup must not
@@ -382,14 +505,21 @@ export const appRouter = router({
             try {
               await storageDelete(inst.storageKey);
             } catch (err) {
-              console.warn(`[studies.delete] could not remove object ${inst.storageKey}:`, err);
+              console.warn(
+                `[studies.delete] could not remove object ${inst.storageKey}:`,
+                err
+              );
             }
-            await db.delete(annotations).where(eq(annotations.instanceId, inst.id));
+            await db
+              .delete(annotations)
+              .where(eq(annotations.instanceId, inst.id));
           }
           await db.delete(instances).where(eq(instances.seriesId, s.id));
         }
         await db.delete(series).where(eq(series.studyId, input.id));
-        await db.delete(notifications).where(eq(notifications.studyId, input.id));
+        await db
+          .delete(notifications)
+          .where(eq(notifications.studyId, input.id));
         await db.delete(albumStudies).where(eq(albumStudies.studyId, input.id));
         await db.delete(studies).where(eq(studies.id, input.id));
 
@@ -539,11 +669,13 @@ export const appRouter = router({
   // Annotations router
   annotations: router({
     save: medicalProcedure
-      .input(z.object({
-        instanceId: z.number(),
-        type: z.enum(["length", "angle", "rect_roi", "ellipse_roi", "text"]),
-        data: z.any(),
-      }))
+      .input(
+        z.object({
+          instanceId: z.number(),
+          type: z.enum(["length", "angle", "rect_roi", "ellipse_roi", "text"]),
+          data: z.any(),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
         const { annotations } = await import("../drizzle/schema");
@@ -569,7 +701,10 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) return [];
 
-        return db.select().from(annotations).where(eq(annotations.instanceId, input.instanceId));
+        return db
+          .select()
+          .from(annotations)
+          .where(eq(annotations.instanceId, input.instanceId));
       }),
   }),
 
@@ -585,10 +720,16 @@ export const appRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
         // Get all instances for this study's series
-        const studySeries = await db.select().from(series).where(eq(series.studyId, input.studyId));
+        const studySeries = await db
+          .select()
+          .from(series)
+          .where(eq(series.studyId, input.studyId));
         const allInstances = [];
         for (const s of studySeries) {
-          const seriesInstances = await db.select().from(instances).where(eq(instances.seriesId, s.id));
+          const seriesInstances = await db
+            .select()
+            .from(instances)
+            .where(eq(instances.seriesId, s.id));
           allInstances.push(...seriesInstances);
         }
 
@@ -601,14 +742,20 @@ export const appRouter = router({
       }),
 
     pdfReport: medicalProcedure
-      .input(z.object({
-        studyId: z.number(),
-        annotations: z.array(z.object({
-          type: z.string(),
-          label: z.string().optional(),
-          value: z.string().optional(),
-        })).optional(),
-      }))
+      .input(
+        z.object({
+          studyId: z.number(),
+          annotations: z
+            .array(
+              z.object({
+                type: z.string(),
+                label: z.string().optional(),
+                value: z.string().optional(),
+              })
+            )
+            .optional(),
+        })
+      )
       .query(async ({ input }) => {
         const study = await getStudyById(input.studyId);
         if (!study) throw new TRPCError({ code: "NOT_FOUND" });
@@ -661,13 +808,15 @@ export const appRouter = router({
     }),
 
     queryStudies: medicalProcedure
-      .input(z.object({
-        patientName: z.string().optional(),
-        patientId: z.string().optional(),
-        studyDate: z.string().optional(),
-        modality: z.string().optional(),
-        accessionNumber: z.string().optional(),
-      }))
+      .input(
+        z.object({
+          patientName: z.string().optional(),
+          patientId: z.string().optional(),
+          studyDate: z.string().optional(),
+          modality: z.string().optional(),
+          accessionNumber: z.string().optional(),
+        })
+      )
       .mutation(async ({ input }) => {
         try {
           const results = await qidoSearchStudies(input);
@@ -678,11 +827,13 @@ export const appRouter = router({
       }),
 
     cFind: medicalProcedure
-      .input(z.object({
-        aet: aeTitleSchema,
-        level: z.enum(["Study", "Series", "Instance"]),
-        query: z.record(z.string(), z.string()),
-      }))
+      .input(
+        z.object({
+          aet: aeTitleSchema,
+          level: z.enum(["Study", "Series", "Instance"]),
+          query: z.record(z.string(), z.string()),
+        })
+      )
       .mutation(async ({ input }) => {
         try {
           const results = await cFind(input);
@@ -690,17 +841,23 @@ export const appRouter = router({
         } catch (err) {
           // Don't leak internal Orthanc/error details to the client.
           console.error("cFind failed:", err);
-          return { success: false, results: [], error: "C-FIND request failed" };
+          return {
+            success: false,
+            results: [],
+            error: "C-FIND request failed",
+          };
         }
       }),
 
     // C-MOVE can exfiltrate whole studies to an arbitrary AET — admin only.
     cMove: strictAdminProcedure
-      .input(z.object({
-        sourceAet: aeTitleSchema,
-        targetAet: aeTitleSchema,
-        studyInstanceUID: z.string(),
-      }))
+      .input(
+        z.object({
+          sourceAet: aeTitleSchema,
+          targetAet: aeTitleSchema,
+          studyInstanceUID: z.string(),
+        })
+      )
       .mutation(async ({ input }) => {
         return cMove(input);
       }),
@@ -714,19 +871,24 @@ export const appRouter = router({
       const { eq } = await import("drizzle-orm");
       const db = await getDb();
       if (!db) return [];
-      return db.select().from(pacsServers).where(eq(pacsServers.userId, ctx.user.id));
+      return db
+        .select()
+        .from(pacsServers)
+        .where(eq(pacsServers.userId, ctx.user.id));
     }),
 
     // Configuring a PACS endpoint defines where studies can be C-MOVE'd —
     // admin/radiologist only, not every logged-in account.
     create: adminProcedure
-      .input(z.object({
-        name: z.string().min(1),
-        aeTitle: aeTitleSchema,
-        host: z.string().min(1),
-        port: z.number().min(1).max(65535),
-        orthancUrl: z.string().optional(),
-      }))
+      .input(
+        z.object({
+          name: z.string().min(1),
+          aeTitle: aeTitleSchema,
+          host: z.string().min(1),
+          port: z.number().min(1).max(65535),
+          orthancUrl: z.string().optional(),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
         const { pacsServers } = await import("../drizzle/schema");
@@ -751,7 +913,14 @@ export const appRouter = router({
         const { eq, and } = await import("drizzle-orm");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        await db.delete(pacsServers).where(and(eq(pacsServers.id, input.id), eq(pacsServers.userId, ctx.user.id)));
+        await db
+          .delete(pacsServers)
+          .where(
+            and(
+              eq(pacsServers.id, input.id),
+              eq(pacsServers.userId, ctx.user.id)
+            )
+          );
         return { success: true };
       }),
   }),
@@ -779,16 +948,22 @@ export const appRouter = router({
     // arbitrary attacker-chosen attachments / phishing. Rate-limited per user;
     // every send is access-logged (PHI egress).
     sendReport: medicalProcedure
-      .input(z.object({
-        to: z.string().email(),
-        studyId: z.number(),
-        message: z.string().max(500).optional(),
-        imagePngBase64: z.string().min(1).max(10_000_000), // ~7.5 MB cap
-      }))
+      .input(
+        z.object({
+          to: z.string().email(),
+          studyId: z.number(),
+          message: z.string().max(500).optional(),
+          imagePngBase64: z.string().min(1).max(10_000_000), // ~7.5 MB cap
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         const { countRecentAccess } = await import("./db");
         // Rate limit: cap report emails per user per hour.
-        const recent = await countRecentAccess(ctx.user.id, "study.email.report", 60);
+        const recent = await countRecentAccess(
+          ctx.user.id,
+          "study.email.report",
+          60
+        );
         if (recent >= 20) {
           throw new TRPCError({
             code: "TOO_MANY_REQUESTS",
@@ -800,14 +975,22 @@ export const appRouter = router({
         // client for the subject/audit/PDF content.
         const study = await getStudyById(input.studyId);
         if (!study) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Study not found" });
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Study not found",
+          });
         }
 
         // Validate the image is a real PNG and read its dimensions (IHDR).
         const png = Buffer.from(input.imagePngBase64, "base64");
-        const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        const PNG_SIG = Buffer.from([
+          0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        ]);
         if (png.length < 24 || !png.subarray(0, 8).equals(PNG_SIG)) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Image must be a PNG" });
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Image must be a PNG",
+          });
         }
         const imgW = png.readUInt32BE(16);
         const imgH = png.readUInt32BE(20);
@@ -833,7 +1016,7 @@ export const appRouter = router({
           14,
           62,
           pageW,
-          drawH,
+          drawH
         );
         const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
 
@@ -874,41 +1057,87 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    // Email a full structured imaging report (compte rendu) assembled
+    // SERVER-SIDE: PDF from the authoritative study record + client-supplied
+    // rendered key-image PNGs, plus an optional ciné MP4 rebuilt server-side
+    // from the series' DICOM frames. Never relays client-supplied binaries
+    // verbatim. Rate-limited per user; every send is access-logged (PHI egress).
+    sendStudyReport: medicalProcedure
+      .input(
+        z.object({
+          to: z.string().email(),
+          studyId: z.number(),
+          seriesId: z.number(),
+          report: z.object({
+            indication: z.string().max(5000),
+            technique: z.string().max(5000),
+            resultats: z.string().max(20000),
+            conclusion: z.string().max(5000),
+          }),
+          signature: z.string().min(1).max(120),
+          windowCenter: z.number().finite(),
+          windowWidth: z.number().finite(),
+          keyImages: z
+            .array(
+              z.object({
+                pngBase64: z.string().min(1).max(10_000_000),
+                sliceIndex: z.number().int().min(0),
+                measurements: z.string().max(500).optional(),
+              })
+            )
+            .max(20),
+          includeVideo: z.boolean(),
+          message: z.string().max(500).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { sendStudyReportImpl } = await import(
+          "./report/sendStudyReport"
+        );
+        return sendStudyReportImpl(input, ctx as any);
+      }),
+
     notifyNewStudy: medicalProcedure
-      .input(z.object({
-        recipientEmail: z.string().email(),
-        patientName: z.string(),
-        modality: z.string(),
-        studyDate: z.string(),
-        studyDescription: z.string(),
-        institution: z.string().optional(),
-      }))
+      .input(
+        z.object({
+          recipientEmail: z.string().email(),
+          patientName: z.string(),
+          modality: z.string(),
+          studyDate: z.string(),
+          studyDescription: z.string(),
+          institution: z.string().optional(),
+        })
+      )
       .mutation(async ({ input }) => {
         return notifyNewStudy(input);
       }),
 
     notifyStatUrgent: medicalProcedure
-      .input(z.object({
-        recipientEmail: z.string().email(),
-        patientName: z.string(),
-        modality: z.string(),
-        studyDate: z.string(),
-        studyDescription: z.string(),
-        urgencyReason: z.string().optional(),
-      }))
+      .input(
+        z.object({
+          recipientEmail: z.string().email(),
+          patientName: z.string(),
+          modality: z.string(),
+          studyDate: z.string(),
+          studyDescription: z.string(),
+          urgencyReason: z.string().optional(),
+        })
+      )
       .mutation(async ({ input }) => {
         return notifyStatUrgent(input);
       }),
 
     notifyReportFinalized: medicalProcedure
-      .input(z.object({
-        recipientEmail: z.string().email(),
-        patientName: z.string(),
-        modality: z.string(),
-        studyDate: z.string(),
-        reportAuthor: z.string(),
-        reportSummary: z.string().optional(),
-      }))
+      .input(
+        z.object({
+          recipientEmail: z.string().email(),
+          patientName: z.string(),
+          modality: z.string(),
+          studyDate: z.string(),
+          reportAuthor: z.string(),
+          reportSummary: z.string().optional(),
+        })
+      )
       .mutation(async ({ input }) => {
         return notifyReportFinalized(input);
       }),

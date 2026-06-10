@@ -36,6 +36,7 @@ export interface SendStudyReportInput {
   includeVideo: boolean;
   message?: string;
   aiAssisted?: boolean;
+  antecedents?: string;
 }
 
 function assertPng(b64: string) {
@@ -87,6 +88,7 @@ export async function sendStudyReportImpl(
     signature: input.signature,
     keyImages: input.keyImages,
     aiAssisted: input.aiAssisted,
+    antecedents: input.antecedents,
   });
   const attachments: Array<{
     filename: string;

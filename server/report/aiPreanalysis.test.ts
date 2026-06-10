@@ -127,6 +127,7 @@ describe("generatePreanalysis", () => {
       indication: "Cheville droite",
       modality: "CT",
       studyDescription: "Scanner cheville",
+      antecedents: "Fracture du tibia en 2024",
     });
     const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
     const userContent = body.messages.find(
@@ -136,6 +137,8 @@ describe("generatePreanalysis", () => {
     expect(userContent).toMatch(/Scanner cheville/);
     expect(userContent).toMatch(/Cheville droite/);
     expect(userContent).toMatch(/coupe/i);
+    expect(userContent).toMatch(/Fracture du tibia en 2024/);
+    expect(userContent).toMatch(/Antécédents/i);
   });
 
   it("downscalePngBase64 réduit une grande image au plus grand côté = maxDim", async () => {

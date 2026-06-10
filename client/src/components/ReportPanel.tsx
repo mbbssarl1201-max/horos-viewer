@@ -28,6 +28,7 @@ export default function ReportPanel({
 }: ReportPanelProps) {
   const [to, setTo] = useState("");
   const [signature, setSignature] = useState("");
+  const [antecedents, setAntecedents] = useState("");
   const [indication, setIndication] = useState("");
   const [technique, setTechnique] = useState("");
   const [resultats, setResultats] = useState("");
@@ -47,6 +48,7 @@ export default function ReportPanel({
         sliceIndex: k.sliceIndex,
       })),
       indication: indication || undefined,
+      antecedents: antecedents || undefined,
     });
     if (res.technique) setTechnique(res.technique);
     setResultats(res.resultats);
@@ -85,6 +87,7 @@ export default function ReportPanel({
       includeVideo,
       message: message || undefined,
       aiAssisted,
+      antecedents: antecedents || undefined,
     });
   };
 
@@ -104,6 +107,13 @@ export default function ReportPanel({
         placeholder="Email du confrère"
         value={to}
         onChange={e => setTo(e.target.value)}
+      />
+      <textarea
+        className={field}
+        rows={2}
+        placeholder="Antécédents médicaux (optionnel)"
+        value={antecedents}
+        onChange={e => setAntecedents(e.target.value)}
       />
       <textarea
         className={field}

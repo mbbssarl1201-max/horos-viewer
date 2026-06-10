@@ -309,6 +309,38 @@ export async function cStore(params: {
 }
 
 /**
+ * Resolve a StudyInstanceUID to Orthanc's internal resource ID.
+ * Returns null when the study is unknown to Orthanc.
+ */
+export async function lookupStudyOrthancId(
+  studyInstanceUID: string
+): Promise<string | null> {
+  const res = await orthancFetch("/tools/lookup", {
+    method: "POST",
+    body: studyInstanceUID,
+  });
+  if (!res.ok) return null;
+  const results: Array<{ Type: string; ID: string }> = await res.json();
+  const study = results.find(r => r.Type === "Study");
+  return study?.ID ?? null;
+}
+
+/**
+ * C-STORE a whole study (by StudyInstanceUID) to a remote modality.
+ * Resolves the Orthanc resource ID first, then stores.
+ */
+export async function cStoreStudy(params: {
+  targetAet: string;
+  studyInstanceUID: string;
+}): Promise<{ success: boolean; message: string }> {
+  const orthancId = await lookupStudyOrthancId(params.studyInstanceUID);
+  if (!orthancId) {
+    return { success: false, message: "Study not found on Orthanc" };
+  }
+  return cStore({ targetAet: params.targetAet, orthancId });
+}
+
+/**
  * List configured modalities in Orthanc
  */
 export async function listModalities(): Promise<string[]> {

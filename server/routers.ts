@@ -936,8 +936,8 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         return sendEmail({
           to: input.to,
-          subject: "[Horos Viewer] Test Email",
-          html: "<p>This is a test email from Horos Medical Imaging Viewer. SMTP is configured correctly.</p>",
+          subject: "[MediView] Test Email",
+          html: "<p>This is a test email from MediView. SMTP is configured correctly.</p>",
         });
       }),
 

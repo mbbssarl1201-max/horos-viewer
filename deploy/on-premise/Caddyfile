@@ -6,6 +6,11 @@
 {$MEDIVIEW_HOSTNAME} {
 	tls internal
 
+	# Compression du transfert : le DICOM CT non compressé se réduit nettement
+	# (≈ ×2) → chargement plus rapide. Le navigateur décompresse de façon
+	# transparente, Cornerstone reçoit les octets complets.
+	encode zstd gzip
+
 	# Les imports DICOM (fichiers volumineux encodés en base64 dans tRPC) peuvent
 	# être lourds — on relève la limite de taille du corps de requête.
 	request_body {

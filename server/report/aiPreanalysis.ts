@@ -42,6 +42,7 @@ export interface PreanalysisKeyImage {
 }
 
 export interface PreanalysisResult {
+  technique: string;
   resultats: string;
   conclusion: string;
   model: string;
@@ -58,7 +59,10 @@ const SYSTEM_PROMPT = [
   '- N\'invente AUCUNE mesure ni valeur chiffrée. Exprime toujours l\'incertitude ("aspect évocateur de", "à corréler à la clinique", "sous réserve des coupes non fournies").',
   "- N'identifie jamais le patient et n'invente aucun contexte clinique.",
   "",
-  "Réponds UNIQUEMENT avec ces deux sections, exactement dans ce format (rien d'autre) :",
+  "Réponds UNIQUEMENT avec ces trois sections, exactement dans ce format (rien d'autre) :",
+  "Technique:",
+  "<description FACTUELLE et brève de l'acquisition d'après la modalité (ex. « Acquisition tomodensitométrique, coupes axiales »). N'invente NI produit de contraste, NI paramètres (kV/mAs/épaisseur) s'ils ne sont pas fournis.>",
+  "",
   "Résultats:",
   "<description structurée de ce qui est visible>",
   "",
@@ -92,7 +96,7 @@ export async function generatePreanalysis(
     `${images.length} coupe(s) clé(s) sélectionnée(s) te sont fournies ; l'examen complet n'est PAS joint.`
   );
   ctxLines.push(
-    "Analyse uniquement ces coupes selon la méthode, puis rédige les sections Résultats et Conclusion."
+    "Analyse uniquement ces coupes selon la méthode, puis rédige les sections Technique, Résultats et Conclusion."
   );
   const userText = ctxLines.join("\n");
 
@@ -189,12 +193,26 @@ export async function runAiPreanalysis(
 }
 
 export function parseSections(text: string): {
+  technique: string;
   resultats: string;
   conclusion: string;
 } {
-  const m = text.match(
+  // Format attendu : Technique / Résultats / Conclusion.
+  const m3 = text.match(
+    /Technique\s*:?\s*([\s\S]*?)\n\s*Résultats\s*:?\s*([\s\S]*?)\n\s*Conclusion\s*:?\s*([\s\S]*)$/i
+  );
+  if (m3)
+    return {
+      technique: m3[1].trim(),
+      resultats: m3[2].trim(),
+      conclusion: m3[3].trim(),
+    };
+  // Repli : ancien format à 2 sections (Résultats / Conclusion), technique vide.
+  const m2 = text.match(
     /Résultats\s*:?\s*([\s\S]*?)\n\s*Conclusion\s*:?\s*([\s\S]*)$/i
   );
-  if (m) return { resultats: m[1].trim(), conclusion: m[2].trim() };
-  return { resultats: text.trim(), conclusion: "" };
+  if (m2)
+    return { technique: "", resultats: m2[1].trim(), conclusion: m2[2].trim() };
+  // Repli ultime : tout dans resultats.
+  return { technique: "", resultats: text.trim(), conclusion: "" };
 }

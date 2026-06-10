@@ -48,6 +48,7 @@ export default function ReportPanel({
       })),
       indication: indication || undefined,
     });
+    if (res.technique) setTechnique(res.technique);
     setResultats(res.resultats);
     setConclusion(res.conclusion);
     setAiAssisted(true);

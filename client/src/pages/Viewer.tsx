@@ -519,12 +519,29 @@ export default function Viewer() {
         return;
       }
       // Cornerstone v4 : les voxels sont gérés par un voxelManager et NE sont PAS
-      // posés sur le PointData du vtkImageData (marching cubes recevait alors des
-      // scalaires null). On reconstruit un vtkImageData complet à partir de la
-      // géométrie du volume + le tableau scalaire du voxelManager.
-      const scalars: ArrayLike<number> | undefined =
-        volume.voxelManager?.getScalarData?.() ?? volume.getScalarData?.();
-      if (!scalars || (scalars as any).length === 0) {
+      // posés sur le PointData du vtkImageData (marching cubes recevait des
+      // scalaires null). De plus le volume streaming est « image-based » (par
+      // coupe) : getScalarData() LÈVE « No scalar data available » ; c'est
+      // getCompleteScalarDataArray() qui assemble les coupes en un tableau
+      // contigu. On essaie les méthodes dans cet ordre, chacune pouvant lever.
+      const vm = volume.voxelManager;
+      let scalars: ArrayLike<number> | undefined;
+      for (const getter of [
+        () => vm?.getCompleteScalarDataArray?.(),
+        () => vm?.getScalarData?.(),
+        () => volume.getScalarData?.(),
+      ]) {
+        try {
+          const s = getter();
+          if (s && (s as any).length > 0) {
+            scalars = s;
+            break;
+          }
+        } catch {
+          /* indisponible pour ce type de volume → méthode suivante */
+        }
+      }
+      if (!scalars) {
         toast.error(
           "Données du volume indisponibles (réessayez après chargement)"
         );

@@ -48,28 +48,29 @@ export interface PreanalysisResult {
 }
 
 const SYSTEM_PROMPT = [
-  "Tu es un assistant de pré-analyse d'imagerie médicale destiné à un MÉDECIN (pas au patient).",
-  "Tu observes une ou plusieurs coupes et tu proposes un BROUILLON en français, à valider par le médecin.",
-  "Règles STRICTES :",
-  "- N'invente AUCUNE mesure, valeur chiffrée, ni diagnostic catégorique.",
-  '- Exprime explicitement l\'incertitude ("aspect évocateur de", "à corréler", "sous réserve").',
-  "- Ne tente pas d'identifier le patient.",
-  "- Réponds UNIQUEMENT avec deux sections, exactement dans ce format :",
+  "Tu es un assistant de pré-analyse d'imagerie médicale qui aide UN MÉDECIN à rédiger un compte rendu radiologique. Tu produis un BROUILLON en français, destiné à être relu, corrigé et SIGNÉ par le médecin.",
+  "",
+  "Méthode :",
+  "- Tu n'observes que QUELQUES coupes sélectionnées, PAS l'examen complet : raisonne uniquement sur ce qui est RÉELLEMENT visible et ne suppose rien sur le reste de l'examen.",
+  "- Tiens compte de la modalité et de la région indiquées ; décris de façon SYSTÉMATIQUE et structurée (structures osseuses, articulations/espaces, parties molles, et tout signe pertinent).",
+  "- Reste DESCRIPTIF : ne nomme une pathologie précise (fracture, tumeur, lésion, etc.) QUE si le signe est franc et clairement visible ; sinon décris l'anomalie et formule une hypothèse PRUDENTE.",
+  "- Si rien d'anormal n'est clairement visible, dis-le explicitement (\"pas d'anomalie manifeste sur les coupes fournies\").",
+  '- N\'invente AUCUNE mesure ni valeur chiffrée. Exprime toujours l\'incertitude ("aspect évocateur de", "à corréler à la clinique", "sous réserve des coupes non fournies").',
+  "- N'identifie jamais le patient et n'invente aucun contexte clinique.",
+  "",
+  "Réponds UNIQUEMENT avec ces deux sections, exactement dans ce format (rien d'autre) :",
   "Résultats:",
-  "<description des observations>",
+  "<description structurée de ce qui est visible>",
   "",
   "Conclusion:",
-  "<synthèse prudente>",
+  "<synthèse prudente, hypothèses à confirmer>",
 ].join("\n");
 
 export async function generatePreanalysis(
   keyImages: PreanalysisKeyImage[],
-  opts: { indication?: string }
+  opts: { indication?: string; modality?: string; studyDescription?: string }
 ): Promise<PreanalysisResult> {
   const model = ENV.ollamaVisionModel;
-  const userText = opts.indication
-    ? `Indication clinique : ${opts.indication}\nDécris tes observations puis conclus.`
-    : "Décris tes observations puis conclus.";
 
   // Un VLM ne traite que quelques images, et chaque image vision coûte ~4000
   // tokens de contexte : le défaut Ollama (num_ctx=4096) est dépassé dès UNE
@@ -79,6 +80,21 @@ export async function generatePreanalysis(
     .slice(0, 3)
     .map(k => downscalePngBase64(k.pngBase64, 512));
   const numCtx = Math.min(16384, 4096 + 4500 * Math.max(1, images.length));
+
+  // Contexte de l'étude injecté pour ancrer le modèle (sinon il sur-interprète
+  // une image sans savoir la modalité ni la région).
+  const ctxLines: string[] = [];
+  if (opts.modality) ctxLines.push(`Modalité : ${opts.modality}`);
+  if (opts.studyDescription) ctxLines.push(`Examen : ${opts.studyDescription}`);
+  if (opts.indication)
+    ctxLines.push(`Indication clinique : ${opts.indication}`);
+  ctxLines.push(
+    `${images.length} coupe(s) clé(s) sélectionnée(s) te sont fournies ; l'examen complet n'est PAS joint.`
+  );
+  ctxLines.push(
+    "Analyse uniquement ces coupes selon la méthode, puis rédige les sections Résultats et Conclusion."
+  );
+  const userText = ctxLines.join("\n");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 180_000);
@@ -158,6 +174,8 @@ export async function runAiPreanalysis(
 
   const result = await _internal.generatePreanalysis(input.keyImages, {
     indication: input.indication,
+    modality: (study as any).modality ?? undefined,
+    studyDescription: (study as any).studyDescription ?? undefined,
   });
 
   await recordAccess({

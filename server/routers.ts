@@ -39,6 +39,7 @@ import {
 } from "./email";
 import { ENV } from "./_core/env";
 import { shouldNotify, PRIORITY_TRIGGERS, STATUS_TRIGGERS } from "./risNotify";
+import { annotationDataSchema } from "./annotationSchema";
 import dcmjs from "dcmjs";
 
 // DICOM Application Entity Title: max 16 chars, no path separators or spaces.
@@ -751,7 +752,7 @@ export const appRouter = router({
         z.object({
           instanceId: z.number(),
           type: z.enum(["length", "angle", "rect_roi", "ellipse_roi", "text"]),
-          data: z.any(),
+          data: annotationDataSchema,
         })
       )
       .mutation(async ({ input, ctx }) => {

@@ -1,5 +1,19 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useImperativeHandle,
+  forwardRef,
+} from "react";
 import { patchImagerPixelSpacing } from "@/lib/imagerPixelSpacing";
+import {
+  isSegmentationTool,
+  resolveBrushStrategy,
+  segmentationIdForViewport,
+  DEFAULT_SEGMENT_INDEX,
+  DEFAULT_BRUSH_SIZE,
+} from "@/lib/segmentation";
 import {
   toolNameToDbType,
   resolveInstanceId,
@@ -53,6 +67,13 @@ interface CornerstoneViewerProps {
    * le moteur de rendu / le tool group / l'id de viewport partagés.
    */
   instanceKey?: string;
+}
+
+// Poignée impérative exposée au parent : permet à la barre d'outils de demander
+// l'effacement du labelmap de CE viewport sans remonter d'état (la segmentation
+// vit dans Cornerstone, pas dans React).
+export interface CornerstoneViewerHandle {
+  clearSegmentation: () => void;
 }
 
 // Cornerstone3D initialization state
@@ -118,6 +139,9 @@ export async function initCornerstone() {
       cornerstoneTools.addTool(cornerstoneTools.BidirectionalTool);
       cornerstoneTools.addTool(cornerstoneTools.ProbeTool);
       cornerstoneTools.addTool(cornerstoneTools.PlanarFreehandROITool);
+      // Segmentation MVP (client only) : pinceau/gomme partageant une instance de
+      // BrushTool ; la bascule peindre/effacer se fait via la stratégie active.
+      cornerstoneTools.addTool(cornerstoneTools.BrushTool);
 
       cornerstoneInitialized = true;
       console.log("[Cornerstone3D] Initialized successfully");
@@ -221,6 +245,10 @@ function buildToolMap(cst: any): Record<string, string> {
     bidirectional: cst.BidirectionalTool.toolName,
     probe: cst.ProbeTool.toolName,
     freehand: cst.PlanarFreehandROITool.toolName,
+    // Pinceau et gomme pointent vers la MÊME instance de BrushTool : un seul outil
+    // Cornerstone, deux stratégies (remplir / effacer) gérées dans applyActiveTool.
+    brush: cst.BrushTool.toolName,
+    eraser: cst.BrushTool.toolName,
   };
 }
 
@@ -240,6 +268,15 @@ function applyActiveTool(cst: any, toolGroup: any, activeTool: string) {
   toolGroup.setToolActive(csName, {
     bindings: [{ mouseButton: cst.Enums.MouseBindings.Primary }],
   });
+  // Segmentation : si l'outil choisi est le pinceau ou la gomme, on bascule la
+  // stratégie active du BrushTool (remplir vs effacer). Aucun effet sur les autres
+  // outils (resolveBrushStrategy renvoie null).
+  const brushStrategy = resolveBrushStrategy(activeTool);
+  if (brushStrategy) {
+    try {
+      toolGroup.setActiveStrategy(cst.BrushTool.toolName, brushStrategy);
+    } catch {}
+  }
   try {
     toolGroup.setToolActive(cst.StackScrollTool.toolName, {
       bindings: [{ mouseButton: cst.Enums.MouseBindings.Wheel }],
@@ -247,21 +284,27 @@ function applyActiveTool(cst: any, toolGroup: any, activeTool: string) {
   } catch {}
 }
 
-export default function CornerstoneViewer({
-  imageUrls,
-  currentSlice,
-  onSliceChange,
-  activeTool,
-  windowWidth,
-  windowCenter,
-  onWindowLevelChange,
-  onZoomChange,
-  instances,
-  savedAnnotations,
-  onSaveAnnotation,
-  onRoiStats,
-  instanceKey,
-}: CornerstoneViewerProps) {
+const CornerstoneViewer = forwardRef<
+  CornerstoneViewerHandle,
+  CornerstoneViewerProps
+>(function CornerstoneViewer(
+  {
+    imageUrls,
+    currentSlice,
+    onSliceChange,
+    activeTool,
+    windowWidth,
+    windowCenter,
+    onWindowLevelChange,
+    onZoomChange,
+    instances,
+    savedAnnotations,
+    onSaveAnnotation,
+    onRoiStats,
+    instanceKey,
+  }: CornerstoneViewerProps,
+  ref
+) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -274,6 +317,12 @@ export default function CornerstoneViewer({
   const viewportIdRef = useRef(ids.viewportId);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const listenersCleanupRef = useRef<(() => void) | null>(null);
+  // Id du labelmap de ce viewport (créé après setStack) et drapeau « prêt » pour
+  // que clearSegmentation ne tente rien avant l'enregistrement de la segmentation.
+  const segmentationIdRef = useRef<string>(
+    segmentationIdForViewport(ids.viewportId)
+  );
+  const segmentationReadyRef = useRef(false);
 
   // Latest props/state read by the annotation event handler. Kept in refs so
   // the event subscription effect doesn't tear down and re-subscribe on every
@@ -296,6 +345,33 @@ export default function CornerstoneViewer({
   currentSliceRef.current = currentSlice;
   onSaveAnnotationRef.current = onSaveAnnotation;
   onRoiStatsRef.current = onRoiStats;
+
+  // Effacement du labelmap (bouton « Effacer seg. » de la barre). On retire la
+  // valeur du segment actif sur toutes les coupes ; best-effort, sans jamais
+  // lever d'erreur dans le flux de lecture. La segmentation étant en mémoire,
+  // l'effacement est immédiat et non persisté.
+  useImperativeHandle(
+    ref,
+    () => ({
+      clearSegmentation: () => {
+        if (!segmentationReadyRef.current) return;
+        (async () => {
+          try {
+            const cornerstoneTools = await import("@cornerstonejs/tools");
+            const cstSeg = cornerstoneTools.segmentation;
+            const segmentationId = segmentationIdRef.current;
+            const active =
+              cstSeg.segmentIndex?.getActiveSegmentIndex?.(segmentationId) ??
+              DEFAULT_SEGMENT_INDEX;
+            cstSeg.helpers?.clearSegmentValue?.(segmentationId, active);
+          } catch (e) {
+            console.warn("[Cornerstone3D] effacement segmentation ignoré:", e);
+          }
+        })();
+      },
+    }),
+    []
+  );
 
   // Initialize Cornerstone3D
   useEffect(() => {
@@ -522,12 +598,88 @@ export default function CornerstoneViewer({
           cornerstoneTools.BidirectionalTool,
           cornerstoneTools.ProbeTool,
           cornerstoneTools.PlanarFreehandROITool,
+          cornerstoneTools.BrushTool,
         ].forEach(T => toolGroup.addTool(T.toolName));
         toolGroup.addViewport(
           viewportIdRef.current,
           renderingEngineIdRef.current
         );
         applyActiveTool(cornerstoneTools, toolGroup, activeTool);
+
+        // --- Segmentation MVP (client only, in-memory labelmap) ---
+        // On crée un labelmap STACK dérivé de la pile courante (mêmes imageIds,
+        // tampon Uint8) puis on l'enregistre et on ajoute sa représentation au
+        // viewport pour que le pinceau peigne une surcouche colorée. Tout repli
+        // (API absente, géométrie inattendue) est silencieux : la segmentation est
+        // une fonctionnalité additive qui ne doit JAMAIS casser le viewer.
+        segmentationReadyRef.current = false;
+        try {
+          const cstSeg = cornerstoneTools.segmentation;
+          const SegEnums = cornerstoneTools.Enums.SegmentationRepresentations;
+          const segmentationId = segmentationIdRef.current;
+
+          // Repart d'un état propre si une segmentation du même id traînait
+          // (re-setup sur changement de série / re-montage).
+          try {
+            cstSeg.removeSegmentation?.(segmentationId);
+          } catch {}
+
+          // Labelmap dérivé : un imageId Uint8 par coupe source.
+          const derived = (cornerstone as any).imageLoader
+            .createAndCacheDerivedLabelmapImages
+            ? (
+                cornerstone as any
+              ).imageLoader.createAndCacheDerivedLabelmapImages(imageIds)
+            : null;
+          const labelmapImageIds: string[] = (derived || [])
+            .map((img: any) => img?.imageId)
+            .filter((x: any): x is string => typeof x === "string");
+
+          if (labelmapImageIds.length === imageIds.length) {
+            cstSeg.addSegmentations([
+              {
+                segmentationId,
+                representation: {
+                  type: SegEnums.Labelmap,
+                  data: { imageIds: labelmapImageIds },
+                },
+              },
+            ]);
+            await cstSeg.addLabelmapRepresentationToViewport(
+              viewportIdRef.current,
+              [{ segmentationId, type: SegEnums.Labelmap }]
+            );
+            try {
+              cstSeg.activeSegmentation?.setActiveSegmentation?.(
+                viewportIdRef.current,
+                segmentationId
+              );
+            } catch {}
+            try {
+              cstSeg.segmentIndex?.setActiveSegmentIndex?.(
+                segmentationId,
+                DEFAULT_SEGMENT_INDEX
+              );
+            } catch {}
+            // Taille de pinceau par défaut pour ce tool group.
+            try {
+              cornerstoneTools.utilities.segmentation.setBrushSizeForToolGroup(
+                toolGroupIdRef.current,
+                DEFAULT_BRUSH_SIZE
+              );
+            } catch {}
+            segmentationReadyRef.current = true;
+          } else {
+            console.warn(
+              "[Cornerstone3D] labelmap dérivé indisponible — segmentation désactivée pour cette pile"
+            );
+          }
+        } catch (e) {
+          console.warn(
+            "[Cornerstone3D] configuration de la segmentation ignorée:",
+            e
+          );
+        }
 
         // Keep the WW/WC and Zoom overlays in sync with live tool interaction
         // (the WindowLevel and Zoom tools change the viewport directly, not the
@@ -591,6 +743,11 @@ export default function CornerstoneViewer({
       resizeObserverRef.current = null;
       listenersCleanupRef.current?.();
       listenersCleanupRef.current = null;
+      // La segmentation de l'ancienne pile est invalidée : le prochain
+      // setupViewport recrée un labelmap propre (et removeSegmentation y est
+      // appelé au début). On marque seulement « non prêt » ici pour bloquer un
+      // clearSegmentation pendant la transition.
+      segmentationReadyRef.current = false;
     };
   }, [isInitialized, imageUrls]);
 
@@ -608,9 +765,15 @@ export default function CornerstoneViewer({
       if (!instanceKey) return;
       const reId = renderingEngineIdRef.current;
       const tgId = toolGroupIdRef.current;
+      const segId = segmentationIdRef.current;
       (async () => {
         try {
           const ct = await import("@cornerstonejs/tools");
+          // Retire le labelmap de cette cellule pour ne pas fuiter une
+          // segmentation orpheline quand la grille se réduit (2x2→1x1).
+          try {
+            ct.segmentation.removeSegmentation?.(segId);
+          } catch {}
           if (ct.ToolGroupManager.getToolGroup(tgId)) {
             ct.ToolGroupManager.destroyToolGroup(tgId);
           }
@@ -790,4 +953,6 @@ export default function CornerstoneViewer({
       style={{ width: "100%", height: "100%" }}
     />
   );
-}
+});
+
+export default CornerstoneViewer;

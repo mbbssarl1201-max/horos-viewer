@@ -1088,6 +1088,7 @@ export const appRouter = router({
             .max(20),
           includeVideo: z.boolean(),
           message: z.string().max(500).optional(),
+          aiAssisted: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -1095,6 +1096,27 @@ export const appRouter = router({
           "./report/sendStudyReport"
         );
         return sendStudyReportImpl(input, ctx as any);
+      }),
+
+    aiPreanalysis: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number(),
+          keyImages: z
+            .array(
+              z.object({
+                pngBase64: z.string().min(1).max(10_000_000),
+                sliceIndex: z.number().int().min(0),
+              })
+            )
+            .min(1)
+            .max(20),
+          indication: z.string().max(5000).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { runAiPreanalysis } = await import("./report/aiPreanalysis");
+        return runAiPreanalysis(input, ctx as any);
       }),
 
     notifyNewStudy: medicalProcedure

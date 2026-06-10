@@ -38,4 +38,8 @@ export const ENV = {
   // Allow a self-hosted relay without a public TLS cert (e.g. Mailu notls on
   // the same host). Only safe when the SMTP hop stays on a trusted network.
   smtpInsecure: (process.env.SMTP_INSECURE ?? "false") === "true",
+  // Boîte du RIS (système d'information de radiologie) à notifier sur les
+  // transitions de statut/priorité d'une étude. OPT-IN : si vide, AUCUNE
+  // notification automatique n'est envoyée (la fonctionnalité est un no-op).
+  risNotifyEmail: process.env.RIS_NOTIFY_EMAIL ?? "",
 };

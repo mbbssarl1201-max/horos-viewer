@@ -37,6 +37,8 @@ import {
   notifyReportFinalized,
   getSmtpStatus,
 } from "./email";
+import { ENV } from "./_core/env";
+import { shouldNotify, PRIORITY_TRIGGERS, STATUS_TRIGGERS } from "./risNotify";
 import dcmjs from "dcmjs";
 
 // DICOM Application Entity Title: max 16 chars, no path separators or spaces.
@@ -341,6 +343,9 @@ export const appRouter = router({
             message: "DB unavailable",
           });
 
+        // Lire l'état AVANT mise à jour pour ne notifier que sur une transition.
+        const before = await getStudyById(input.id);
+
         await db
           .update(studies)
           .set({ status: input.status })
@@ -355,6 +360,32 @@ export const appRouter = router({
             message: `Study #${input.id} report has been finalized`,
             studyId: input.id,
           });
+        }
+
+        // Notification e-mail RIS sur transition vers "finalized" (opt-in).
+        // Fail-soft : une erreur d'envoi ne fait jamais échouer la mutation.
+        if (
+          shouldNotify(
+            before?.status,
+            input.status,
+            STATUS_TRIGGERS,
+            ENV.risNotifyEmail
+          )
+        ) {
+          try {
+            await notifyReportFinalized({
+              recipientEmail: ENV.risNotifyEmail,
+              patientName: before?.patientName || "—",
+              modality: before?.modality || "—",
+              studyDate: before?.studyDate || "—",
+              reportAuthor: ctx.user.email || ctx.user.openId || "—",
+            });
+          } catch (err: any) {
+            console.warn(
+              "[RIS] notifyReportFinalized échouée:",
+              err?.message ?? err
+            );
+          }
         }
 
         return { success: true };
@@ -378,6 +409,9 @@ export const appRouter = router({
             message: "DB unavailable",
           });
 
+        // Lire l'état AVANT mise à jour pour ne notifier que sur une transition.
+        const before = await getStudyById(input.id);
+
         await db
           .update(studies)
           .set({ priority: input.priority })
@@ -392,6 +426,33 @@ export const appRouter = router({
             message: `Study #${input.id} has been marked as STAT/urgent`,
             studyId: input.id,
           });
+        }
+
+        // Notification e-mail RIS sur transition vers "stat"/"urgent" (opt-in).
+        // Fail-soft : une erreur d'envoi ne fait jamais échouer la mutation.
+        if (
+          shouldNotify(
+            before?.priority,
+            input.priority,
+            PRIORITY_TRIGGERS,
+            ENV.risNotifyEmail
+          )
+        ) {
+          try {
+            await notifyStatUrgent({
+              recipientEmail: ENV.risNotifyEmail,
+              patientName: before?.patientName || "—",
+              modality: before?.modality || "—",
+              studyDate: before?.studyDate || "—",
+              studyDescription: before?.studyDescription || "—",
+              urgencyReason: `Priorité passée à « ${input.priority} »`,
+            });
+          } catch (err: any) {
+            console.warn(
+              "[RIS] notifyStatUrgent échouée:",
+              err?.message ?? err
+            );
+          }
         }
 
         return { success: true };

@@ -47,6 +47,7 @@ import {
   Spline,
 } from "lucide-react";
 import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
+import SeriesThumbnail from "@/components/SeriesThumbnail";
 import {
   Dialog,
   DialogContent,
@@ -654,10 +655,14 @@ export default function Viewer() {
                       : "border-border hover:border-primary/50"
                   }`}
                 >
-                  {/* Thumbnail placeholder */}
-                  <div className="aspect-square bg-black rounded mb-1.5 flex items-center justify-center">
-                    <Layers className="w-6 h-6 text-muted-foreground/30" />
-                  </div>
+                  {/* Vignette réelle (coupe représentative rendue hors écran),
+                      avec repli sur le placeholder noir tant qu'elle n'est pas
+                      prête ou si la série n'est pas chargeable. */}
+                  <SeriesThumbnail
+                    seriesId={s.id}
+                    windowWidth={windowWidth}
+                    windowCenter={windowCenter}
+                  />
                   <div className="text-[10px] text-foreground truncate">
                     {s.seriesDescription || `Series ${s.seriesNumber || s.id}`}
                   </div>

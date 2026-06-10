@@ -49,3 +49,29 @@ describe("storageDelete", () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 });
+
+describe("storageGetBuffer", () => {
+  it("concatène un stream en Buffer", async () => {
+    vi.resetModules();
+    const { Readable } = await import("stream");
+    vi.doMock("@aws-sdk/client-s3", () => ({
+      S3Client: class {
+        send() {
+          return Promise.resolve({
+            Body: Readable.from([Buffer.from("AB"), Buffer.from("CD")]),
+          });
+        }
+      },
+      GetObjectCommand: class {},
+      PutObjectCommand: class {},
+      DeleteObjectCommand: class {},
+    }));
+    process.env.S3_ENDPOINT = "http://minio:9000";
+    process.env.S3_BUCKET = "horos-dicom";
+    process.env.S3_ACCESS_KEY = "k";
+    process.env.S3_SECRET_KEY = "s";
+    const { storageGetBuffer } = await import("./storage");
+    const buf = await storageGetBuffer("dicom/x.dcm");
+    expect(buf.toString()).toBe("ABCD");
+  });
+});

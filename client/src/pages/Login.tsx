@@ -30,11 +30,11 @@ export default function Login() {
 
   const loginMutation = trpc.auth.login.useMutation({
     onSuccess: onAuthed,
-    onError: (e) => setError(e.message),
+    onError: e => setError(e.message),
   });
   const registerMutation = trpc.auth.register.useMutation({
     onSuccess: onAuthed,
-    onError: (e) => setError(e.message),
+    onError: e => setError(e.message),
   });
 
   const pending = loginMutation.isPending || registerMutation.isPending;
@@ -53,7 +53,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>Horos Viewer</CardTitle>
+          <CardTitle>MediView</CardTitle>
           <CardDescription>
             {mode === "login"
               ? "Sign in to access the DICOM viewer"
@@ -68,7 +68,7 @@ export default function Login() {
                 <Input
                   id="name"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={e => setName(e.target.value)}
                   autoComplete="name"
                   placeholder="Dr. Jane Smith"
                 />
@@ -81,7 +81,7 @@ export default function Login() {
                 type="email"
                 required
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={e => setEmail(e.target.value)}
                 autoComplete="email"
               />
             </div>
@@ -93,7 +93,7 @@ export default function Login() {
                 required
                 minLength={mode === "register" ? 8 : undefined}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={e => setPassword(e.target.value)}
                 autoComplete={
                   mode === "login" ? "current-password" : "new-password"
                 }

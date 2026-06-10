@@ -245,7 +245,7 @@ async function startServer() {
       doc.setTextColor(100, 100, 100);
       doc.text(`Generated: ${new Date().toISOString()}`, 20, 280);
       doc.text(
-        "Horos Medical Imaging Viewer - For diagnostic purposes only",
+        "MediView - For diagnostic purposes only",
         20,
         286
       );

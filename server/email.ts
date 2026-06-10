@@ -104,7 +104,7 @@ export async function notifyNewStudy(params: {
 }): Promise<{ success: boolean; error?: string }> {
   return sendEmail({
     to: params.recipientEmail,
-    subject: `[Horos] New Study Received - ${params.patientName} (${params.modality})`,
+    subject: `[MediView] New Study Received - ${params.patientName} (${params.modality})`,
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background: #1a1a2e; color: #e0e0e0; padding: 20px; border-radius: 8px;">
@@ -116,7 +116,7 @@ export async function notifyNewStudy(params: {
             <tr><td style="padding: 8px 0; color: #9e9e9e;">Description:</td><td style="padding: 8px 0; color: #fff;">${esc(params.studyDescription)}</td></tr>
             ${params.institution ? `<tr><td style="padding: 8px 0; color: #9e9e9e;">Institution:</td><td style="padding: 8px 0; color: #fff;">${esc(params.institution)}</td></tr>` : ""}
           </table>
-          <p style="margin-top: 20px; font-size: 12px; color: #757575;">This is an automated notification from Horos Medical Imaging Viewer.</p>
+          <p style="margin-top: 20px; font-size: 12px; color: #757575;">This is an automated notification from MediView.</p>
         </div>
       </div>
     `,
@@ -149,7 +149,7 @@ export async function notifyStatUrgent(params: {
             <tr><td style="padding: 8px 0; color: #9e9e9e;">Description:</td><td style="padding: 8px 0; color: #fff;">${esc(params.studyDescription)}</td></tr>
             ${params.urgencyReason ? `<tr><td style="padding: 8px 0; color: #9e9e9e;">Reason:</td><td style="padding: 8px 0; color: #f44336; font-weight: bold;">${esc(params.urgencyReason)}</td></tr>` : ""}
           </table>
-          <p style="margin-top: 20px; font-size: 12px; color: #757575;">This is an automated STAT notification from Horos Medical Imaging Viewer.</p>
+          <p style="margin-top: 20px; font-size: 12px; color: #757575;">This is an automated STAT notification from MediView.</p>
         </div>
       </div>
     `,
@@ -169,7 +169,7 @@ export async function notifyReportFinalized(params: {
 }): Promise<{ success: boolean; error?: string }> {
   return sendEmail({
     to: params.recipientEmail,
-    subject: `[Horos] Report Finalized - ${params.patientName} (${params.modality})`,
+    subject: `[MediView] Report Finalized - ${params.patientName} (${params.modality})`,
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background: #1a1a2e; color: #e0e0e0; padding: 20px; border-radius: 8px; border-left: 4px solid #4caf50;">
@@ -181,7 +181,7 @@ export async function notifyReportFinalized(params: {
             <tr><td style="padding: 8px 0; color: #9e9e9e;">Author:</td><td style="padding: 8px 0; color: #fff;">${esc(params.reportAuthor)}</td></tr>
             ${params.reportSummary ? `<tr><td style="padding: 8px 0; color: #9e9e9e;">Summary:</td><td style="padding: 8px 0; color: #fff;">${esc(params.reportSummary)}</td></tr>` : ""}
           </table>
-          <p style="margin-top: 20px; font-size: 12px; color: #757575;">This is an automated notification from Horos Medical Imaging Viewer.</p>
+          <p style="margin-top: 20px; font-size: 12px; color: #757575;">This is an automated notification from MediView.</p>
         </div>
       </div>
     `,

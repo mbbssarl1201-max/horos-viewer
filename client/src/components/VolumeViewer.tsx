@@ -67,12 +67,36 @@ export default function VolumeViewer({
   const coronalRef = useRef<HTMLDivElement>(null);
   const obliqueRef = useRef<HTMLDivElement>(null);
   const vr3dRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<any>(null);
   // Module @cornerstonejs/tools capturé au setup pour un teardown SYNCHRONE dans
   // le cleanup (l'ordre de destruction est critique, cf. cleanup ci-dessous).
   const csToolsRef = useRef<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Re-rend le volume quand la zone d'affichage change de taille (ouverture du
+  // panneau « Compte rendu », redimensionnement de la fenêtre…). Sans cela, les
+  // viewports MPR/3D restent figés à leur taille initiale → quadrants noirs ou
+  // rayés (« problème de chargement »).
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        try {
+          engineRef.current?.resize(true, false);
+        } catch {}
+      });
+    });
+    ro.observe(el);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -395,7 +419,7 @@ export default function VolumeViewer({
   }
 
   return (
-    <div className="absolute inset-0 bg-black">
+    <div ref={rootRef} className="absolute inset-0 bg-black">
       {loading && (
         <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
           <p className="text-xs text-muted-foreground">

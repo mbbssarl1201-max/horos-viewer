@@ -76,15 +76,13 @@ export async function generatePreanalysis(
   keyImages: PreanalysisKeyImage[],
   opts: { indication?: string; modality?: string; studyDescription?: string }
 ): Promise<PreanalysisResult> {
-  const model = ENV.ollamaVisionModel;
-
-  // Un VLM ne traite que quelques images, et chaque image vision coûte ~4000
-  // tokens de contexte : le défaut Ollama (num_ctx=4096) est dépassé dès UNE
-  // image (sinon "request exceeds context size" + crash du runner). On plafonne
-  // donc à 3 images et on dimensionne num_ctx en conséquence (borné à 16384).
+  // On plafonne à 3 images et on les réduit avant l'envoi au modèle vision.
+  // 768 px : Claude tire parti d'un peu plus de détail tout en bornant le coût ;
+  // pour Ollama, on dimensionne num_ctx en conséquence (chaque image vision
+  // coûte ~4000 tokens, le défaut Ollama num_ctx=4096 est dépassé dès UNE image).
   const images = keyImages
     .slice(0, 3)
-    .map(k => downscalePngBase64(k.pngBase64, 512));
+    .map(k => downscalePngBase64(k.pngBase64, 768));
   const numCtx = Math.min(16384, 4096 + 4500 * Math.max(1, images.length));
 
   // Contexte de l'étude injecté pour ancrer le modèle (sinon il sur-interprète
@@ -102,6 +100,20 @@ export async function generatePreanalysis(
   );
   const userText = ctxLines.join("\n");
 
+  // Aiguillage du backend : Claude (cloud, meilleure qualité d'analyse) si
+  // configuré et clé présente, sinon Ollama local (PHI-safe).
+  if (ENV.aiBackend === "claude" && ENV.anthropicApiKey) {
+    return generateViaClaude(images, userText);
+  }
+  return generateViaOllama(images, userText, numCtx);
+}
+
+async function generateViaOllama(
+  images: string[],
+  userText: string,
+  numCtx: number
+): Promise<PreanalysisResult> {
+  const model = ENV.ollamaVisionModel;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 180_000);
   let content = "";
@@ -134,7 +146,34 @@ export async function generatePreanalysis(
   } finally {
     clearTimeout(timeout);
   }
-  return { ...parseSections(content), model };
+  return { ...parseSections(content), model: ENV.ollamaVisionModel };
+}
+
+async function generateViaClaude(
+  images: string[],
+  userText: string
+): Promise<PreanalysisResult> {
+  const Anthropic = (await import("@anthropic-ai/sdk")).default;
+  const client = new Anthropic({ apiKey: ENV.anthropicApiKey });
+  const content: any[] = [
+    ...images.map(b64 => ({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: b64 },
+    })),
+    { type: "text", text: userText },
+  ];
+  const resp = await client.messages.create({
+    model: ENV.anthropicModel,
+    max_tokens: 2000,
+    thinking: { type: "adaptive" },
+    system: SYSTEM_PROMPT,
+    messages: [{ role: "user", content }],
+  });
+  const text = (resp.content as any[])
+    .filter(b => b.type === "text")
+    .map(b => b.text)
+    .join("\n");
+  return { ...parseSections(text), model: ENV.anthropicModel };
 }
 
 // Indirection pour permettre au test de mocker l'appel réseau.

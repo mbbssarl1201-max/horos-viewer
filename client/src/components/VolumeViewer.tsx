@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { slabModeToBlend, type SlabMode } from "@/lib/slabBlend";
+import { PRESETS_3D, presetParId } from "@/lib/volumePresets3d";
+
+// Ré-export pour compat (Viewer.tsx importe PRESETS_3D depuis ce module).
+export { PRESETS_3D } from "@/lib/volumePresets3d";
 
 /**
  * VolumeViewer — real volumetric rendering with Cornerstone3D.
@@ -37,20 +41,32 @@ interface VolumeViewerProps {
 const VOLUME_ENGINE_ID = "horosVolumeEngine";
 
 /**
- * Presets de volume rendering 3D exposés à l'utilisateur. `preset` = nom du preset
- * Cornerstone3D (cf. constants/viewportPresets). `mip:true` → projection d'intensité
- * maximale (blend mode MAXIMUM_INTENSITY_BLEND), pas un simple transfer function.
+ * Active l'ombrage volumétrique (shading) sur l'acteur 3D pour donner de la
+ * profondeur/du relief, APRÈS application d'un preset (le preset peut redéfinir
+ * shade/ambient/diffuse/specular). Robuste : l'acteur peut ne pas être prêt
+ * immédiatement → tout est encapsulé en try/catch, échec silencieux toléré.
+ * Valeurs ambient/diffuse/specular = 0.2 / 0.7 / 0.3 (rendu clinique équilibré).
  */
-export const PRESETS_3D = [
-  { id: "os", label: "Os", preset: "CT-Bone", mip: false },
-  { id: "mous", label: "Tissus mous", preset: "CT-Soft-Tissue", mip: false },
-  { id: "angio", label: "Angio", preset: "CT-Coronary-Arteries-2", mip: false },
-  { id: "poumon", label: "Poumon", preset: "CT-Lung", mip: false },
-  { id: "mip", label: "MIP", preset: "CT-MIP", mip: true },
-] as const;
-
-function presetParId(id: string | undefined) {
-  return PRESETS_3D.find(p => p.id === (id ?? "os")) ?? PRESETS_3D[0];
+function applyShading(vp: any) {
+  try {
+    const actors = vp?.getActors?.();
+    if (!actors || !actors.length) return;
+    for (const entry of actors) {
+      const actor = entry?.actor ?? entry?.volumeActor ?? entry;
+      const property = actor?.getProperty?.();
+      if (!property) continue;
+      property.setShade?.(true);
+      property.setAmbient?.(0.2);
+      property.setDiffuse?.(0.7);
+      property.setSpecular?.(0.3);
+      property.setSpecularPower?.(8.0);
+      // Opacité de gradient : atténue le « brouillard » homogène, fait ressortir
+      // les surfaces. Le preset peut déjà la régler ; on garantit qu'elle est ON.
+      property.setUseGradientOpacity?.(0, true);
+    }
+  } catch {
+    // Acteur pas encore prêt — sera ré-appliqué au prochain applyPreset/load.
+  }
 }
 
 export default function VolumeViewer({
@@ -316,6 +332,53 @@ export default function VolumeViewer({
             ["VR_3D"]
           );
           const vp = engine.getViewport("VR_3D") as any;
+
+          // ── Outils d'interaction 3D (rotation/pan/zoom) ──────────────────
+          // Init @cornerstonejs/tools (idempotent) + tool group dédié au 3D :
+          //   • TrackballRotate sur le bouton PRIMAIRE (rotation au glisser)
+          //   • Pan sur le bouton AUXILIAIRE (molette enfoncée / milieu)
+          //   • Zoom sur le bouton SECONDAIRE et à la molette
+          const csTools3d = await import("@cornerstonejs/tools");
+          const {
+            init: toolsInit3d,
+            ToolGroupManager: TGM3d,
+            TrackballRotateTool,
+            PanTool: PanTool3d,
+            ZoomTool: ZoomTool3d,
+            Enums: csEnums3d,
+            addTool: addTool3d,
+          } = csTools3d as any;
+          // Capturer pour un teardown synchrone (cf. cleanup, même logique MPR).
+          csToolsRef.current = csTools3d;
+          await toolsInit3d();
+          for (const t of [TrackballRotateTool, PanTool3d, ZoomTool3d]) {
+            try {
+              addTool3d(t);
+            } catch {} // déjà enregistré — ignorer
+          }
+          const TG3D_ID = "HOROS_3D_TG";
+          try {
+            TGM3d.destroyToolGroup?.(TG3D_ID);
+          } catch {}
+          const tg3d = TGM3d.createToolGroup(TG3D_ID)!;
+          for (const t of [TrackballRotateTool, PanTool3d, ZoomTool3d]) {
+            tg3d.addTool(t.toolName);
+          }
+          tg3d.addViewport("VR_3D", VOLUME_ENGINE_ID);
+          const { MouseBindings: MB3d } = csEnums3d;
+          tg3d.setToolActive(TrackballRotateTool.toolName, {
+            bindings: [{ mouseButton: MB3d.Primary }],
+          });
+          tg3d.setToolActive(PanTool3d.toolName, {
+            bindings: [{ mouseButton: MB3d.Auxiliary }],
+          });
+          tg3d.setToolActive(ZoomTool3d.toolName, {
+            bindings: [
+              { mouseButton: MB3d.Secondary },
+              { mouseButton: MB3d.Wheel },
+            ],
+          });
+
           const applyPreset = () => {
             const p = presetParId(preset3d);
             try {
@@ -328,11 +391,21 @@ export default function VolumeViewer({
             try {
               vp.setProperties({ preset: p.preset });
             } catch {}
+            // Ombrage APRÈS le preset (le preset peut redéfinir le shading).
+            // Désactivé en MIP : la projection max ne tient pas compte du relief.
+            if (!p.mip) applyShading(vp);
             vp.render();
           };
           engine.resize(true, false);
           applyPreset();
-          volume.load(() => applyPreset());
+          // Bien cadrer le volume une fois chargé, fond noir déjà réglé.
+          volume.load(() => {
+            applyPreset();
+            try {
+              vp.resetCamera?.();
+            } catch {}
+            vp.render();
+          });
         }
 
         if (!cancelled) setLoading(false);
@@ -365,6 +438,9 @@ export default function VolumeViewer({
       } catch {}
       try {
         csTools?.ToolGroupManager?.destroyToolGroup?.("HOROS_MPR_TG");
+      } catch {}
+      try {
+        csTools?.ToolGroupManager?.destroyToolGroup?.("HOROS_3D_TG");
       } catch {}
       try {
         engineRef.current?.destroy();
@@ -403,6 +479,8 @@ export default function VolumeViewer({
       try {
         vp.setProperties({ preset: p.preset });
       } catch {}
+      // Ré-appliquer l'ombrage après le preset (sauf en MIP).
+      if (!p.mip) applyShading(vp);
       vp.render();
     })();
     return () => {

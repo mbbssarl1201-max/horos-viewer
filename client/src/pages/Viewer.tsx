@@ -620,20 +620,30 @@ export default function Viewer() {
             </select>
           </div>
         )}
-        {/* Presets de rendu volumique — 3D only */}
+        {/* Presets de rendu volumique — 3D only (liste déroulante : trop de
+            presets pour des boutons). Rotation à la souris (bouton gauche),
+            zoom molette/clic droit, pan clic du milieu. */}
         {viewMode === "3d" && (
-          <div className="flex items-center gap-1 px-2">
+          <div className="flex items-center gap-2 px-2">
             <label className="text-[10px] text-muted-foreground">Preset</label>
-            {PRESETS_3D.map(p => (
-              <button
-                key={p.id}
-                onClick={() => setPreset3d(p.id)}
-                className={`toolbar-btn ${preset3d === p.id ? "active" : ""}`}
-                title={`Rendu 3D — ${p.label}`}
-              >
-                <span className="text-[10px]">{p.label}</span>
-              </button>
-            ))}
+            <select
+              className="bg-transparent text-[10px] border border-border rounded"
+              value={preset3d}
+              onChange={e => setPreset3d(e.target.value)}
+              title="Rendu volumique 3D — choisir un preset"
+            >
+              {PRESETS_3D.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+            <span
+              className="text-[9px] text-muted-foreground"
+              title="Faire tourner : glisser (bouton gauche) · Zoom : molette/clic droit · Déplacer : clic du milieu"
+            >
+              ↺ glisser pour tourner
+            </span>
           </div>
         )}
         <Separator orientation="vertical" className="h-7 mx-1" />

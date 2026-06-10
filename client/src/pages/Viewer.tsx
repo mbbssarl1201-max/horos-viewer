@@ -186,57 +186,36 @@ export default function Viewer() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [totalSlices]);
 
-  // Cornerstone initialization flag for HU stats polling
-  const isViewerReady = !!instancesList && instancesList.length > 0;
-
-  // Listen for ROI annotation completed events to extract HU stats
-  useEffect(() => {
-    if (!isViewerReady) return;
-
-    const handleAnnotationCompleted = async () => {
-      try {
-        const cornerstoneTools = await import("@cornerstonejs/tools");
-        const { annotation } = cornerstoneTools;
-
-        // Get all annotations for the current viewport
-        const allAnnotations = annotation.state.getAllAnnotations();
-        if (allAnnotations && allAnnotations.length > 0) {
-          const lastAnnotation = allAnnotations[allAnnotations.length - 1];
-          const data = lastAnnotation?.data;
-
-          if (data?.cachedStats) {
-            // Extract HU statistics from ROI tools
-            const stats = Object.values(data.cachedStats)[0] as any;
-            if (stats) {
-              setHuStats({
-                mean: stats.mean ?? 0,
-                stdDev: stats.stdDev ?? 0,
-                min: stats.min ?? 0,
-                max: stats.max ?? 0,
-                area: stats.area ?? 0,
-              });
-            }
-          }
+  // Persist measurement annotations to the DB. (v1 inserts a new row per save;
+  // there is no update endpoint yet — see the risk note in the PR description.)
+  const saveAnnotationMutation = trpc.annotations.save.useMutation();
+  const handleSaveAnnotation = useCallback(
+    (a: { instanceId: number; type: any; data: unknown }) => {
+      saveAnnotationMutation.mutate(
+        { instanceId: a.instanceId, type: a.type, data: a.data },
+        {
+          onError: err => {
+            // Best-effort: a failed save must not interrupt the reading workflow.
+            console.warn("[annotations] échec de sauvegarde:", err?.message);
+          },
         }
-      } catch (err) {
-        // Stats extraction is best-effort
-      }
-    };
+      );
+    },
+    [saveAnnotationMutation]
+  );
 
-    // Poll for annotation changes when ROI tools are active
-    const roiTools = ["ellipse", "rect"];
-    let interval: ReturnType<typeof setInterval> | null = null;
+  // Re-hydration source: all saved annotations for the current series, fetched
+  // in one round-trip. Re-added to the viewport by CornerstoneViewer.
+  const { data: savedAnnotations } = trpc.annotations.listBySeries.useQuery(
+    { seriesId: selectedSeries! },
+    { enabled: !!selectedSeries }
+  );
 
-    if (roiTools.includes(activeTool)) {
-      interval = setInterval(handleAnnotationCompleted, 1000);
-    } else {
-      setHuStats(null);
-    }
-
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [activeTool, isViewerReady]);
+  // ROI tools clear the stats overlay when deselected (it now updates via the
+  // ANNOTATION_COMPLETED/MODIFIED events wired in CornerstoneViewer).
+  useEffect(() => {
+    if (!["ellipse", "rect"].includes(activeTool)) setHuStats(null);
+  }, [activeTool]);
 
   // Handle scroll on viewport for slice navigation
   const handleWheel = useCallback(
@@ -617,6 +596,13 @@ export default function Viewer() {
                     setWindowCenter(wc);
                   }}
                   onZoomChange={setZoomPercent}
+                  instances={instancesList.map((inst: any) => ({
+                    id: inst.id,
+                    storageUrl: inst.storageUrl,
+                  }))}
+                  savedAnnotations={savedAnnotations}
+                  onSaveAnnotation={handleSaveAnnotation}
+                  onRoiStats={setHuStats}
                 />
               ) : (
                 <VolumeViewer

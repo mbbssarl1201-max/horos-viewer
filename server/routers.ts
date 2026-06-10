@@ -723,6 +723,34 @@ export const appRouter = router({
           .from(annotations)
           .where(eq(annotations.instanceId, input.instanceId));
       }),
+
+    // All saved annotations for every instance in a series. Used by the viewer
+    // to re-hydrate measurements when a series loads, in a single round-trip
+    // instead of one query per slice.
+    listBySeries: medicalProcedure
+      .input(z.object({ seriesId: z.number() }))
+      .query(async ({ input }) => {
+        const { getDb } = await import("./db");
+        const { annotations, instances } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) return [];
+
+        const rows = await db
+          .select({
+            id: annotations.id,
+            instanceId: annotations.instanceId,
+            userId: annotations.userId,
+            type: annotations.type,
+            data: annotations.data,
+            createdAt: annotations.createdAt,
+          })
+          .from(annotations)
+          .innerJoin(instances, eq(annotations.instanceId, instances.id))
+          .where(eq(instances.seriesId, input.seriesId));
+
+        return rows;
+      }),
   }),
 
   // Export router

@@ -1,4 +1,6 @@
+import { TRPCError } from "@trpc/server";
 import { ENV } from "../_core/env";
+import { getStudyById, countRecentAccess, recordAccess } from "../db";
 
 export interface PreanalysisKeyImage {
   pngBase64: string;
@@ -67,6 +69,61 @@ export async function generatePreanalysis(
     clearTimeout(timeout);
   }
   return { ...parseSections(content), model };
+}
+
+// Indirection pour permettre au test de mocker l'appel réseau.
+export const _internal = { generatePreanalysis };
+
+function assertPng(b64: string) {
+  const png = Buffer.from(b64, "base64");
+  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (png.length < 24 || !png.subarray(0, 8).equals(sig)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Image clé : PNG attendu",
+    });
+  }
+}
+
+export interface RunAiPreanalysisInput {
+  studyId: number;
+  keyImages: PreanalysisKeyImage[];
+  indication?: string;
+}
+
+export async function runAiPreanalysis(
+  input: RunAiPreanalysisInput,
+  ctx: { user: { id: number }; req?: { ip?: string } }
+): Promise<PreanalysisResult> {
+  const recent = await countRecentAccess(
+    ctx.user.id,
+    "study.ai.preanalysis",
+    60
+  );
+  if (recent >= 30) {
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: "Limite de pré-analyses atteinte, réessayez plus tard.",
+    });
+  }
+  const study = await getStudyById(input.studyId);
+  if (!study)
+    throw new TRPCError({ code: "NOT_FOUND", message: "Étude introuvable" });
+
+  input.keyImages.forEach(k => assertPng(k.pngBase64));
+
+  const result = await _internal.generatePreanalysis(input.keyImages, {
+    indication: input.indication,
+  });
+
+  await recordAccess({
+    userId: ctx.user.id,
+    action: "study.ai.preanalysis",
+    studyId: study.id,
+    detail: result.model,
+    ipAddress: ctx.req?.ip ?? null,
+  });
+  return result;
 }
 
 export function parseSections(text: string): {

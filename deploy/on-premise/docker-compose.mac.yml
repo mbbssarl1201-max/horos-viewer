@@ -1,0 +1,143 @@
+# MediView ON-PREMISE — variante macOS (Apple Silicon)
+# Différences vs docker-compose.yml (Linux + NVIDIA) :
+#   • PAS de service `ollama` : sur Mac, Ollama tourne NATIVEMENT (hors Docker)
+#     pour exploiter le GPU Apple (Metal). L'app le joint via host.docker.internal.
+#   • PAS de bloc GPU NVIDIA (inexistant sur Mac).
+#   • L'image app est amd64 → tourne en émulation (Colima + Rosetta). Voir README-macos.
+#
+# Lancement : ./setup-mac.sh  (puis  docker compose -f docker-compose.mac.yml up -d)
+
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - db-data:/var/lib/mysql
+    networks: [internal]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-p${MYSQL_ROOT_PASSWORD}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    volumes:
+      - minio-data:/data
+    networks: [internal]
+
+  createbucket:
+    image: minio/mc:latest
+    depends_on: [minio]
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - "until mc alias set h http://minio:9000 $$S3_ACCESS_KEY $$S3_SECRET_KEY; do echo waiting-minio; sleep 2; done && mc mb --ignore-existing h/$$S3_BUCKET && echo bucket-ready"
+    networks: [internal]
+    restart: "no"
+
+  orthanc:
+    image: orthancteam/orthanc:24.10.1
+    restart: unless-stopped
+    volumes:
+      - ./orthanc/orthanc.json:/etc/orthanc/orthanc.json:ro
+      - orthanc-data:/var/lib/orthanc/db
+    ports:
+      - "4242:4242" # port DICOM publié (C-MOVE entrant depuis le dcm4chee)
+    networks: [internal]
+
+  migrate:
+    image: ghcr.io/mbbssarl1201-max/horos-viewer:${MEDIVIEW_IMAGE_TAG}
+    platform: linux/amd64 # image amd64 → émulation Rosetta sous Colima
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["pnpm", "db:migrate"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    networks: [internal]
+    restart: "no"
+
+  app:
+    image: ghcr.io/mbbssarl1201-max/horos-viewer:${MEDIVIEW_IMAGE_TAG}
+    platform: linux/amd64
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # Permet au conteneur de joindre Ollama qui tourne NATIVEMENT sur le Mac.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      JWT_SECRET: ${JWT_SECRET}
+      AUTH_MODE: local
+      DATABASE_URL: ${DATABASE_URL}
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ${S3_REGION}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_FORCE_PATH_STYLE: "true"
+      ORTHANC_URL: http://orthanc:8042
+      ORTHANC_USER: ${ORTHANC_USER}
+      ORTHANC_PASSWORD: ${ORTHANC_PASSWORD}
+      # IA LOCALE native (GPU Apple). 100 % sur le Mac, rien ne sort.
+      AI_BACKEND: ollama
+      OLLAMA_URL: http://host.docker.internal:11434
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_FROM: ${SMTP_FROM}
+    networks: [internal]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      MEDIVIEW_HOSTNAME: ${MEDIVIEW_HOSTNAME}
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [internal]
+
+volumes:
+  db-data:
+  minio-data:
+  orthanc-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  internal:

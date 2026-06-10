@@ -28,6 +28,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Play,
+  Pause,
   SkipBack,
   SkipForward,
   Download,
@@ -39,8 +40,23 @@ import {
   TriangleAlert,
   ImagePlus,
   FileText,
+  Keyboard,
 } from "lucide-react";
 import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
+  CINE_FPS_OPTIONS,
+  DEFAULT_CINE_FPS,
+  nextCineIndex,
+  fpsToIntervalMs,
+} from "@/lib/cine";
+import { resolveShortcut, shortcutLegend } from "@/lib/keyboardShortcuts";
 import { toast } from "sonner";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 
@@ -54,6 +70,9 @@ const WL_PRESETS = [
   { name: "Liver", ww: 150, wc: 30 },
   { name: "Mediastinum", ww: 350, wc: 50 },
 ];
+
+// Presets accessibles depuis la barre du bas et les raccourcis 1..N.
+const QUICK_PRESETS = WL_PRESETS.slice(0, 4);
 
 // Viewer tools
 const VIEWER_TOOLS = [
@@ -116,6 +135,12 @@ export default function Viewer() {
   const [reportOpen, setReportOpen] = useState(false);
   const [reportKeyImages, setReportKeyImages] = useState<ReportKeyImage[]>([]);
 
+  // Ciné / boucle : lecture automatique de la pile de coupes.
+  const [cinePlaying, setCinePlaying] = useState(false);
+  const [cineFps, setCineFps] = useState<number>(DEFAULT_CINE_FPS);
+  // Aide raccourcis clavier.
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
   const viewportRef = useRef<HTMLDivElement>(null);
 
   // Fetch study data
@@ -156,35 +181,79 @@ export default function Viewer() {
     if (instancesList) {
       setTotalSlices(Math.max(1, instancesList.length));
       setCurrentSlice(0);
+      setCinePlaying(false); // on arrête le ciné au changement de série
     }
   }, [instancesList]);
 
-  // Handle keyboard shortcuts
+  // Bascule lecture/pause du ciné (utilisée par le bouton et la touche Espace).
+  const toggleCine = useCallback(() => setCinePlaying(p => !p), []);
+
+  // Ciné : avance automatiquement la coupe courante à la cadence choisie, en
+  // boucle. Le timer est nettoyé au démontage et à la pause ; on s'appuie sur la
+  // logique pure `nextCineIndex` (testée). Le préchargement Cornerstone reste
+  // libre de tourner en parallèle (pas de conflit avec le simple changement
+  // d'index). N'avance pas s'il n'y a qu'une seule coupe.
+  useEffect(() => {
+    if (!cinePlaying || totalSlices <= 1) return;
+    const id = window.setInterval(() => {
+      setCurrentSlice(prev => nextCineIndex(prev, totalSlices, true));
+    }, fpsToIntervalMs(cineFps));
+    return () => window.clearInterval(id);
+  }, [cinePlaying, cineFps, totalSlices]);
+
+  // Raccourcis clavier globaux (actifs sur la page du visualiseur). Le mapping
+  // pur touche → action vit dans `keyboardShortcuts.ts` (testé) ; ici on ne fait
+  // qu'appliquer l'effet. On ignore la frappe quand le focus est dans un champ
+  // de saisie (input/textarea/contenteditable) pour ne pas gêner la saisie.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case "ArrowUp":
-        case "ArrowLeft":
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+
+      const action = resolveShortcut(e, QUICK_PRESETS.length);
+      if (!action) return;
+      e.preventDefault();
+
+      switch (action.kind) {
+        case "prevSlice":
           setCurrentSlice(prev => Math.max(0, prev - 1));
           break;
-        case "ArrowDown":
-        case "ArrowRight":
+        case "nextSlice":
           setCurrentSlice(prev => Math.min(totalSlices - 1, prev + 1));
           break;
-        case "r":
-          setActiveTool("wwwl");
+        case "firstSlice":
+          setCurrentSlice(0);
           break;
-        case "z":
-          setActiveTool("zoom");
+        case "lastSlice":
+          setCurrentSlice(totalSlices - 1);
           break;
-        case "p":
-          setActiveTool("pan");
+        case "tool":
+          setActiveTool(action.tool);
+          break;
+        case "preset": {
+          const preset = QUICK_PRESETS[action.index];
+          if (preset) {
+            setWindowWidth(preset.ww);
+            setWindowCenter(preset.wc);
+          }
+          break;
+        }
+        case "cineToggle":
+          toggleCine();
           break;
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [totalSlices]);
+  }, [totalSlices, toggleCine]);
 
   // Persist measurement annotations to the DB. (v1 inserts a new row per save;
   // there is no update endpoint yet — see the risk note in the PR description.)
@@ -504,7 +573,37 @@ export default function Viewer() {
           <FileText className="w-4 h-4" />
           <span className="text-[9px]">Compte rendu</span>
         </button>
+        <button
+          className="toolbar-btn"
+          title="Raccourcis clavier"
+          onClick={() => setShortcutsOpen(true)}
+        >
+          <Keyboard className="w-4 h-4" />
+          <span className="text-[9px]">Raccourcis</span>
+        </button>
       </div>
+
+      {/* Aide — légende des raccourcis clavier */}
+      <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Raccourcis clavier</DialogTitle>
+            <DialogDescription>
+              Actifs sur le visualiseur (hors champs de saisie).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
+            {shortcutLegend(QUICK_PRESETS.length).map(s => (
+              <div key={s.keys} className="contents">
+                <kbd className="font-mono text-muted-foreground whitespace-nowrap">
+                  {s.keys}
+                </kbd>
+                <span className="text-foreground">{s.label}</span>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
@@ -725,9 +824,43 @@ export default function Viewer() {
 
             <Separator orientation="vertical" className="h-6" />
 
+            {/* Ciné / boucle */}
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={toggleCine}
+                disabled={totalSlices <= 1}
+                title={
+                  cinePlaying ? "Pause (Espace)" : "Lecture en boucle (Espace)"
+                }
+              >
+                {cinePlaying ? (
+                  <Pause className="w-3 h-3" />
+                ) : (
+                  <Play className="w-3 h-3" />
+                )}
+              </Button>
+              <select
+                value={cineFps}
+                onChange={e => setCineFps(Number(e.target.value))}
+                className="bg-transparent text-[10px] border border-border rounded px-1 py-0.5 text-muted-foreground"
+                title="Cadence du ciné (images/seconde)"
+              >
+                {CINE_FPS_OPTIONS.map(fps => (
+                  <option key={fps} value={fps}>
+                    {fps} ips
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <Separator orientation="vertical" className="h-6" />
+
             {/* W/L Presets */}
             <div className="flex items-center gap-1">
-              {WL_PRESETS.slice(0, 4).map(preset => (
+              {QUICK_PRESETS.map(preset => (
                 <button
                   key={preset.name}
                   onClick={() => {

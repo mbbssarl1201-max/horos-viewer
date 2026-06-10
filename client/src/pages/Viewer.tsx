@@ -52,7 +52,9 @@ import {
   Brush,
   Eraser,
   Trash2,
+  Box,
 } from "lucide-react";
+import { polyDataArraysToObj, polyDataArraysStats } from "@/lib/objExport";
 import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
 import SeriesThumbnail from "@/components/SeriesThumbnail";
 import {
@@ -180,6 +182,10 @@ export default function Viewer() {
   const [activeCell, setActiveCell] = useState(0);
   const [viewMode, setViewMode] = useState<"2d" | "mpr" | "3d">("2d");
   const [preset3d, setPreset3d] = useState<string>("os");
+  // Export maillage 3D (.obj) : seuil HU de l'isosurface (≈300 = os) + état de
+  // génération (les marching cubes sur un volume CT complet sont lourds).
+  const [meshThreshold, setMeshThreshold] = useState<number>(300);
+  const [meshExporting, setMeshExporting] = useState(false);
   const [huStats, setHuStats] = useState<{
     mean: number;
     stdDev: number;
@@ -492,6 +498,80 @@ export default function Viewer() {
     }
   }, [studyId, sendReportMutation]);
 
+  // Export du volume 3D chargé en maillage de surface Wavefront .OBJ.
+  // Pipeline : volume Cornerstone (vtkImageData) → marching cubes VTK.js
+  // (isosurface au seuil HU) → sérialisation OBJ pure → téléchargement.
+  // Disponible UNIQUEMENT en mode 3D (le volume y est forcément chargé).
+  // Lourd (plusieurs secondes, peut figer brièvement l'onglet) → état de
+  // chargement + yield au navigateur avant l'extraction. Tout est encadré par
+  // try/catch : un échec ne doit jamais casser le visualiseur.
+  const handleExportObj = useCallback(async () => {
+    if (meshExporting) return;
+    setMeshExporting(true);
+    try {
+      const cornerstone = await import("@cornerstonejs/core");
+      // Même volumeId que VolumeViewer (aucun volumeId/orthancImageIds passé ici
+      // → valeur locale par défaut).
+      const volId = "cornerstoneStreamingImageVolume:HOROS_VOL";
+      const volume = (cornerstone as any).cache?.getVolume?.(volId);
+      const imageData = volume?.imageData;
+      if (!imageData) {
+        toast.error("Volume non chargé");
+        return;
+      }
+
+      // Laisse le spinner se peindre avant l'appel bloquant (pas de web worker).
+      await new Promise(r => setTimeout(r, 0));
+
+      const { default: vtkImageMarchingCubes } = await import(
+        "@kitware/vtk.js/Filters/General/ImageMarchingCubes"
+      );
+      const filter = vtkImageMarchingCubes.newInstance({
+        contourValue: meshThreshold,
+        computeNormals: false, // vitesse : normales inutiles pour l'export OBJ
+        mergePoints: true,
+      });
+      filter.setInputData(imageData);
+      filter.update();
+      const polydata = filter.getOutputData();
+
+      const points: Float32Array =
+        polydata?.getPoints?.()?.getData?.() ?? new Float32Array();
+      const polys: Int32Array =
+        polydata?.getPolys?.()?.getData?.() ?? new Int32Array();
+
+      const stats = polyDataArraysStats(points, polys);
+      if (stats.triangleCount === 0) {
+        toast.error(
+          `Aucune surface au seuil ${meshThreshold} HU — ajustez la valeur`
+        );
+        return;
+      }
+
+      const objText = polyDataArraysToObj(points, polys);
+      const safeName = (study?.patientName || `study${studyId ?? ""}`)
+        .replace(/[^a-zA-Z0-9_-]+/g, "_")
+        .slice(0, 60);
+      const blob = new Blob([objText], { type: "text/plain" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `mediview-3d-${safeName || "volume"}.obj`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+
+      toast.success(
+        `Maillage exporté : ${stats.triangleCount.toLocaleString(
+          "fr-CH"
+        )} triangles`
+      );
+    } catch (e: any) {
+      console.error("[ExportOBJ] échec:", e);
+      toast.error("Échec de l'export 3D : " + (e?.message || "erreur"));
+    } finally {
+      setMeshExporting(false);
+    }
+  }, [meshExporting, meshThreshold, study, studyId]);
+
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       {/* Top Toolbar */}
@@ -644,6 +724,36 @@ export default function Viewer() {
             >
               ↺ glisser pour tourner
             </span>
+            <Separator orientation="vertical" className="h-7 mx-1" />
+            {/* Export maillage 3D (.obj) : isosurface (marching cubes) au seuil
+                HU choisi. ~300 HU = os. Opération lourde → bouton désactivé +
+                « Génération… » pendant le calcul. */}
+            <label
+              className="text-[10px] text-muted-foreground"
+              title="Seuil HU de l'isosurface (≈300 = os)"
+            >
+              Seuil
+            </label>
+            <input
+              type="number"
+              step={50}
+              value={meshThreshold}
+              onChange={e => setMeshThreshold(Number(e.target.value))}
+              className="w-16 bg-transparent text-[10px] border border-border rounded px-1 py-0.5"
+              title="Seuil HU de l'isosurface (≈300 = os)"
+              disabled={meshExporting}
+            />
+            <button
+              className="toolbar-btn"
+              title="Extraire une isosurface et télécharger un maillage Wavefront .obj"
+              onClick={handleExportObj}
+              disabled={meshExporting}
+            >
+              <Box className="w-4 h-4" />
+              <span className="text-[9px]">
+                {meshExporting ? "Génération…" : "Exporter .obj (3D)"}
+              </span>
+            </button>
           </div>
         )}
         <Separator orientation="vertical" className="h-7 mx-1" />

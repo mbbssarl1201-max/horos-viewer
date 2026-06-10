@@ -21,6 +21,7 @@
     "@cornerstonejs/dicom-image-loader": "^4.22.13",
     "@cornerstonejs/tools": "^4.22.13",
     "@hookform/resolvers": "^5.2.2",
+    "@kitware/vtk.js": "34.15.1",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-aspect-ratio": "^1.1.7",

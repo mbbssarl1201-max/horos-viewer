@@ -163,7 +163,10 @@ function buildToolMap(cst: any): Record<string, string> {
 // Make the chosen tool the primary-button tool; keep stack scroll on the wheel.
 function applyActiveTool(cst: any, toolGroup: any, activeTool: string) {
   const map = buildToolMap(cst);
-  const csName = map[activeTool];
+  // Garde défensive : un id d'outil inconnu (ex. ancien « crosshair » absent du
+  // map) retombe sur W/L au lieu de faire un return silencieux qui laissait le
+  // viewer sans outil actif sur le clic gauche.
+  const csName = map[activeTool] || map["wwwl"];
   if (!csName) return;
   Object.values(map).forEach(name => {
     try {

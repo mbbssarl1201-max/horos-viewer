@@ -27,32 +27,20 @@ export default function ExportPanel({
   const [exportFormat, setExportFormat] = useState("png");
   const [exporting, setExporting] = useState(false);
 
-  // Téléchargement ROBUSTE : on récupère le fichier en blob (avec le cookie de
-  // session) puis on force le nom + l'extension via un blob URL. Un simple
-  // <a href download> sur une route /api/ pouvait produire un fichier sans
-  // extension (nom = UUID), donc inouvrable. Ici le nom est garanti, et une
-  // erreur serveur (401/404/500) est remontée au lieu d'être « téléchargée ».
-  const downloadFromUrl = async (url: string, filename: string) => {
-    const resp = await fetch(url, { credentials: "include" });
-    if (!resp.ok) {
-      let msg = `Erreur ${resp.status}`;
-      try {
-        const j = await resp.json();
-        if (j?.error) msg = j.error;
-      } catch {
-        /* corps non-JSON */
-      }
-      throw new Error(msg);
-    }
-    const blob = await resp.blob();
-    const objUrl = URL.createObjectURL(blob);
+  // Téléchargement NON BLOQUANT : un gros export ZIP (centaines de fichiers
+  // assemblés côté serveur depuis MinIO) peut durer un moment. On laisse le
+  // GESTIONNAIRE DE TÉLÉCHARGEMENTS du navigateur s'en charger (barre de
+  // progression, sans figer l'UI). Le nom + l'extension sont fixés par l'attribut
+  // `download` ET confirmés par l'en-tête Content-Disposition du serveur — donc
+  // plus de fichier sans extension (nom = UUID).
+  const triggerDownload = (url: string, filename: string) => {
     const a = document.createElement("a");
-    a.href = objUrl;
+    a.href = url;
     a.download = filename;
+    a.rel = "noopener";
     document.body.appendChild(a);
     a.click();
     a.remove();
-    setTimeout(() => URL.revokeObjectURL(objUrl), 2000);
   };
 
   const handleExport = async () => {
@@ -81,23 +69,23 @@ export default function ExportPanel({
           toast.error("No study selected for DICOM export");
           return;
         }
-        toast("Préparation de l'archive DICOM (ZIP)…");
-        await downloadFromUrl(
+        triggerDownload(
           `/api/export/dicom-zip/${studyId}`,
           `etude_${studyId}_dicom.zip`
         );
-        toast.success("Archive DICOM téléchargée");
+        toast.success(
+          "Téléchargement lancé (voir la barre de téléchargements). Une grosse étude peut prendre un moment."
+        );
       } else if (exportFormat === "pdf") {
         if (!studyId) {
           toast.error("No study selected for PDF report");
           return;
         }
-        toast("Génération du rapport PDF…");
-        await downloadFromUrl(
+        triggerDownload(
           `/api/export/pdf-report/${studyId}`,
           `rapport_etude_${studyId}.pdf`
         );
-        toast.success("Rapport PDF téléchargé");
+        toast.success("Rapport PDF — téléchargement lancé");
       }
     } catch (err: any) {
       toast.error(err.message || "Échec de l'export");

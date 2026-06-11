@@ -859,6 +859,21 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    // Suppression d'une mesure (ROI Manager). Réservé au rôle médical
+    // (medicalProcedure) ; cohérent avec save (déploiement self-host mono-cabinet,
+    // le personnel médical partage le même périmètre de confiance).
+    delete: medicalProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const { getDb } = await import("./db");
+        const { annotations } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.delete(annotations).where(eq(annotations.id, input.id));
+        return { success: true };
+      }),
+
     listByInstance: medicalProcedure
       .input(z.object({ instanceId: z.number() }))
       .query(async ({ input }) => {

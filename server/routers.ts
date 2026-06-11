@@ -19,8 +19,17 @@ import {
   markNotificationRead,
   createNotification,
   recordAccess,
+  getReportByStudy,
+  getReportAddenda,
 } from "./db";
-import { storagePut, storageDelete } from "./storage";
+import { storagePut, storageDelete, storageGetSignedUrl } from "./storage";
+import { runAiPreanalysis } from "./report/aiPreanalysis";
+import { buildReportPdf } from "./report/reportPdf";
+import {
+  canSignReport,
+  canAddAddendum,
+  validateReportSections,
+} from "../client/src/lib/reportLifecycle";
 import { hasMedicalAccess, isAdmin } from "./rbac";
 import {
   checkOrthancConnection,
@@ -1511,6 +1520,291 @@ export const appRouter = router({
           ipAddress: ctx.req?.ip ?? null,
         });
         return { deleted };
+      }),
+  }),
+
+  // Compte-rendu radiologique (assistance IA → relecture/correction → signature
+  // médecin → PDF). Lecture = medicalProcedure ; toute action d'écriture =
+  // adminProcedure (admin|radiologist). Immuabilité après signature : seules les
+  // corrections par addendum sont permises (verrou applicatif).
+  reports: router({
+    // Lecture du compte-rendu d'une étude (+ ses addenda).
+    getByStudy: medicalProcedure
+      .input(z.object({ studyId: z.number() }))
+      .query(async ({ input }) => {
+        const report = await getReportByStudy(input.studyId);
+        if (!report) return { report: null, addenda: [] as any[] };
+        const addenda = await getReportAddenda(report.id);
+        return { report, addenda };
+      }),
+
+    // Création / mise à jour du brouillon. Refuse toute modification d'un
+    // compte-rendu déjà signé (immuable → addendum).
+    upsertDraft: adminProcedure
+      .input(
+        z.object({
+          studyId: z.number(),
+          sections: z.object({
+            indication: z.string(),
+            technique: z.string(),
+            resultats: z.string(),
+            conclusion: z.string(),
+          }),
+          aiGenerated: z.boolean().optional(),
+          aiModel: z.string().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { getDb } = await import("./db");
+        const { reports } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const existing = await getReportByStudy(input.studyId);
+        if (existing && existing.status === "signed") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "Compte-rendu signé : non modifiable (ajoutez un addendum).",
+          });
+        }
+        const sections = validateReportSections(input.sections);
+        if (existing) {
+          await db
+            .update(reports)
+            .set({
+              ...sections,
+              aiGenerated: input.aiGenerated ?? existing.aiGenerated,
+              aiModel: input.aiModel ?? existing.aiModel,
+            })
+            .where(eq(reports.id, existing.id));
+          await recordAccess({
+            userId: ctx.user.id,
+            action: "report.draft",
+            studyId: input.studyId,
+            detail: "update",
+            ipAddress: ctx.req?.ip ?? null,
+          });
+          return { id: existing.id };
+        }
+        await db.insert(reports).values({
+          studyId: input.studyId,
+          status: "draft",
+          ...sections,
+          aiGenerated: input.aiGenerated ?? false,
+          aiModel: input.aiModel ?? null,
+          createdBy: ctx.user.id,
+        });
+        // studyId est unique sur `reports` : on relit le brouillon créé pour en
+        // récupérer l'id (le repo ne dépend pas de insertId du driver MySQL).
+        const created = await getReportByStudy(input.studyId);
+        if (!created) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Compte-rendu créé mais introuvable.",
+          });
+        }
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "report.draft",
+          studyId: input.studyId,
+          detail: "create",
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { id: created.id };
+      }),
+
+    // Pré-analyse IA → sections de brouillon proposées (non persistées ici ;
+    // c'est upsertDraft qui enregistre après relecture du médecin).
+    aiGenerate: adminProcedure
+      .input(
+        z.object({
+          studyId: z.number(),
+          seriesId: z.number().optional(),
+          indication: z.string().optional(),
+          antecedents: z.string().optional(),
+          keyImages: z
+            .array(z.object({ pngBase64: z.string(), sliceIndex: z.number() }))
+            .default([]),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        // runAiPreanalysis renvoie déjà des sections structurées
+        // (technique/resultats/conclusion) — pas de re-parsing de texte brut.
+        const result = await runAiPreanalysis(
+          {
+            studyId: input.studyId,
+            seriesId: input.seriesId,
+            indication: input.indication,
+            antecedents: input.antecedents,
+            keyImages: input.keyImages,
+          },
+          { user: { id: ctx.user.id }, req: { ip: ctx.req?.ip } }
+        );
+        const sections = validateReportSections({
+          indication: input.indication ?? "",
+          technique: result.technique,
+          resultats: result.resultats,
+          conclusion: result.conclusion,
+        });
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "report.generate",
+          studyId: input.studyId,
+          detail: result.model,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return {
+          sections,
+          aiModel: result.model,
+          keyImage: result.keyImage ?? null,
+        };
+      }),
+
+    // Signature : verrouille le compte-rendu (draft→signed), génère le PDF et le
+    // stocke. canSignReport impose une conclusion non vide + statut draft.
+    sign: adminProcedure
+      .input(z.object({ reportId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const { getDb } = await import("./db");
+        const { reports } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const rows = await db
+          .select()
+          .from(reports)
+          .where(eq(reports.id, input.reportId))
+          .limit(1);
+        const report = rows[0];
+        if (!report) throw new TRPCError({ code: "NOT_FOUND" });
+        const sections = validateReportSections(report);
+        if (!canSignReport(report.status as any, sections)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Conclusion requise, ou déjà signé.",
+          });
+        }
+        const study = await getStudyById(report.studyId);
+        const signedAt = new Date();
+        const signature = `Signé par ${ctx.user.name ?? "Dr"} le ${signedAt.toLocaleString("fr-CH")}`;
+        const pdf = buildReportPdf({
+          study: study as any,
+          report: sections,
+          signature,
+          keyImages: [],
+          aiAssisted: report.aiGenerated,
+        });
+        // storagePut suffixe la clé (hash anti-collision) : on persiste la clé
+        // RÉELLEMENT stockée (sa valeur de retour), pas la clé demandée.
+        const { key } = await storagePut(
+          `reports/${report.studyId}/report-${report.id}.pdf`,
+          pdf,
+          "application/pdf"
+        );
+        await db
+          .update(reports)
+          .set({
+            status: "signed",
+            signedBy: ctx.user.id,
+            signedAt,
+            pdfStorageKey: key,
+          })
+          .where(eq(reports.id, report.id));
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "report.sign",
+          studyId: report.studyId,
+          detail: `report ${report.id}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { success: true, pdfStorageKey: key };
+      }),
+
+    // Addendum (correction post-signature) : append-only, possible uniquement
+    // sur un compte-rendu signé. Régénère le PDF avec l'historique des addenda.
+    addAddendum: adminProcedure
+      .input(z.object({ reportId: z.number(), text: z.string().min(1) }))
+      .mutation(async ({ input, ctx }) => {
+        const { getDb } = await import("./db");
+        const { reports, reportAddenda } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const rows = await db
+          .select()
+          .from(reports)
+          .where(eq(reports.id, input.reportId))
+          .limit(1);
+        const report = rows[0];
+        if (!report) throw new TRPCError({ code: "NOT_FOUND" });
+        if (!canAddAddendum(report.status as any)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Addendum possible uniquement sur un compte-rendu signé.",
+          });
+        }
+        await db.insert(reportAddenda).values({
+          reportId: report.id,
+          text: input.text,
+          createdBy: ctx.user.id,
+        });
+        const addenda = await getReportAddenda(report.id);
+        const study = await getStudyById(report.studyId);
+        const signature = report.signedAt
+          ? `Signé le ${new Date(report.signedAt).toLocaleString("fr-CH")}`
+          : "";
+        const pdf = buildReportPdf({
+          study: study as any,
+          report: validateReportSections(report),
+          signature,
+          keyImages: [],
+          aiAssisted: report.aiGenerated,
+          addenda: addenda.map((a: any) => ({
+            text: a.text,
+            date: new Date(a.createdAt).toLocaleString("fr-CH"),
+            author: `Dr (#${a.createdBy})`,
+          })),
+        });
+        // storagePut suffixe TOUJOURS la clé de base : on lui passe la clé de
+        // base (jamais report.pdfStorageKey, déjà suffixée → double suffixe +
+        // objets orphelins) et on persiste la clé réelle retournée.
+        const { key } = await storagePut(
+          `reports/${report.studyId}/report-${report.id}.pdf`,
+          pdf,
+          "application/pdf"
+        );
+        await db
+          .update(reports)
+          .set({ pdfStorageKey: key })
+          .where(eq(reports.id, report.id));
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "report.addendum",
+          studyId: report.studyId,
+          detail: `report ${report.id}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { success: true };
+      }),
+
+    // URL signée du PDF (lecture). Renvoie null si pas encore généré/signé.
+    pdfUrl: medicalProcedure
+      .input(z.object({ reportId: z.number() }))
+      .query(async ({ input }) => {
+        const { getDb } = await import("./db");
+        const { reports } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) return { url: null };
+        const rows = await db
+          .select()
+          .from(reports)
+          .where(eq(reports.id, input.reportId))
+          .limit(1);
+        const key = rows[0]?.pdfStorageKey;
+        if (!key) return { url: null };
+        return { url: await storageGetSignedUrl(key) };
       }),
   }),
 });

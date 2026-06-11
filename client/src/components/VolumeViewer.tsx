@@ -54,6 +54,8 @@ interface VolumeViewerProps {
   surfaceIso?: number;
   /** Compteur : chaque incrément déclenche une animation fly-thru (endoscopie). */
   flyThruNonce?: number;
+  /** Scissor : fraction [0..0.9] retirée de chaque côté du volume (0 = aucune découpe). */
+  cropFraction?: number;
   /**
    * Fusion PET-CT (additif, fail-safe) : URLs (MinIO, schéma wadouri:) des
    * coupes de la série PET à superposer sur le CT/volume principal. Si absent
@@ -250,6 +252,7 @@ export default function VolumeViewer({
   surface3d = false,
   surfaceIso = 300,
   flyThruNonce = 0,
+  cropFraction = 0,
   petImageUrls,
   petVolumeId,
   fusionOpacity = 0.5,
@@ -830,6 +833,62 @@ export default function VolumeViewer({
       if (raf) cancelAnimationFrame(raf);
     };
   }, [flyThruNonce, mode]);
+
+  // Scissor editing (« Scissor Editing » de Horos) : découpe du volume 3D par
+  // des plans de coupe vtk recadrant sur la boîte centrale (fraction retirée de
+  // chaque côté). Mécanisme réel de clipping ; 100% try/catch + additif (fraction
+  // 0 = aucun plan = volume inchangé) → ne peut pas casser le rendu 3D existant.
+  useEffect(() => {
+    if (mode !== "3d") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const vp = engineRef.current?.getViewport?.("VR_3D") as any;
+        const actors = vp?.getActors?.();
+        if (!actors || !actors.length) return;
+        const actor = actors[0]?.actor ?? actors[0]?.volumeActor ?? actors[0];
+        const mapper = actor?.getMapper?.();
+        if (!mapper) return;
+        mapper.removeAllClippingPlanes?.();
+        if (cropFraction > 0.01) {
+          const b = actor.getBounds?.();
+          if (b && b.length >= 6) {
+            const vtkPlane = (
+              await import("@kitware/vtk.js/Common/DataModel/Plane")
+            ).default;
+            if (cancelled) return;
+            const cx = (b[0] + b[1]) / 2;
+            const cy = (b[2] + b[3]) / 2;
+            const cz = (b[4] + b[5]) / 2;
+            const f = Math.min(0.9, cropFraction);
+            const hx = ((b[1] - b[0]) / 2) * (1 - f);
+            const hy = ((b[3] - b[2]) / 2) * (1 - f);
+            const hz = ((b[5] - b[4]) / 2) * (1 - f);
+            const planes = [
+              { o: [cx - hx, cy, cz], n: [1, 0, 0] },
+              { o: [cx + hx, cy, cz], n: [-1, 0, 0] },
+              { o: [cx, cy - hy, cz], n: [0, 1, 0] },
+              { o: [cx, cy + hy, cz], n: [0, -1, 0] },
+              { o: [cx, cy, cz - hz], n: [0, 0, 1] },
+              { o: [cx, cy, cz + hz], n: [0, 0, -1] },
+            ];
+            for (const p of planes) {
+              const pl = vtkPlane.newInstance();
+              pl.setOrigin(p.o as any);
+              pl.setNormal(p.n as any);
+              mapper.addClippingPlane?.(pl);
+            }
+          }
+        }
+        vp.render?.();
+      } catch {
+        /* clipping indisponible — scissor ignoré, rendu inchangé */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cropFraction, mode, preset3d, surface3d]);
 
   // Changement d'opacité / colormap de la fusion PET : ré-appliquer SANS
   // reconstruire le moteur (rapide, glissement de curseur fluide). N'agit que si

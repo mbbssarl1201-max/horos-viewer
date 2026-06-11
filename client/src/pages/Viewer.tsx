@@ -347,6 +347,8 @@ export default function Viewer() {
   const [surface3d, setSurface3d] = useState<boolean>(false);
   // Fly-thru / endoscopie : un compteur incrémenté déclenche l'animation caméra.
   const [flyThruNonce, setFlyThruNonce] = useState(0);
+  // Scissor : fraction de découpe du volume 3D (0 = aucune).
+  const [cropFraction, setCropFraction] = useState(0);
   // Export maillage 3D (.obj) : seuil HU de l'isosurface (≈300 = os) + état de
   // génération (les marching cubes sur un volume CT complet sont lourds).
   const [meshThreshold, setMeshThreshold] = useState<number>(300);
@@ -2117,6 +2119,24 @@ export default function Viewer() {
               <span className="text-[9px]">Fly-thru</span>
             </button>
             <Separator orientation="vertical" className="h-7 mx-1" />
+            {/* Scissor editing : découpe du volume sur sa boîte centrale */}
+            <label
+              className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none"
+              title="Scissor — découper le volume (recadrage sur la boîte centrale)"
+            >
+              <SquareDashedBottom className="w-3.5 h-3.5" />
+              Découper
+              <input
+                type="range"
+                min={0}
+                max={0.9}
+                step={0.05}
+                value={cropFraction}
+                onChange={e => setCropFraction(Number(e.target.value))}
+                className="w-16 accent-primary"
+              />
+            </label>
+            <Separator orientation="vertical" className="h-7 mx-1" />
             {/* Export maillage 3D (.obj) : isosurface (marching cubes) au seuil
                 HU choisi. ~300 HU = os. Opération lourde → bouton désactivé +
                 « Génération… » pendant le calcul. */}
@@ -2746,6 +2766,7 @@ export default function Viewer() {
                   surface3d={surface3d}
                   surfaceIso={suggestIsoForModality(study?.modality)}
                   flyThruNonce={flyThruNonce}
+                  cropFraction={cropFraction}
                   petImageUrls={fusionActive ? petImageUrls : undefined}
                   fusionOpacity={fusionOpacity}
                   petColormapId={petColormapId}

@@ -7,6 +7,7 @@ import {
   forwardRef,
 } from "react";
 import { patchImagerPixelSpacing } from "@/lib/imagerPixelSpacing";
+import { getColormapLut, isValidColormap } from "@/lib/colormaps";
 import {
   isSegmentationTool,
   resolveBrushStrategy,
@@ -74,6 +75,51 @@ interface CornerstoneViewerProps {
 // vit dans Cornerstone, pas dans React).
 export interface CornerstoneViewerHandle {
   clearSegmentation: () => void;
+  /** Applique une palette couleur (CLUT) façon Horos ; null = niveaux de gris. */
+  setColormap: (name: string | null) => void;
+  /** Fixe le fenêtrage VOI (centre/largeur) — presets WL/WW. */
+  setVoi: (windowCenter: number, windowWidth: number) => void;
+  /** Inverse la vidéo (négatif). */
+  setInvert: (invert: boolean) => void;
+  /** Rotation absolue en degrés (0/90/180/270). */
+  setRotation: (deg: number) => void;
+  /** Bascule le miroir horizontal ou vertical. */
+  flip: (axis: "h" | "v") => void;
+  /** Réinitialise la vue (caméra + propriétés) — « Reset Image View ». */
+  resetView: () => void;
+}
+
+/**
+ * Enregistre les palettes CLUT (issues de lib/colormaps) dans Cornerstone une
+ * seule fois par nom. Cornerstone attend des `RGBPoints` à plat
+ * [scalaire, r, g, b, …] avec r/g/b dans [0,1] ; on les dérive de la LUT 256³.
+ */
+const registeredColormaps = new Set<string>();
+async function ensureColormapRegistered(name: string): Promise<boolean> {
+  if (!isValidColormap(name)) return false;
+  if (registeredColormaps.has(name)) return true;
+  try {
+    const cornerstone = await import("@cornerstonejs/core");
+    const register = (cornerstone as any).utilities?.colormap?.registerColormap;
+    if (typeof register !== "function") return false;
+    const lut = getColormapLut(name); // Uint8ClampedArray de 256*3
+    const RGBPoints: number[] = [];
+    const n = lut.length / 3;
+    for (let i = 0; i < n; i++) {
+      RGBPoints.push(
+        i / (n - 1),
+        lut[i * 3] / 255,
+        lut[i * 3 + 1] / 255,
+        lut[i * 3 + 2] / 255
+      );
+    }
+    register({ name, ColorSpace: "RGB", RGBPoints });
+    registeredColormaps.add(name);
+    return true;
+  } catch (e) {
+    console.warn("[Cornerstone3D] enregistrement CLUT ignoré:", e);
+    return false;
+  }
 }
 
 // Cornerstone3D initialization state
@@ -350,6 +396,24 @@ const CornerstoneViewer = forwardRef<
   // valeur du segment actif sur toutes les coupes ; best-effort, sans jamais
   // lever d'erreur dans le flux de lecture. La segmentation étant en mémoire,
   // l'effacement est immédiat et non persisté.
+  // Récupère le viewport 2D actif (best-effort, jamais d'exception).
+  const getViewport = useCallback(() => {
+    try {
+      return (
+        renderingEngineRef.current?.getViewport(viewportIdRef.current) ?? null
+      );
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // État local des transformations façon Horos (pour basculer flip/invert).
+  const flipStateRef = useRef<{ h: boolean; v: boolean }>({
+    h: false,
+    v: false,
+  });
+  const invertStateRef = useRef(false);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -369,8 +433,99 @@ const CornerstoneViewer = forwardRef<
           }
         })();
       },
+      setColormap: (name: string | null) => {
+        (async () => {
+          const viewport = getViewport();
+          if (!viewport) return;
+          try {
+            if (!name) {
+              viewport.setProperties({ colormap: undefined });
+            } else {
+              const ok = await ensureColormapRegistered(name);
+              if (!ok) return;
+              viewport.setProperties({ colormap: { name } });
+            }
+            viewport.render();
+          } catch (e) {
+            console.warn("[Cornerstone3D] application CLUT ignorée:", e);
+          }
+        })();
+      },
+      setVoi: (windowCenter: number, windowWidth: number) => {
+        const viewport = getViewport();
+        if (!viewport) return;
+        try {
+          viewport.setProperties({
+            voiRange: {
+              lower: windowCenter - windowWidth / 2,
+              upper: windowCenter + windowWidth / 2,
+            },
+          });
+          viewport.render();
+          onWindowLevelChange?.(windowWidth, windowCenter);
+        } catch (e) {
+          console.warn("[Cornerstone3D] application VOI ignorée:", e);
+        }
+      },
+      setInvert: (invert: boolean) => {
+        const viewport = getViewport();
+        if (!viewport) return;
+        try {
+          invertStateRef.current = invert;
+          viewport.setProperties({ invert });
+          viewport.render();
+        } catch (e) {
+          console.warn("[Cornerstone3D] inversion ignorée:", e);
+        }
+      },
+      setRotation: (deg: number) => {
+        const viewport = getViewport();
+        if (!viewport) return;
+        try {
+          const rotation = ((deg % 360) + 360) % 360;
+          if (typeof viewport.setViewPresentation === "function") {
+            viewport.setViewPresentation({ rotation });
+          } else {
+            viewport.setProperties({ rotation });
+          }
+          viewport.render();
+        } catch (e) {
+          console.warn("[Cornerstone3D] rotation ignorée:", e);
+        }
+      },
+      flip: (axis: "h" | "v") => {
+        const viewport = getViewport();
+        if (!viewport) return;
+        try {
+          const next = { ...flipStateRef.current };
+          if (axis === "h") next.h = !next.h;
+          else next.v = !next.v;
+          flipStateRef.current = next;
+          viewport.setCamera({ flipHorizontal: next.h, flipVertical: next.v });
+          viewport.render();
+        } catch (e) {
+          console.warn("[Cornerstone3D] miroir ignoré:", e);
+        }
+      },
+      resetView: () => {
+        const viewport = getViewport();
+        if (!viewport) return;
+        try {
+          flipStateRef.current = { h: false, v: false };
+          invertStateRef.current = false;
+          if (typeof viewport.resetProperties === "function") {
+            viewport.resetProperties();
+          }
+          if (typeof viewport.resetCamera === "function") {
+            viewport.resetCamera();
+          }
+          viewport.render();
+        } catch (e) {
+          console.warn("[Cornerstone3D] reset vue ignoré:", e);
+        }
+      },
     }),
-    []
+    [getViewport, onWindowLevelChange]
   );
 
   // Initialize Cornerstone3D

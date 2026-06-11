@@ -29,7 +29,9 @@ import {
   cMove,
   cStoreStudy,
   listModalities,
+  findWorklist,
 } from "./orthanc";
+import { parseWorklistAnswers } from "./worklistParse";
 import {
   sendEmail,
   notifyNewStudy,
@@ -153,6 +155,94 @@ const strictAdminProcedure = protectedProcedure.use(({ ctx, next }) => {
   }
   return next({ ctx });
 });
+
+/**
+ * Gather everything needed to build an SR/GSPS for a series, with anti-IDOR
+ * resolution through the join chain (series → study → patient). Returns null
+ * `ctx` (+ a French error) when the series doesn't resolve to a real study, so
+ * a forged/foreign seriesId can't produce an object referencing another study.
+ */
+async function buildSeriesExportContext(seriesId: number): Promise<{
+  ctx: import("./dicomDerived").ExportContext | null;
+  error?: string;
+}> {
+  const { getDb } = await import("./db");
+  const { series, studies, patients, instances, annotations } = await import(
+    "../drizzle/schema"
+  );
+  const { eq } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) return { ctx: null, error: "DB indisponible" };
+
+  // Resolve the series + its parent study + patient in one go.
+  const [row] = await db
+    .select({
+      studyInstanceUid: studies.studyInstanceUid,
+      seriesInstanceUid: series.seriesInstanceUid,
+      patientName: patients.patientName,
+      patientDicomId: patients.patientId,
+      birthDate: patients.birthDate,
+      sex: patients.sex,
+    })
+    .from(series)
+    .innerJoin(studies, eq(series.studyId, studies.id))
+    .leftJoin(patients, eq(studies.patientId, patients.id))
+    .where(eq(series.id, seriesId))
+    .limit(1);
+  if (!row) return { ctx: null, error: "Série introuvable" };
+
+  const seriesInstances = await db
+    .select({
+      id: instances.id,
+      sopInstanceUid: instances.sopInstanceUid,
+    })
+    .from(instances)
+    .where(eq(instances.seriesId, seriesId));
+
+  if (seriesInstances.length === 0) {
+    return { ctx: null, error: "Aucune image dans la série" };
+  }
+
+  const annRows = await db
+    .select({
+      instanceId: annotations.instanceId,
+      type: annotations.type,
+      data: annotations.data,
+    })
+    .from(annotations)
+    .innerJoin(instances, eq(annotations.instanceId, instances.id))
+    .where(eq(instances.seriesId, seriesId));
+
+  // Map each annotation's instanceId → its real SOP UID for the references.
+  const sopByInstanceId = new Map(
+    seriesInstances.map(i => [i.id, i.sopInstanceUid])
+  );
+
+  const exportAnnotations: import("./dicomDerived").ExportAnnotation[] = [];
+  for (const a of annRows) {
+    const sop = sopByInstanceId.get(a.instanceId);
+    if (!sop) continue;
+    exportAnnotations.push({
+      type: a.type,
+      data: a.data,
+      referencedSopInstanceUid: sop,
+    });
+  }
+
+  const ctx: import("./dicomDerived").ExportContext = {
+    studyInstanceUid: row.studyInstanceUid,
+    seriesInstanceUid: row.seriesInstanceUid,
+    patient: {
+      patientName: row.patientName,
+      patientId: row.patientDicomId,
+      birthDate: row.birthDate,
+      sex: row.sex,
+    },
+    instances: seriesInstances.map(i => ({ sopInstanceUid: i.sopInstanceUid })),
+    annotations: exportAnnotations,
+  };
+  return { ctx };
+}
 
 export const appRouter = router({
   system: systemRouter,
@@ -811,6 +901,42 @@ export const appRouter = router({
 
         return rows;
       }),
+
+    // Export the saved annotations of a series as a DICOM SR (measurements) or
+    // GSPS (graphic presentation state), returned as base64 Part-10 bytes for
+    // download. Anti-IDOR: the series must resolve to a real study/patient via
+    // the join chain (series → study → patient); the medical role is already
+    // required. Built server-side with dcmjs. Fail-safe: never throws on an
+    // empty/incomplete annotation set — emits a valid (possibly empty) object.
+    exportSr: medicalProcedure
+      .input(z.object({ seriesId: z.number() }))
+      .mutation(async ({ input }) => {
+        const { ctx, error } = await buildSeriesExportContext(input.seriesId);
+        if (!ctx) return { success: false as const, error };
+        const { buildStructuredReport } = await import("./dicomDerived");
+        const { buffer, sopInstanceUid } = buildStructuredReport(ctx);
+        return {
+          success: true as const,
+          sopInstanceUid,
+          filename: `SR_${sopInstanceUid}.dcm`,
+          dicomBase64: buffer.toString("base64"),
+        };
+      }),
+
+    exportGsps: medicalProcedure
+      .input(z.object({ seriesId: z.number() }))
+      .mutation(async ({ input }) => {
+        const { ctx, error } = await buildSeriesExportContext(input.seriesId);
+        if (!ctx) return { success: false as const, error };
+        const { buildPresentationState } = await import("./dicomDerived");
+        const { buffer, sopInstanceUid } = buildPresentationState(ctx);
+        return {
+          success: true as const,
+          sopInstanceUid,
+          filename: `GSPS_${sopInstanceUid}.dcm`,
+          dicomBase64: buffer.toString("base64"),
+        };
+      }),
   }),
 
   // Export router
@@ -911,6 +1037,34 @@ export const appRouter = router({
     modalities: medicalProcedure.query(async () => {
       return listModalities();
     }),
+
+    // Modality Worklist (MWL) query — read-only scheduled procedure steps.
+    // Fail-soft: returns { available:false } when no worklist is configured on
+    // the demo PACS, so the UI shows "Worklist indisponible" without breaking.
+    worklist: medicalProcedure
+      .input(
+        z.object({
+          aet: aeTitleSchema,
+          patientName: z.string().max(64).optional(),
+          patientId: z.string().max(64).optional(),
+          accessionNumber: z.string().max(64).optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const query: Record<string, string> = {};
+        if (input.patientName) query.PatientName = input.patientName;
+        if (input.patientId) query.PatientID = input.patientId;
+        if (input.accessionNumber)
+          query.AccessionNumber = input.accessionNumber;
+        const res = await findWorklist({ aet: input.aet, query });
+        if (!res.available) {
+          return { available: false, entries: [] as const };
+        }
+        return {
+          available: true,
+          entries: parseWorklistAnswers(res.answers),
+        };
+      }),
 
     queryStudies: medicalProcedure
       .input(

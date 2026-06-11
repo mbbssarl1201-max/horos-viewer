@@ -780,6 +780,53 @@ export default function Viewer() {
     window.location.href = `/api/export/dicom-zip/${studyId}`;
   }, [studyId]);
 
+  // Planche d'impression — équivalent web du « DICOM Print » de Horos. On
+  // assemble une grille d'images (images-clés capturées + vue courante) dans une
+  // fenêtre imprimable, puis on lance l'impression du navigateur (papier ou PDF).
+  const handlePrintSheet = useCallback(() => {
+    const imgs: string[] = reportKeyImages.map(
+      k => `data:image/png;base64,${k.pngBase64}`
+    );
+    const canvas = getExportCanvas();
+    if (canvas) imgs.push(canvas.toDataURL("image/png"));
+    if (imgs.length === 0) {
+      toast.error("Aucune image à imprimer");
+      return;
+    }
+    const w = window.open("", "_blank");
+    if (!w) {
+      toast.error("Fenêtre d'impression bloquée (autoriser les pop-ups)");
+      return;
+    }
+    const cols = imgs.length <= 1 ? 1 : imgs.length <= 4 ? 2 : 3;
+    // Échappement HTML : patientName/modality viennent des métadonnées DICOM
+    // (texte non fiable) → on neutralise toute injection avant write().
+    const esc = (v: unknown) =>
+      String(v ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    const title = `${esc(study?.patientName) || "Patient"} — ${esc(study?.modality)}`;
+    const date = esc(new Date().toLocaleString("fr-CH"));
+    const body = imgs.map(s => `<img src="${s}"/>`).join("");
+    w.document.write(
+      `<!doctype html><html><head><meta charset="utf-8"><title>Planche — ${title}</title>` +
+        `<style>` +
+        `*{box-sizing:border-box}body{margin:0;background:#fff;color:#111;font-family:system-ui,sans-serif}` +
+        `.hdr{padding:8px 12px;font-size:12px;border-bottom:1px solid #ccc;display:flex;justify-content:space-between}` +
+        `.grid{display:grid;grid-template-columns:repeat(${cols},1fr);gap:4px;padding:6px}` +
+        `img{width:100%;display:block;background:#000;border:1px solid #000}` +
+        `@media print{@page{margin:8mm}}` +
+        `</style></head><body>` +
+        `<div class="hdr"><strong>${title}</strong><span>${imgs.length} image(s) · ${date} · MediView</span></div>` +
+        `<div class="grid">${body}</div>` +
+        `<script>window.onload=function(){setTimeout(function(){window.print()},500)}<\/script>` +
+        `</body></html>`
+    );
+    w.document.close();
+  }, [reportKeyImages, study]);
+
   // Print: open the current view in a print dialog (caviardages recomposés).
   const handlePrint = useCallback(() => {
     const canvas = getExportCanvas();
@@ -1289,6 +1336,14 @@ export default function Viewer() {
             >
               <FileText className="w-4 h-4" />
               <span className="text-[9px]">Tags</span>
+            </button>
+            <button
+              className="toolbar-btn"
+              title="Planche d'impression (équivalent DICOM Print)"
+              onClick={handlePrintSheet}
+            >
+              <Printer className="w-4 h-4" />
+              <span className="text-[9px]">Planche</span>
             </button>
           </>
         )}

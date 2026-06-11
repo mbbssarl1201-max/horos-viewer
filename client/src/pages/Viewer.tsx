@@ -77,6 +77,7 @@ import {
   computeVertexNormals,
 } from "@/lib/meshSmooth";
 import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
+import CurvedMprPanel from "@/components/CurvedMprPanel";
 import SeriesThumbnail from "@/components/SeriesThumbnail";
 import {
   Dialog,
@@ -99,6 +100,16 @@ import {
   clampActiveCell,
 } from "@/lib/viewportLayout";
 import { pickHangingProtocol } from "@/lib/hangingProtocols";
+import {
+  findPetSeries,
+  PET_COLORMAPS,
+  DEFAULT_PET_COLORMAP_ID,
+} from "@/lib/petFusion";
+import {
+  computeSuvFactor,
+  extractSuvMetadataFromDataset,
+  type SuvFactorResult,
+} from "@/lib/suv";
 import { toast } from "sonner";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 
@@ -239,6 +250,20 @@ export default function Viewer() {
   } | null>(null);
   const [slabThicknessMm, setSlabThicknessMm] = useState(0);
   const [slabMode, setSlabMode] = useState<SlabMode>("mip");
+  // ── Fusion PET-CT (MPR) ─────────────────────────────────────────────────
+  // Série PET choisie pour la superposition (null = fusion désactivée), opacité
+  // de fusion (0..1) et colormap. Fonctionnel uniquement si l'étude contient une
+  // série de modalité PT ; sinon le contrôle est affiché désactivé.
+  const [fusionPetSeries, setFusionPetSeries] = useState<number | null>(null);
+  const [fusionOpacity, setFusionOpacity] = useState<number>(0.5);
+  const [petColormapId, setPetColormapId] = useState<string>(
+    DEFAULT_PET_COLORMAP_ID
+  );
+  // Résultat du calcul du facteur SUV (lu des métadonnées DICOM de la série PET
+  // fusionnée). null tant que non calculé / indisponible.
+  const [suvResult, setSuvResult] = useState<SuvFactorResult | null>(null);
+  // Panneau Curved MPR (bêta) — overlay autonome, ne touche pas aux viewports.
+  const [curvedMprOpen, setCurvedMprOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportKeyImages, setReportKeyImages] = useState<ReportKeyImage[]>([]);
 
@@ -363,6 +388,64 @@ export default function Viewer() {
     () => (instancesList ?? []).map((inst: any) => inst.storageUrl || ""),
     [instancesList]
   );
+
+  // Séries PET (modality PT) disponibles dans l'étude pour la fusion.
+  const petSeriesOptions = useMemo(
+    () => findPetSeries((seriesList ?? []) as any),
+    [seriesList]
+  );
+  const hasPet = petSeriesOptions.length > 0;
+
+  // Instances de la série PET choisie → URLs des coupes pour le 2e volume.
+  const { data: petInstancesList } = trpc.instances.listBySeries.useQuery(
+    { seriesId: fusionPetSeries! },
+    { enabled: !!fusionPetSeries && viewMode === "mpr" }
+  );
+  const petImageUrls = useMemo(
+    () => (petInstancesList ?? []).map((inst: any) => inst.storageUrl || ""),
+    [petInstancesList]
+  );
+  // Fusion active uniquement en MPR, avec une série PET choisie ET ses coupes
+  // chargées (≥ 2). Sinon on ne passe rien à VolumeViewer (rendu CT seul).
+  const fusionActive =
+    viewMode === "mpr" && !!fusionPetSeries && petImageUrls.length >= 2;
+
+  // Calcul du facteur SUV depuis les métadonnées DICOM de la 1re coupe PET.
+  // Best-effort + fail-safe : la coupe est décodée de façon asynchrone par le
+  // loader (déclenché par VolumeViewer) → on tente quelques fois avant
+  // d'abandonner. N'altère JAMAIS le rendu : ne fait que renseigner l'affichage.
+  useEffect(() => {
+    setSuvResult(null);
+    if (!fusionActive || petImageUrls.length === 0) return;
+    let cancelled = false;
+    let tries = 0;
+    const firstUrl = petImageUrls[0];
+    const tick = async () => {
+      if (cancelled) return;
+      tries++;
+      try {
+        const loaderMod: any = await import(
+          "@cornerstonejs/dicom-image-loader"
+        );
+        const wadouri = loaderMod?.wadouri ?? loaderMod?.default?.wadouri;
+        const dataSet = wadouri?.dataSetCacheManager?.get?.(firstUrl);
+        if (dataSet) {
+          const meta = extractSuvMetadataFromDataset(dataSet);
+          if (!cancelled) setSuvResult(computeSuvFactor(meta));
+          return;
+        }
+      } catch {
+        // loader indisponible → on cesse poliment
+        return;
+      }
+      if (tries < 10 && !cancelled) setTimeout(tick, 800);
+    };
+    const t = setTimeout(tick, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [fusionActive, petImageUrls]);
 
   // Tableaux mémoïsés réutilisés par chaque cellule de la mosaïque (référence
   // stable → pas de re-setup parasite du viewport au scroll/W/L).
@@ -1091,6 +1174,106 @@ export default function Viewer() {
                 </option>
               ))}
             </select>
+
+            <Separator orientation="vertical" className="h-7 mx-1" />
+
+            {/* Fusion PET-CT — MPR uniquement. Fonctionnel si l'étude contient
+                une série PET (modality PT) ; sinon désactivé avec un message
+                explicite. La superposition est additive et fail-safe : un échec
+                de chargement PET laisse le MPR CT intact. */}
+            <label
+              className="text-[10px] text-muted-foreground"
+              title="Superposer une série PET colorée sur le CT (fusion)"
+            >
+              Fusion PET
+            </label>
+            {hasPet ? (
+              <>
+                <select
+                  className="bg-transparent text-[10px] border border-border rounded"
+                  value={fusionPetSeries ?? ""}
+                  onChange={e =>
+                    setFusionPetSeries(
+                      e.target.value ? Number(e.target.value) : null
+                    )
+                  }
+                  title="Choisir la série PET à fusionner"
+                >
+                  <option value="">Désactivée</option>
+                  {petSeriesOptions.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.seriesDescription ||
+                        `Série PET ${s.seriesNumber ?? s.id}`}
+                    </option>
+                  ))}
+                </select>
+                {fusionPetSeries && (
+                  <>
+                    <select
+                      className="bg-transparent text-[10px] border border-border rounded"
+                      value={petColormapId}
+                      onChange={e => setPetColormapId(e.target.value)}
+                      title="Palette de couleurs PET"
+                    >
+                      {PET_COLORMAPS.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={Math.round(fusionOpacity * 100)}
+                      onChange={e =>
+                        setFusionOpacity(Number(e.target.value) / 100)
+                      }
+                      title="Opacité de la fusion PET (%)"
+                    />
+                    <span className="text-[10px] w-8">
+                      {Math.round(fusionOpacity * 100)}%
+                    </span>
+                    {/* Facteur SUV (body weight) issu des métadonnées PET. */}
+                    {fusionActive && (
+                      <span
+                        className="text-[10px] text-muted-foreground"
+                        title={
+                          suvResult?.factor != null
+                            ? `SUV = valeur_pixel × ${suvResult.factor.toExponential(
+                                3
+                              )} (décroissance ${suvResult.decayTimeSec ?? "?"} s)`
+                            : suvResult?.reason ||
+                              "Facteur SUV en cours de calcul…"
+                        }
+                      >
+                        {suvResult?.factor != null
+                          ? `SUV ×${suvResult.factor.toExponential(2)}`
+                          : "SUV n/d"}
+                      </span>
+                    )}
+                  </>
+                )}
+              </>
+            ) : (
+              <span className="text-[10px] text-muted-foreground/60 italic">
+                Aucune série PET dans cette étude
+              </span>
+            )}
+
+            <Separator orientation="vertical" className="h-7 mx-1" />
+
+            {/* Curved MPR (bêta) — ouvre un panneau autonome de reformation
+                curviligne. N'altère pas les viewports MPR. */}
+            <button
+              className="toolbar-btn"
+              title="Curved MPR (bêta) — reformation curviligne le long d'une courbe"
+              onClick={() => setCurvedMprOpen(true)}
+            >
+              <Spline className="w-4 h-4" />
+              <span className="text-[9px]">Curved MPR (bêta)</span>
+            </button>
           </div>
         )}
         {/* Presets de rendu volumique — 3D only (liste déroulante : trop de
@@ -1522,6 +1705,9 @@ export default function Viewer() {
                   slabMode={slabMode}
                   preset3d={preset3d}
                   realistic3d={realistic3d}
+                  petImageUrls={fusionActive ? petImageUrls : undefined}
+                  fusionOpacity={fusionOpacity}
+                  petColormapId={petColormapId}
                 />
               )}
             </div>
@@ -1660,6 +1846,12 @@ export default function Viewer() {
                 onAddKeyImage={img => setReportKeyImages(p => [...p, img])}
                 onClose={() => setReportOpen(false)}
               />
+            )}
+
+            {/* Panneau Curved MPR (bêta) : overlay autonome, n'altère pas les
+                viewports. Disponible en mode MPR (volume chargé). */}
+            {curvedMprOpen && viewMode === "mpr" && (
+              <CurvedMprPanel onClose={() => setCurvedMprOpen(false)} />
             )}
           </div>
 

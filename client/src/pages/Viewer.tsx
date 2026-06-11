@@ -53,7 +53,14 @@ import {
   Eraser,
   Trash2,
   Box,
+  SquareDashedBottom,
 } from "lucide-react";
+import {
+  type RedactionRect,
+  normalizeRect,
+  isNegligibleRect,
+  compositeRedactedCanvas,
+} from "@/lib/redaction";
 import {
   polyDataArraysToObj,
   polyDataArraysStats,
@@ -172,6 +179,16 @@ const VIEWER_TOOLS = [
     icon: Eraser,
     description: "Gomme — effacer sous le curseur",
   },
+  // Caviardage (redaction) des PHI brûlés dans les pixels (US / capture
+  // secondaire) : on trace un rectangle, masqué en noir et recomposé sur
+  // toute image exportée. Calque overlay, pas un outil Cornerstone.
+  {
+    id: "redact",
+    label: "Caviarder",
+    icon: SquareDashedBottom,
+    description:
+      "Caviarder — masquer en noir une zone (PHI brûlé) ; appliqué aux exports",
+  },
   // NB : pas d'outil « crosshair » ici — il n'existe pas dans le toolMap 2D et
   // sélectionnait un outil inconnu (cassait le changement d'outil). La MPR
   // s'active via le bouton de mode « MPR » dédié (VolumeViewport), pas un outil.
@@ -225,6 +242,27 @@ export default function Viewer() {
   const [reportOpen, setReportOpen] = useState(false);
   const [reportKeyImages, setReportKeyImages] = useState<ReportKeyImage[]>([]);
 
+  // Caviardage (PHI brûlé) : rectangles de masquage stockés PAR IMAGE
+  // (série + coupe), en fractions du viewport. Recomposés en noir opaque sur
+  // toute image capturée/exportée pour garantir le retrait du PHI.
+  const [redactionsByImage, setRedactionsByImage] = useState<
+    Record<string, RedactionRect[]>
+  >({});
+  // Glissé en cours (en px conteneur) pendant le tracé du rectangle.
+  const [redactDraft, setRedactDraft] = useState<{
+    startX: number;
+    startY: number;
+    curX: number;
+    curY: number;
+  } | null>(null);
+  // Clé d'image courante = série + coupe affichée.
+  const redactionKey = `${selectedSeries ?? "none"}#${currentSlice}`;
+  const currentRedactions = redactionsByImage[redactionKey] ?? [];
+  // Caviardage en 1×1 uniquement : en mosaïque, le canvas exporté est une seule
+  // cellule, les fractions du viewport plein ne correspondraient pas.
+  const redactActive =
+    viewMode === "2d" && viewportLayout === "1x1" && activeTool === "redact";
+
   // Ciné / boucle : lecture automatique de la pile de coupes.
   const [cinePlaying, setCinePlaying] = useState(false);
   const [cineFps, setCineFps] = useState<number>(DEFAULT_CINE_FPS);
@@ -240,6 +278,65 @@ export default function Viewer() {
   const handleClearSegmentation = useCallback(() => {
     activeViewerRef.current?.clearSegmentation();
   }, []);
+
+  // Caviardage : début du tracé (souris enfoncée sur le calque overlay).
+  const handleRedactDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setRedactDraft({ startX: x, startY: y, curX: x, curY: y });
+  };
+
+  // Caviardage : déplacement pendant le tracé.
+  const handleRedactMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!redactDraft) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setRedactDraft({
+      ...redactDraft,
+      curX: e.clientX - rect.left,
+      curY: e.clientY - rect.top,
+    });
+  };
+
+  // Caviardage : fin du tracé → normalise en fraction et enregistre par image.
+  const handleRedactUp = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!redactDraft) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const r = normalizeRect(
+      redactDraft.startX,
+      redactDraft.startY,
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+      rect.width,
+      rect.height
+    );
+    setRedactDraft(null);
+    if (isNegligibleRect(r)) return; // clic accidentel : on ignore
+    setRedactionsByImage(prev => ({
+      ...prev,
+      [redactionKey]: [...(prev[redactionKey] ?? []), r],
+    }));
+    toast.success("Zone caviardée ajoutée (appliquée aux exports)");
+  };
+
+  // Retire le dernier caviardage de l'image courante.
+  const undoRedaction = () => {
+    setRedactionsByImage(prev => {
+      const list = prev[redactionKey] ?? [];
+      if (list.length === 0) return prev;
+      return { ...prev, [redactionKey]: list.slice(0, -1) };
+    });
+  };
+
+  // Efface tous les caviardages de l'image courante.
+  const clearRedactions = () => {
+    setRedactionsByImage(prev => {
+      if (!prev[redactionKey]?.length) return prev;
+      const next = { ...prev };
+      delete next[redactionKey];
+      return next;
+    });
+  };
 
   // Fetch study data
   const { data: study } = trpc.studies.get.useQuery(
@@ -449,10 +546,22 @@ export default function Viewer() {
   const getViewportCanvas = () =>
     document.querySelector<HTMLCanvasElement>("#cornerstone-viewport canvas");
 
+  // Renvoie le canvas À EXPORTER : si l'image courante porte des caviardages,
+  // on recompose une COPIE avec les zones masquées en noir opaque ; sinon le
+  // canvas onscreen tel quel. C'est le point unique par lequel passent toutes
+  // les sorties (capture / impression / email / compte rendu), garantissant
+  // que le PHI brûlé ne quitte jamais le visualiseur en clair.
+  const getExportCanvas = (): HTMLCanvasElement | null => {
+    const canvas = getViewportCanvas();
+    if (!canvas) return null;
+    return compositeRedactedCanvas(canvas, currentRedactions) ?? canvas;
+  };
+
   // Grab the current view as PNG base64 WITHOUT the data:image/png;base64, prefix
   // (same mechanism as Email/Capture). Returns null if no canvas is rendered.
+  // Les caviardages sont recomposés sur la sortie.
   const captureCurrentPng = (): string | null => {
-    const canvas = getViewportCanvas();
+    const canvas = getExportCanvas();
     if (!canvas) return null;
     return canvas.toDataURL("image/png").split(",")[1] ?? null;
   };
@@ -484,9 +593,9 @@ export default function Viewer() {
     setReportOpen(true);
   };
 
-  // Capture: download the current view as a PNG.
+  // Capture: download the current view as a PNG (caviardages recomposés).
   const handleCapture = useCallback(() => {
-    const canvas = getViewportCanvas();
+    const canvas = getExportCanvas();
     if (!canvas) return;
     canvas.toBlob(blob => {
       if (!blob) return;
@@ -496,7 +605,8 @@ export default function Viewer() {
       a.click();
       URL.revokeObjectURL(a.href);
     }, "image/png");
-  }, [studyId, currentSlice]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studyId, currentSlice, redactionKey, redactionsByImage]);
 
   // Export: download the whole study as a ZIP of DICOM files (server route,
   // same-origin so the session cookie authenticates the request).
@@ -505,9 +615,9 @@ export default function Viewer() {
     window.location.href = `/api/export/dicom-zip/${studyId}`;
   }, [studyId]);
 
-  // Print: open the current view in a print dialog.
+  // Print: open the current view in a print dialog (caviardages recomposés).
   const handlePrint = useCallback(() => {
-    const canvas = getViewportCanvas();
+    const canvas = getExportCanvas();
     if (!canvas) return;
     const dataUrl = canvas.toDataURL("image/png");
     const w = window.open("", "_blank");
@@ -531,7 +641,8 @@ export default function Viewer() {
   // open it directly from their inbox — no login, no link.
   const sendReportMutation = trpc.email.sendReport.useMutation();
   const handleEmailReport = useCallback(async () => {
-    const canvas = getViewportCanvas();
+    // Canvas caviardé : le PHI brûlé est retiré avant l'envoi par email.
+    const canvas = getExportCanvas();
     if (!canvas || !studyId) {
       toast.error("Aucune image à envoyer");
       return;
@@ -547,7 +658,8 @@ export default function Viewer() {
     } catch (e: any) {
       toast.error("Échec de l'envoi : " + (e?.message || "erreur"));
     }
-  }, [studyId, sendReportMutation]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studyId, sendReportMutation, redactionKey, redactionsByImage]);
 
   // Export DICOM des annotations : SR (mesures) et GSPS (calques graphiques).
   // Le serveur construit l'objet Part-10 (dcmjs) à partir des annotations
@@ -1413,6 +1525,87 @@ export default function Viewer() {
                 />
               )}
             </div>
+
+            {/* Calque de caviardage (PHI brûlé). Affiche les rectangles déjà
+                posés (toujours visibles en 2D) et, quand l'outil « Caviarder »
+                est actif, capte la souris pour tracer un nouveau rectangle. Les
+                zones sont recomposées en noir opaque sur les exports. */}
+            {viewMode === "2d" &&
+              viewportLayout === "1x1" &&
+              (currentRedactions.length > 0 || redactActive) && (
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    pointerEvents: redactActive ? "auto" : "none",
+                    cursor: redactActive ? "crosshair" : "default",
+                    zIndex: 20,
+                  }}
+                  onMouseDown={redactActive ? handleRedactDown : undefined}
+                  onMouseMove={redactActive ? handleRedactMove : undefined}
+                  onMouseUp={redactActive ? handleRedactUp : undefined}
+                  onMouseLeave={
+                    redactActive
+                      ? () => redactDraft && setRedactDraft(null)
+                      : undefined
+                  }
+                >
+                  {/* Rectangles posés : noir opaque (rendu à l'identique de
+                      l'export). */}
+                  {currentRedactions.map((r, i) => (
+                    <div
+                      key={`redact-${i}`}
+                      className="absolute bg-black"
+                      style={{
+                        left: `${r.x * 100}%`,
+                        top: `${r.y * 100}%`,
+                        width: `${r.w * 100}%`,
+                        height: `${r.h * 100}%`,
+                      }}
+                    />
+                  ))}
+                  {/* Rectangle en cours de tracé (contour pointillé). */}
+                  {redactDraft && (
+                    <div
+                      className="absolute bg-black/70 border border-dashed border-white/70"
+                      style={{
+                        left: Math.min(redactDraft.startX, redactDraft.curX),
+                        top: Math.min(redactDraft.startY, redactDraft.curY),
+                        width: Math.abs(redactDraft.curX - redactDraft.startX),
+                        height: Math.abs(redactDraft.curY - redactDraft.startY),
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+
+            {/* Barre de caviardage : annuler / tout effacer (2D, outil actif ou
+                zones présentes). */}
+            {viewMode === "2d" &&
+              viewportLayout === "1x1" &&
+              (redactActive || currentRedactions.length > 0) && (
+                <div
+                  className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-card/90 border border-border rounded px-2 py-1 text-[11px]"
+                  style={{ zIndex: 30 }}
+                >
+                  <span className="text-muted-foreground">
+                    Caviardage : {currentRedactions.length} zone(s)
+                  </span>
+                  <button
+                    className="px-2 py-0.5 rounded bg-secondary hover:bg-secondary/80 disabled:opacity-40"
+                    onClick={undoRedaction}
+                    disabled={currentRedactions.length === 0}
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    className="px-2 py-0.5 rounded bg-secondary hover:bg-secondary/80 disabled:opacity-40"
+                    onClick={clearRedactions}
+                    disabled={currentRedactions.length === 0}
+                  >
+                    Tout effacer
+                  </button>
+                </div>
+              )}
 
             {/* Overlay - Patient Info (top-left) */}
             {study && (

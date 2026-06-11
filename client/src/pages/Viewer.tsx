@@ -94,7 +94,8 @@ import {
 import { COLORMAPS } from "@/lib/colormaps";
 import { sortByInstanceNumber, sortBySliceLocation } from "@/lib/sortSeries";
 import { edgeLabelsFromIop } from "@/lib/orientationLabels";
-import { Palette } from "lucide-react";
+import { toggleKeyImage, nextKeyImage, prevKeyImage } from "@/lib/keyImages";
+import { Palette, Star } from "lucide-react";
 import {
   CINE_FPS_OPTIONS,
   DEFAULT_CINE_FPS,
@@ -217,6 +218,10 @@ export default function Viewer() {
   const [imageRotation, setImageRotation] = useState(0);
   // Vidéo inversée (négatif) sur le viewport actif.
   const [imageInverted, setImageInverted] = useState(false);
+  // Fonction VOI LUT : linéaire (défaut) ou sigmoïde (« Use VOI LUT » de Horos).
+  const [voiLutFn, setVoiLutFn] = useState<"LINEAR" | "SIGMOID">("LINEAR");
+  // Indices de coupes marquées « image clé » (« Key Image » ⌘K de Horos).
+  const [keyImageSlices, setKeyImageSlices] = useState<number[]>([]);
   // Tri des coupes (« Sort By » de Horos) : clé + sens.
   const [sortKey, setSortKey] = useState<"instanceNumber" | "sliceLocation">(
     "instanceNumber"
@@ -543,6 +548,11 @@ export default function Viewer() {
       if (timer) clearTimeout(timer);
     };
   }, [viewMode, selectedSeries, currentSlice, sortKey, sortAsc]);
+
+  // Les images clés sont propres à une série : on les réinitialise au changement.
+  useEffect(() => {
+    setKeyImageSlices([]);
+  }, [selectedSeries]);
 
   // Auto-select first series
   useEffect(() => {
@@ -1272,6 +1282,27 @@ export default function Viewer() {
                     </button>
                   </div>
                 </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-muted-foreground">
+                    Fonction VOI LUT
+                  </label>
+                  <div className="flex gap-1.5">
+                    {(["LINEAR", "SIGMOID"] as const).map(fn => (
+                      <button
+                        key={fn}
+                        className={`toolbar-btn !flex-row flex-1 gap-1 border border-border ${voiLutFn === fn ? "active" : ""}`}
+                        onClick={() => {
+                          setVoiLutFn(fn);
+                          activeViewerRef.current?.setVoiLutFunction(fn);
+                        }}
+                      >
+                        <span className="text-[10px]">
+                          {fn === "LINEAR" ? "Linéaire" : "Sigmoïde"}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="grid grid-cols-2 gap-1.5">
                   <button
                     className={`toolbar-btn !flex-row gap-1.5 border border-border ${imageInverted ? "active" : ""}`}
@@ -1345,6 +1376,49 @@ export default function Viewer() {
               <Printer className="w-4 h-4" />
               <span className="text-[9px]">Planche</span>
             </button>
+            <button
+              className={`toolbar-btn ${keyImageSlices.includes(currentSlice) ? "active" : ""}`}
+              title="Marquer/démarquer l'image clé (Key Image)"
+              onClick={() =>
+                setKeyImageSlices(prev => toggleKeyImage(prev, currentSlice))
+              }
+            >
+              <Star
+                className="w-4 h-4"
+                fill={
+                  keyImageSlices.includes(currentSlice)
+                    ? "currentColor"
+                    : "none"
+                }
+              />
+              <span className="text-[9px]">
+                Clé{keyImageSlices.length ? ` (${keyImageSlices.length})` : ""}
+              </span>
+            </button>
+            {keyImageSlices.length > 0 && (
+              <>
+                <button
+                  className="toolbar-btn"
+                  title="Image clé précédente"
+                  onClick={() =>
+                    setCurrentSlice(prevKeyImage(keyImageSlices, currentSlice))
+                  }
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span className="text-[9px]">‹ Clé</span>
+                </button>
+                <button
+                  className="toolbar-btn"
+                  title="Image clé suivante"
+                  onClick={() =>
+                    setCurrentSlice(nextKeyImage(keyImageSlices, currentSlice))
+                  }
+                >
+                  <ChevronRight className="w-4 h-4" />
+                  <span className="text-[9px]">Clé ›</span>
+                </button>
+              </>
+            )}
           </>
         )}
 

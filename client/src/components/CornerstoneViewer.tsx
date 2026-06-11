@@ -95,6 +95,8 @@ export interface CornerstoneViewerHandle {
   >;
   /** ImageOrientationPatient (6 valeurs) de l'image courante, ou null. */
   getImageOrientation: () => Promise<number[] | null>;
+  /** Fonction VOI LUT : linéaire (défaut) ou sigmoïde (« Use VOI LUT »). */
+  setVoiLutFunction: (fn: "LINEAR" | "SIGMOID") => void;
 }
 
 /**
@@ -611,6 +613,18 @@ const CornerstoneViewer = forwardRef<
           return null;
         } catch {
           return null;
+        }
+      },
+      setVoiLutFunction: (fn: "LINEAR" | "SIGMOID") => {
+        const viewport = getViewport();
+        if (!viewport) return;
+        try {
+          viewport.setProperties({
+            VOILUTFunction: fn === "SIGMOID" ? "SAMPLED_SIGMOID" : "LINEAR",
+          });
+          viewport.render();
+        } catch (e) {
+          console.warn("[Cornerstone3D] VOI LUT function ignorée:", e);
         }
       },
     }),

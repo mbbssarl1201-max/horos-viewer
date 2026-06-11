@@ -11,6 +11,7 @@ import { getColormapLut, isValidColormap } from "@/lib/colormaps";
 import { lookupTag, formatTagValue } from "@/lib/dicomTagDictionary";
 import { computeHistogram } from "@/lib/roiHistogram";
 import { growRegion2D } from "@/lib/regionGrow";
+import { erode, dilate } from "@/lib/morphology";
 import {
   isSegmentationTool,
   resolveBrushStrategy,
@@ -98,6 +99,12 @@ export interface CornerstoneViewerHandle {
   getImageOrientation: () => Promise<number[] | null>;
   /** Fonction VOI LUT : linéaire (défaut) ou sigmoïde (« Use VOI LUT »). */
   setVoiLutFunction: (fn: "LINEAR" | "SIGMOID") => void;
+  /** Morphologie sur le masque peint (« Brush ROIs ») : érosion/dilatation. */
+  applyMorphology: (op: "erode" | "dilate") => void;
+  /** Efface le masque peint (Pinceau/Gomme) de la coupe courante. */
+  clearPaintMask: () => void;
+  /** Règle le rayon du pinceau (en pixels image). */
+  setBrushRadius: (r: number) => void;
 }
 
 /**
@@ -398,6 +405,18 @@ const CornerstoneViewer = forwardRef<
   } | null>(null);
   const overlayElRef = useRef<HTMLCanvasElement | null>(null);
   const drawMaskOverlayRef = useRef<(() => void) | null>(null);
+  // Pinceau/Gomme (« Brush ROIs ») : masque peint manuellement pour la coupe
+  // courante (Uint8Array w×h) + rayon. Affiché via le même overlay que le
+  // region-grow. Reconstruit le canvas offscreen après chaque coup de pinceau.
+  const paintRef = useRef<{
+    mask: Uint8Array;
+    w: number;
+    h: number;
+    imageId: string;
+  } | null>(null);
+  const brushRadiusRef = useRef<number>(6);
+  // Reconstruit le canvas offscreen du masque peint + le pousse dans l'overlay.
+  const refreshPaintMaskRef = useRef<(() => void) | null>(null);
   // annotationUID → JSON of last-saved data, so a small drag (MODIFIED) that
   // doesn't actually change the measurement isn't re-inserted, and so the
   // exact same annotation isn't saved twice in a row.
@@ -638,6 +657,29 @@ const CornerstoneViewer = forwardRef<
         } catch (e) {
           console.warn("[Cornerstone3D] VOI LUT function ignorée:", e);
         }
+      },
+      applyMorphology: (op: "erode" | "dilate") => {
+        const p = paintRef.current;
+        if (!p) return;
+        try {
+          const next =
+            op === "erode"
+              ? erode(p.mask, p.w, p.h, 1)
+              : dilate(p.mask, p.w, p.h, 1);
+          paintRef.current = { ...p, mask: next };
+          refreshPaintMaskRef.current?.();
+        } catch (e) {
+          console.warn("[Cornerstone3D] morphologie ignorée:", e);
+        }
+      },
+      clearPaintMask: () => {
+        paintRef.current = null;
+        maskOverlayRef.current = null;
+        refreshPaintMaskRef.current?.();
+        drawMaskOverlayRef.current?.();
+      },
+      setBrushRadius: (r: number) => {
+        brushRadiusRef.current = Math.max(1, Math.min(40, Math.round(r)));
       },
     }),
     [getViewport, onWindowLevelChange]
@@ -1309,6 +1351,108 @@ const CornerstoneViewer = forwardRef<
       };
       drawMaskOverlayRef.current = draw;
 
+      // ── Pinceau/Gomme (« Brush ROIs ») via l'overlay ──────────────────────
+      // Construit le canvas offscreen coloré du masque peint + le pousse dans
+      // l'overlay (vert translucide pour distinguer du region-grow rouge).
+      const refreshPaint = () => {
+        const p = paintRef.current;
+        if (!p) {
+          maskOverlayRef.current = null;
+          draw();
+          return;
+        }
+        const off = document.createElement("canvas");
+        off.width = p.w;
+        off.height = p.h;
+        const octx = off.getContext("2d");
+        if (octx) {
+          const img = octx.createImageData(p.w, p.h);
+          for (let k = 0; k < p.mask.length; k++) {
+            if (p.mask[k]) {
+              img.data[k * 4] = 80;
+              img.data[k * 4 + 1] = 220;
+              img.data[k * 4 + 2] = 120;
+              img.data[k * 4 + 3] = 150;
+            }
+          }
+          octx.putImageData(img, 0, 0);
+          maskOverlayRef.current = { canvas: off, imageId: p.imageId };
+        }
+        draw();
+      };
+      refreshPaintMaskRef.current = refreshPaint;
+
+      // Estampe un disque (rayon courant) dans le masque peint à la position
+      // pointeur. `erase=true` retire au lieu d'ajouter. Crée/réinitialise le
+      // masque quand on change de coupe.
+      const stamp = (clientX: number, clientY: number, erase: boolean) => {
+        try {
+          const viewport = renderingEngineRef.current?.getViewport(
+            viewportIdRef.current
+          );
+          const imageId = viewport?.getCurrentImageId?.();
+          if (!viewport || !imageId) return;
+          const image = (cornerstone as any).cache?.getImage?.(imageId);
+          const cols = image?.columns;
+          const rows = image?.rows;
+          if (!cols || !rows) return;
+          let p = paintRef.current;
+          if (!p || p.imageId !== imageId || p.w !== cols || p.h !== rows) {
+            p = {
+              mask: new Uint8Array(cols * rows),
+              w: cols,
+              h: rows,
+              imageId,
+            };
+            paintRef.current = p;
+          }
+          const r = overlay.getBoundingClientRect();
+          const world = viewport.canvasToWorld?.([
+            clientX - r.left,
+            clientY - r.top,
+          ]);
+          const w2i = (cornerstone as any).utilities?.worldToImageCoords;
+          const ij =
+            world && typeof w2i === "function" ? w2i(imageId, world) : null;
+          if (!ij) return;
+          const ci = Math.round(ij[0]);
+          const cj = Math.round(ij[1]);
+          const rad = brushRadiusRef.current;
+          for (let dj = -rad; dj <= rad; dj++) {
+            for (let di = -rad; di <= rad; di++) {
+              if (di * di + dj * dj > rad * rad) continue;
+              const x = ci + di;
+              const y = cj + dj;
+              if (x < 0 || y < 0 || x >= cols || y >= rows) continue;
+              p.mask[y * cols + x] = erase ? 0 : 1;
+            }
+          }
+          refreshPaint();
+        } catch {
+          /* peinture best-effort */
+        }
+      };
+
+      let painting = false;
+      const isPaintTool = () =>
+        activeToolRef.current === "paint" || activeToolRef.current === "erase";
+      const onPaintDown = (e: PointerEvent) => {
+        if (!isPaintTool()) return;
+        painting = true;
+        overlay.setPointerCapture?.(e.pointerId);
+        stamp(e.clientX, e.clientY, activeToolRef.current === "erase");
+      };
+      const onPaintMove = (e: PointerEvent) => {
+        if (!painting || !isPaintTool()) return;
+        stamp(e.clientX, e.clientY, activeToolRef.current === "erase");
+      };
+      const onPaintUp = () => {
+        painting = false;
+      };
+      overlay.addEventListener("pointerdown", onPaintDown);
+      overlay.addEventListener("pointermove", onPaintMove);
+      overlay.addEventListener("pointerup", onPaintUp);
+
       const { eventTarget, Enums } = cornerstone as any;
       const onRendered = (evt: any) => {
         if (evt?.detail?.viewportId === viewportIdRef.current) draw();
@@ -1322,9 +1466,13 @@ const CornerstoneViewer = forwardRef<
             onRendered
           );
         } catch {}
+        overlay.removeEventListener("pointerdown", onPaintDown);
+        overlay.removeEventListener("pointermove", onPaintMove);
+        overlay.removeEventListener("pointerup", onPaintUp);
         overlay.remove();
         overlayElRef.current = null;
         drawMaskOverlayRef.current = null;
+        refreshPaintMaskRef.current = null;
       };
     })();
     return () => {
@@ -1332,6 +1480,19 @@ const CornerstoneViewer = forwardRef<
       cleanup();
     };
   }, [isInitialized]);
+
+  // L'overlay n'intercepte les clics QUE pour Pinceau/Gomme (sinon les
+  // événements doivent passer à Cornerstone : W/L, mesures, region-grow…).
+  useEffect(() => {
+    const ov = overlayElRef.current;
+    if (!ov) return;
+    ov.style.pointerEvents =
+      activeTool === "paint" || activeTool === "erase" ? "auto" : "none";
+    ov.style.cursor =
+      activeTool === "paint" || activeTool === "erase"
+        ? "crosshair"
+        : "default";
+  }, [activeTool, isInitialized]);
 
   // Re-hydration: re-draw previously-saved annotations once the viewport is
   // ready. Runs when the saved set or the loaded stack changes. addAnnotation

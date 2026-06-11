@@ -518,18 +518,29 @@ export default function Viewer() {
       return;
     }
     let cancelled = false;
-    const t = setTimeout(async () => {
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // L'image est décodée de façon asynchrone : on re-tente jusqu'à obtenir
+    // l'orientation (max ~5 s), puis on s'arrête.
+    const tick = async () => {
+      if (cancelled) return;
+      tries++;
       try {
         const iop = await activeViewerRef.current?.getImageOrientation?.();
         if (cancelled) return;
-        setOrientLabels(iop ? edgeLabelsFromIop(iop) : null);
+        if (iop) {
+          setOrientLabels(edgeLabelsFromIop(iop));
+          return;
+        }
       } catch {
-        if (!cancelled) setOrientLabels(null);
+        /* pas encore prêt */
       }
-    }, 400);
+      if (tries < 10 && !cancelled) timer = setTimeout(tick, 500);
+    };
+    timer = setTimeout(tick, 300);
     return () => {
       cancelled = true;
-      clearTimeout(t);
+      if (timer) clearTimeout(timer);
     };
   }, [viewMode, selectedSeries, currentSlice, sortKey, sortAsc]);
 

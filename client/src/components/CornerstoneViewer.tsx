@@ -9,6 +9,7 @@ import {
 import { patchImagerPixelSpacing } from "@/lib/imagerPixelSpacing";
 import { getColormapLut, isValidColormap } from "@/lib/colormaps";
 import { lookupTag, formatTagValue } from "@/lib/dicomTagDictionary";
+import { computeHistogram } from "@/lib/roiHistogram";
 import {
   isSegmentationTool,
   resolveBrushStrategy,
@@ -638,6 +639,68 @@ const CornerstoneViewer = forwardRef<
       const { eventTarget } = cornerstone;
       const Events = cornerstoneTools.Enums.Events;
 
+      // Histogramme des valeurs (HU) dans une ROI ellipse/rectangle —
+      // « Histogram of Selected ROI » de Horos. Best-effort : on échantillonne
+      // la boîte englobante de la ROI dans les pixels de l'image courante
+      // (mappage monde→pixel via worldToImageCoords), en testant l'appartenance
+      // à l'ellipse le cas échéant, puis on construit 64 classes. Jamais bloquant.
+      const computeRoiHistogram = (annotation: any): number[] | undefined => {
+        try {
+          const toolName = annotation?.metadata?.toolName;
+          if (toolName !== "RectangleROI" && toolName !== "EllipticalROI")
+            return undefined;
+          const imageId = annotation?.metadata?.referencedImageId;
+          const pts = annotation?.data?.handles?.points;
+          if (!imageId || !Array.isArray(pts) || pts.length < 2)
+            return undefined;
+          const image = (cornerstone as any).cache?.getImage?.(imageId);
+          const pixelData = image?.getPixelData?.();
+          const cols = image?.columns;
+          const rows = image?.rows;
+          if (!pixelData || !cols || !rows) return undefined;
+          const slope = image.slope ?? 1;
+          const intercept = image.intercept ?? 0;
+          const w2i = (cornerstone as any).utilities?.worldToImageCoords;
+          if (typeof w2i !== "function") return undefined;
+          const ij = pts
+            .map((p: number[]) => w2i(imageId, p))
+            .filter((p: any) => Array.isArray(p) && p.length >= 2);
+          if (ij.length < 2) return undefined;
+          const xs = ij.map((p: number[]) => p[0]);
+          const ys = ij.map((p: number[]) => p[1]);
+          const x0 = Math.min(...xs);
+          const x1 = Math.max(...xs);
+          const y0 = Math.min(...ys);
+          const y1 = Math.max(...ys);
+          const minI = Math.max(0, Math.floor(x0));
+          const maxI = Math.min(cols - 1, Math.ceil(x1));
+          const minJ = Math.max(0, Math.floor(y0));
+          const maxJ = Math.min(rows - 1, Math.ceil(y1));
+          const cx = (x0 + x1) / 2;
+          const cy = (y0 + y1) / 2;
+          const rx = (x1 - x0) / 2 || 1;
+          const ry = (y1 - y0) / 2 || 1;
+          const isEllipse = toolName === "EllipticalROI";
+          const values: number[] = [];
+          for (let j = minJ; j <= maxJ; j++) {
+            for (let i = minI; i <= maxI; i++) {
+              if (isEllipse) {
+                const dx = (i - cx) / rx;
+                const dy = (j - cy) / ry;
+                if (dx * dx + dy * dy > 1) continue;
+              }
+              const v = pixelData[j * cols + i];
+              if (v === undefined) continue;
+              values.push(v * slope + intercept);
+            }
+          }
+          if (values.length < 2) return undefined;
+          return computeHistogram(values, 64).bins;
+        } catch {
+          return undefined;
+        }
+      };
+
       const persist = (annotation: any) => {
         if (!annotation) return;
         const uid: string | undefined = annotation.annotationUID;
@@ -646,7 +709,10 @@ const CornerstoneViewer = forwardRef<
 
         // ROI stats overlay (best-effort) — replaces the old polling read.
         const stats = extractRoiStats(annotation);
-        if (stats) onRoiStatsRef.current?.(stats);
+        if (stats) {
+          stats.histogram = computeRoiHistogram(annotation);
+          onRoiStatsRef.current?.(stats);
+        }
 
         const save = onSaveAnnotationRef.current;
         if (!save) return;

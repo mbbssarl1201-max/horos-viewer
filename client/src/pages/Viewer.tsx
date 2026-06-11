@@ -278,6 +278,8 @@ export default function Viewer() {
   const [activeColormap, setActiveColormap] = useState<string | null>(null);
   // Filtre de convolution actif (nom de noyau) ou null.
   const [convolution, setConvolution] = useState<string | null>(null);
+  // Soustraction DSA active (« Subtraction » de Horos).
+  const [dsaActive, setDsaActive] = useState(false);
   // Rotation absolue courante (0/90/180/270) pour le bouton « Rotation 90° ».
   const [imageRotation, setImageRotation] = useState(0);
   // Vidéo inversée (négatif) sur le viewport actif.
@@ -1590,6 +1592,33 @@ export default function Viewer() {
                       </option>
                     ))}
                   </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-muted-foreground">
+                    Soustraction (DSA)
+                  </label>
+                  <div className="flex gap-1.5">
+                    <button
+                      className="toolbar-btn !flex-row flex-1 gap-1 border border-border"
+                      title="Capturer la coupe courante comme masque"
+                      onClick={() => activeViewerRef.current?.captureDsaMask()}
+                    >
+                      <span className="text-[10px]">Capturer masque</span>
+                    </button>
+                    <button
+                      className={`toolbar-btn !flex-row gap-1 border border-border px-2 ${dsaActive ? "active" : ""}`}
+                      title="Activer/désactiver la soustraction"
+                      onClick={() => {
+                        const next = !dsaActive;
+                        setDsaActive(next);
+                        activeViewerRef.current?.setDsaActive(next);
+                      }}
+                    >
+                      <span className="text-[10px]">
+                        {dsaActive ? "ON" : "OFF"}
+                      </span>
+                    </button>
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <label className="text-[11px] font-medium text-muted-foreground">

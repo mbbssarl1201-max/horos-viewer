@@ -108,6 +108,10 @@ export interface CornerstoneViewerHandle {
   setBrushRadius: (r: number) => void;
   /** Filtre de convolution appliqué à la coupe (nom de noyau, ou null = aucun). */
   setConvolution: (name: string | null) => void;
+  /** DSA : capture la coupe affichée comme masque de soustraction. */
+  captureDsaMask: () => void;
+  /** DSA : active/désactive l'affichage soustrait (live − masque). */
+  setDsaActive: (active: boolean) => void;
 }
 
 /**
@@ -423,6 +427,13 @@ const CornerstoneViewer = forwardRef<
   // Filtre de convolution actif (nom de noyau) ou null. Appliqué à la coupe
   // affichée via l'overlay, ré-évalué à chaque rendu (slice/W-L).
   const convolutionRef = useRef<string | null>(null);
+  // Soustraction DSA (« Subtraction ») : masque de gris capturé + activation.
+  const dsaMaskRef = useRef<{
+    gray: Uint8ClampedArray;
+    w: number;
+    h: number;
+  } | null>(null);
+  const dsaActiveRef = useRef<boolean>(false);
   // annotationUID → JSON of last-saved data, so a small drag (MODIFIED) that
   // doesn't actually change the measurement isn't re-inserted, and so the
   // exact same annotation isn't saved twice in a row.
@@ -691,6 +702,35 @@ const CornerstoneViewer = forwardRef<
         convolutionRef.current = name;
         // Force un rendu Cornerstone (déclenche IMAGE_RENDERED → ré-applique le
         // filtre via l'overlay) ; sinon redraw direct.
+        try {
+          getViewport()?.render();
+        } catch {}
+        drawMaskOverlayRef.current?.();
+      },
+      captureDsaMask: () => {
+        try {
+          const host = viewportRef.current;
+          const csCanvas = host?.querySelector(
+            "canvas"
+          ) as HTMLCanvasElement | null;
+          if (!csCanvas) return;
+          const tmp = document.createElement("canvas");
+          tmp.width = csCanvas.width;
+          tmp.height = csCanvas.height;
+          const tctx = tmp.getContext("2d");
+          if (!tctx) return;
+          tctx.drawImage(csCanvas, 0, 0);
+          const src = tctx.getImageData(0, 0, tmp.width, tmp.height);
+          const n = tmp.width * tmp.height;
+          const gray = new Uint8ClampedArray(n);
+          for (let i = 0; i < n; i++) gray[i] = src.data[i * 4];
+          dsaMaskRef.current = { gray, w: tmp.width, h: tmp.height };
+        } catch {
+          /* best-effort */
+        }
+      },
+      setDsaActive: (active: boolean) => {
+        dsaActiveRef.current = active;
         try {
           getViewport()?.render();
         } catch {}
@@ -1329,6 +1369,43 @@ const CornerstoneViewer = forwardRef<
           if (!ov || !host) return;
           const ctx = ov.getContext("2d");
           if (!ctx) return;
+
+          // ── Soustraction DSA : live − masque (+128 mi-gris pour le signe) ──
+          if (dsaActiveRef.current && dsaMaskRef.current) {
+            const csCanvas = host.querySelector(
+              "canvas"
+            ) as HTMLCanvasElement | null;
+            const mask = dsaMaskRef.current;
+            if (csCanvas && csCanvas !== ov && csCanvas.width === mask.w) {
+              const cw3 = csCanvas.width;
+              const ch3 = csCanvas.height;
+              if (ov.width !== cw3 || ov.height !== ch3) {
+                ov.width = cw3;
+                ov.height = ch3;
+              }
+              ctx.setTransform(1, 0, 0, 1, 0, 0);
+              const tmp = document.createElement("canvas");
+              tmp.width = cw3;
+              tmp.height = ch3;
+              const tctx = tmp.getContext("2d");
+              if (tctx) {
+                tctx.drawImage(csCanvas, 0, 0);
+                const src = tctx.getImageData(0, 0, cw3, ch3);
+                const n = cw3 * ch3;
+                const out = ctx.createImageData(cw3, ch3);
+                for (let i = 0; i < n; i++) {
+                  let v = src.data[i * 4] - mask.gray[i] + 128;
+                  v = v < 0 ? 0 : v > 255 ? 255 : v;
+                  out.data[i * 4] = v;
+                  out.data[i * 4 + 1] = v;
+                  out.data[i * 4 + 2] = v;
+                  out.data[i * 4 + 3] = 255;
+                }
+                ctx.putImageData(out, 0, 0);
+              }
+            }
+            return;
+          }
 
           // ── Filtre de convolution : applique le noyau à la coupe affichée ──
           // On lit le canvas Cornerstone (1er <canvas> ; l'overlay est ajouté

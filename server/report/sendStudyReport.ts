@@ -10,6 +10,8 @@ import { storageGetBuffer } from "../storage";
 import { sendEmail } from "../email";
 import { renderDicomFrame } from "./dicomRaster";
 import { buildCineMp4, ffmpegAvailable } from "./cineVideo";
+import { logger } from "../_core/logger";
+import { captureException } from "../_core/sentry";
 import { buildReportPdf } from "./reportPdf";
 
 const MAX_VIDEO_FRAMES = 400;
@@ -164,10 +166,17 @@ export async function sendStudyReportImpl(
     attachments,
   });
 
-  if (!result.success)
-    throw new TRPCError({
+  if (!result.success) {
+    const err = new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
       message: result.error || "Échec d'envoi de l'email",
     });
+    logger.error("report.send_failed", {
+      studyId: input.studyId,
+      error: result.error ?? "unknown",
+    });
+    captureException(err);
+    throw err;
+  }
   return { success: true };
 }

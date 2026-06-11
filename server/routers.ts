@@ -334,10 +334,9 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        const { getDb } = await import("./db");
-        const { studies } = await import("../drizzle/schema");
-        const { eq } = await import("drizzle-orm");
-        const db = await getDb();
+        const { dbCtx } = await import("./_core/dbCtx");
+        const { db, schema, eq } = await dbCtx();
+        const { studies } = schema;
         if (!db)
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
@@ -400,10 +399,9 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        const { getDb } = await import("./db");
-        const { studies } = await import("../drizzle/schema");
-        const { eq } = await import("drizzle-orm");
-        const db = await getDb();
+        const { dbCtx } = await import("./_core/dbCtx");
+        const { db, schema, eq } = await dbCtx();
+        const { studies } = schema;
         if (!db)
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
@@ -992,10 +990,9 @@ export const appRouter = router({
   // PACS Servers CRUD router
   pacsServers: router({
     list: medicalProcedure.query(async ({ ctx }) => {
-      const { getDb } = await import("./db");
-      const { pacsServers } = await import("../drizzle/schema");
-      const { eq } = await import("drizzle-orm");
-      const db = await getDb();
+      const { dbCtx } = await import("./_core/dbCtx");
+      const { db, schema, eq } = await dbCtx();
+      const { pacsServers } = schema;
       if (!db) return [];
       return db
         .select()
@@ -1295,6 +1292,56 @@ export const appRouter = router({
       )
       .mutation(async ({ input }) => {
         return notifyReportFinalized(input);
+      }),
+  }),
+
+  // Journal d'audit (access_logs) : consultation/export et rétention.
+  // Réservé aux administrateurs (garde stricte). L'export est aussi exposé en
+  // CSV via la route Express GET /api/audit/export.csv (même garde).
+  audit: router({
+    // Renvoie les lignes du journal d'accès (cap AUDIT_EXPORT_MAX) pour que
+    // l'admin les télécharge / construise un CSV côté client.
+    export: strictAdminProcedure
+      .input(
+        z
+          .object({
+            from: z.coerce.date().optional(),
+            to: z.coerce.date().optional(),
+            limit: z.number().int().min(1).optional(),
+          })
+          .optional()
+      )
+      .query(async ({ input, ctx }) => {
+        const { queryAuditLogs, AUDIT_EXPORT_MAX } = await import("./audit");
+        const rows = await queryAuditLogs(input ?? {});
+        // Tracer l'export du journal lui-même (méta-audit, sans PHI).
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "audit.export",
+          studyId: null,
+          detail: `rows=${rows.length}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { rows, cap: AUDIT_EXPORT_MAX };
+      }),
+  }),
+
+  // Rétention : purge explicite (jamais automatique) des vieilles entrées
+  // d'audit. Action destructive → garde admin stricte + plancher de sécurité.
+  retention: router({
+    purge: strictAdminProcedure
+      .input(z.object({ olderThanDays: z.number().int().min(30) }))
+      .mutation(async ({ input, ctx }) => {
+        const { purgeAuditLogs } = await import("./audit");
+        const deleted = await purgeAuditLogs(input.olderThanDays);
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "audit.purge",
+          studyId: null,
+          detail: `olderThanDays=${input.olderThanDays};deleted=${deleted}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { deleted };
       }),
   }),
 });

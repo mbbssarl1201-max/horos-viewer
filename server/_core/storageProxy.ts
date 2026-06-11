@@ -2,6 +2,8 @@ import type { Express } from "express";
 import { sdk } from "./sdk";
 import { hasMedicalAccess } from "../rbac";
 import { isStorageConfigured, storageGetObject } from "../storage";
+import { logger } from "./logger";
+import { captureException } from "./sentry";
 
 export function registerStorageProxy(app: Express) {
   app.get("/manus-storage/*", async (req, res) => {
@@ -59,6 +61,8 @@ export function registerStorageProxy(app: Express) {
       });
       body.pipe(res);
     } catch (err) {
+      logger.error("storageProxy.failed", { error: String(err) });
+      captureException(err);
       console.error("[StorageProxy] failed:", err);
       res.status(502).send("Storage proxy error");
     }

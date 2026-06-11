@@ -12,6 +12,7 @@ import { lookupTag, formatTagValue } from "@/lib/dicomTagDictionary";
 import { computeHistogram } from "@/lib/roiHistogram";
 import { growRegion2D } from "@/lib/regionGrow";
 import { erode, dilate } from "@/lib/morphology";
+import { CONVOLUTION_KERNELS, applyKernel } from "@/lib/convolution";
 import {
   isSegmentationTool,
   resolveBrushStrategy,
@@ -105,6 +106,8 @@ export interface CornerstoneViewerHandle {
   clearPaintMask: () => void;
   /** Règle le rayon du pinceau (en pixels image). */
   setBrushRadius: (r: number) => void;
+  /** Filtre de convolution appliqué à la coupe (nom de noyau, ou null = aucun). */
+  setConvolution: (name: string | null) => void;
 }
 
 /**
@@ -417,6 +420,9 @@ const CornerstoneViewer = forwardRef<
   const brushRadiusRef = useRef<number>(6);
   // Reconstruit le canvas offscreen du masque peint + le pousse dans l'overlay.
   const refreshPaintMaskRef = useRef<(() => void) | null>(null);
+  // Filtre de convolution actif (nom de noyau) ou null. Appliqué à la coupe
+  // affichée via l'overlay, ré-évalué à chaque rendu (slice/W-L).
+  const convolutionRef = useRef<string | null>(null);
   // annotationUID → JSON of last-saved data, so a small drag (MODIFIED) that
   // doesn't actually change the measurement isn't re-inserted, and so the
   // exact same annotation isn't saved twice in a row.
@@ -680,6 +686,15 @@ const CornerstoneViewer = forwardRef<
       },
       setBrushRadius: (r: number) => {
         brushRadiusRef.current = Math.max(1, Math.min(40, Math.round(r)));
+      },
+      setConvolution: (name: string | null) => {
+        convolutionRef.current = name;
+        // Force un rendu Cornerstone (déclenche IMAGE_RENDERED → ré-applique le
+        // filtre via l'overlay) ; sinon redraw direct.
+        try {
+          getViewport()?.render();
+        } catch {}
+        drawMaskOverlayRef.current?.();
       },
     }),
     [getViewport, onWindowLevelChange]
@@ -1312,14 +1327,66 @@ const CornerstoneViewer = forwardRef<
           const ov = overlayElRef.current;
           const host = viewportRef.current;
           if (!ov || !host) return;
+          const ctx = ov.getContext("2d");
+          if (!ctx) return;
+
+          // ── Filtre de convolution : applique le noyau à la coupe affichée ──
+          // On lit le canvas Cornerstone (1er <canvas> ; l'overlay est ajouté
+          // après), on filtre le canal de gris, et on plaque le résultat opaque.
+          const conv = convolutionRef.current;
+          if (conv) {
+            const csCanvas = host.querySelector(
+              "canvas"
+            ) as HTMLCanvasElement | null;
+            const kdef = CONVOLUTION_KERNELS.find(k => k.name === conv);
+            if (csCanvas && csCanvas !== ov && kdef) {
+              const cw2 = csCanvas.width;
+              const ch2 = csCanvas.height;
+              if (cw2 > 0 && ch2 > 0) {
+                if (ov.width !== cw2 || ov.height !== ch2) {
+                  ov.width = cw2;
+                  ov.height = ch2;
+                }
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                const tmp = document.createElement("canvas");
+                tmp.width = cw2;
+                tmp.height = ch2;
+                const tctx = tmp.getContext("2d");
+                if (tctx) {
+                  tctx.drawImage(csCanvas, 0, 0);
+                  const src = tctx.getImageData(0, 0, cw2, ch2);
+                  const n = cw2 * ch2;
+                  const gray = new Array<number>(n);
+                  for (let i = 0; i < n; i++) gray[i] = src.data[i * 4];
+                  const filtered = applyKernel(
+                    gray,
+                    cw2,
+                    ch2,
+                    kdef.kernel,
+                    kdef.divisor,
+                    kdef.bias
+                  );
+                  const out = ctx.createImageData(cw2, ch2);
+                  for (let i = 0; i < n; i++) {
+                    const v = Math.max(0, Math.min(255, filtered[i] | 0));
+                    out.data[i * 4] = v;
+                    out.data[i * 4 + 1] = v;
+                    out.data[i * 4 + 2] = v;
+                    out.data[i * 4 + 3] = 255;
+                  }
+                  ctx.putImageData(out, 0, 0);
+                }
+              }
+            }
+            return;
+          }
+
           const w = host.clientWidth;
           const h = host.clientHeight;
           if (ov.width !== w || ov.height !== h) {
             ov.width = w;
             ov.height = h;
           }
-          const ctx = ov.getContext("2d");
-          if (!ctx) return;
           ctx.setTransform(1, 0, 0, 1, 0, 0);
           ctx.clearRect(0, 0, w, h);
           const data = maskOverlayRef.current;

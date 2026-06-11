@@ -99,6 +99,8 @@ import { sortByInstanceNumber, sortBySliceLocation } from "@/lib/sortSeries";
 import { edgeLabelsFromIop } from "@/lib/orientationLabels";
 import { suggestIsoForModality } from "@/lib/surfaceThreshold";
 import { CONVOLUTION_KERNELS } from "@/lib/convolution";
+import { extractRoiStats } from "@/lib/annotationMapping";
+import { stackVolume } from "@/lib/roiVolume";
 import { toggleKeyImage, nextKeyImage, prevKeyImage } from "@/lib/keyImages";
 import { findPriors } from "@/lib/priorStudies";
 import { Palette, Star } from "lucide-react";
@@ -509,6 +511,8 @@ export default function Viewer() {
   const [priorsOpen, setPriorsOpen] = useState(false);
   // ROI Manager (« ROI Manager » de Horos) : liste des ROI enregistrées + saut.
   const [roiManagerOpen, setRoiManagerOpen] = useState(false);
+  // Épaisseur de coupe (mm) pour le calcul de volume (« Compute Volume »).
+  const [volSliceThickness, setVolSliceThickness] = useState(1);
 
   // Fetch series for this study
   const { data: seriesList } = trpc.series.listByStudy.useQuery(
@@ -2462,6 +2466,32 @@ export default function Viewer() {
               cette série.
             </DialogDescription>
           </DialogHeader>
+          {/* Compute Volume : Σ(aire des ROIs surfaciques) × épaisseur de coupe */}
+          {(() => {
+            const areas = (savedAnnotations ?? [])
+              .map((a: any) => extractRoiStats(a.data)?.area ?? 0)
+              .filter((v: number) => v > 0);
+            if (areas.length === 0) return null;
+            const volMm3 = stackVolume(areas, volSliceThickness);
+            return (
+              <div className="flex items-center gap-2 text-xs border border-border rounded px-2 py-1.5 bg-card">
+                <span className="text-muted-foreground">Épaisseur (mm)</span>
+                <input
+                  type="number"
+                  min={0.1}
+                  step={0.1}
+                  value={volSliceThickness}
+                  onChange={e =>
+                    setVolSliceThickness(Math.max(0.1, Number(e.target.value)))
+                  }
+                  className="w-16 bg-input border border-border rounded px-1.5 py-0.5"
+                />
+                <span className="ml-auto font-medium">
+                  Volume : {(volMm3 / 1000).toFixed(2)} cm³
+                </span>
+              </div>
+            );
+          })()}
           <div className="max-h-[60vh] overflow-auto divide-y divide-border/40">
             {(savedAnnotations ?? []).length === 0 ? (
               <p className="text-xs text-muted-foreground py-3">

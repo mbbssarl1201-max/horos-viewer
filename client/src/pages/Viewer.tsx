@@ -106,6 +106,13 @@ import {
 } from "@/lib/cine";
 import { resolveShortcut, shortcutLegend } from "@/lib/keyboardShortcuts";
 import {
+  DEFAULT_HOTKEYS,
+  matchEvent as matchHotkey,
+  setHotkey,
+  type HotkeyMap,
+  type HotkeyAction,
+} from "@/lib/hotkeys";
+import {
   type ViewportLayout,
   layoutCellCount,
   layoutGridClass,
@@ -206,6 +213,36 @@ const VIEWER_TOOLS = [
   // sélectionnait un outil inconnu (cassait le changement d'outil). La MPR
   // s'active via le bouton de mode « MPR » dédié (VolumeViewport), pas un outil.
 ];
+
+// ── Raccourcis clavier configurables (« HotKeys » de Horos) ───────────────────
+const HOTKEYS_LS_KEY = "mediview:hotkeys";
+// Actions réellement pilotées par le viewer (sous-ensemble de HotkeyAction).
+const HOTKEY_LABELS: Partial<Record<HotkeyAction, string>> = {
+  prevSlice: "Coupe précédente",
+  nextSlice: "Coupe suivante",
+  prevSeries: "Série précédente",
+  nextSeries: "Série suivante",
+  resetView: "Réinitialiser la vue",
+  keyImage: "Image clé",
+  toggleInvert: "Négatif",
+  toggleCine: "Lecture ciné",
+  screenshot: "Capture PNG",
+};
+function loadHotkeys(): HotkeyMap {
+  try {
+    const v = JSON.parse(localStorage.getItem(HOTKEYS_LS_KEY) || "{}");
+    return { ...DEFAULT_HOTKEYS, ...v };
+  } catch {
+    return { ...DEFAULT_HOTKEYS };
+  }
+}
+function saveHotkeys(m: HotkeyMap) {
+  try {
+    localStorage.setItem(HOTKEYS_LS_KEY, JSON.stringify(m));
+  } catch {
+    /* mode privé / quota : best-effort */
+  }
+}
 
 export default function Viewer() {
   const params = useParams<{ studyId?: string }>();
@@ -343,6 +380,11 @@ export default function Viewer() {
   const [cineFps, setCineFps] = useState<number>(DEFAULT_CINE_FPS);
   // Aide raccourcis clavier.
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // Raccourcis configurables (overrides localStorage) + action en cours de remap.
+  const [hotkeyMap, setHotkeyMap] = useState<HotkeyMap>(() => loadHotkeys());
+  const [capturingAction, setCapturingAction] = useState<HotkeyAction | null>(
+    null
+  );
 
   const viewportRef = useRef<HTMLDivElement>(null);
   // Réf vers le viewer ACTIF (1x1 → l'unique ; mosaïque → la cellule active) pour
@@ -683,6 +725,79 @@ export default function Viewer() {
         return;
       }
 
+      // Mode capture : on enregistre la prochaine touche comme nouveau raccourci.
+      if (capturingAction) {
+        e.preventDefault();
+        const combo = e.key === " " ? "Space" : e.key;
+        setHotkeyMap(m => {
+          const nm = setHotkey(m, capturingAction, combo);
+          saveHotkeys(nm);
+          return nm;
+        });
+        setCapturingAction(null);
+        return;
+      }
+
+      // Couche configurable (« HotKeys » de Horos) — consultée AVANT les
+      // raccourcis fixes. Les actions non gérées ici retombent sur resolveShortcut.
+      const hk = matchHotkey(hotkeyMap, {
+        key: e.key,
+        ctrl: e.ctrlKey,
+        shift: e.shiftKey,
+        alt: e.altKey,
+        meta: e.metaKey,
+      });
+      if (hk) {
+        let handled = true;
+        switch (hk) {
+          case "prevSlice":
+            setCurrentSlice(p => Math.max(0, p - 1));
+            break;
+          case "nextSlice":
+            setCurrentSlice(p => Math.min(totalSlices - 1, p + 1));
+            break;
+          case "prevSeries":
+          case "nextSeries": {
+            const list = (seriesList ?? []) as any[];
+            if (list.length > 1 && selectedSeries != null) {
+              const i = list.findIndex((s: any) => s.id === selectedSeries);
+              if (i >= 0) {
+                const ni =
+                  hk === "nextSeries"
+                    ? (i + 1) % list.length
+                    : (i - 1 + list.length) % list.length;
+                setSelectedSeries(list[ni].id);
+              }
+            }
+            break;
+          }
+          case "resetView":
+            activeViewerRef.current?.resetView();
+            setImageRotation(0);
+            setActiveColormap(null);
+            setImageInverted(false);
+            break;
+          case "keyImage":
+            setKeyImageSlices(prev => toggleKeyImage(prev, currentSlice));
+            break;
+          case "toggleInvert": {
+            const n = !imageInverted;
+            setImageInverted(n);
+            activeViewerRef.current?.setInvert(n);
+            break;
+          }
+          case "toggleCine":
+            toggleCine();
+            break;
+          default:
+            handled = false; // zoomIn/zoomOut/fullscreen/screenshot : non gérés ici
+        }
+        if (handled) {
+          e.preventDefault();
+          return;
+        }
+      }
+
       const action = resolveShortcut(e, QUICK_PRESETS.length);
       if (!action) return;
       e.preventDefault();
@@ -718,7 +833,16 @@ export default function Viewer() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [totalSlices, toggleCine]);
+  }, [
+    totalSlices,
+    toggleCine,
+    hotkeyMap,
+    capturingAction,
+    seriesList,
+    selectedSeries,
+    currentSlice,
+    imageInverted,
+  ]);
 
   // Persist measurement annotations to the DB. (v1 inserts a new row per save;
   // there is no update endpoint yet — see the risk note in the PR description.)
@@ -1970,6 +2094,40 @@ export default function Viewer() {
                 <span className="text-foreground">{s.label}</span>
               </div>
             ))}
+          </div>
+          {/* Personnalisation des raccourcis (« HotKeys » de Horos) */}
+          <div className="mt-2 border-t border-border pt-2">
+            <div className="text-[11px] font-medium text-muted-foreground mb-1.5">
+              Personnaliser
+            </div>
+            <div className="space-y-1">
+              {(Object.keys(HOTKEY_LABELS) as HotkeyAction[]).map(action => (
+                <div key={action} className="flex items-center gap-2 text-xs">
+                  <span className="flex-1">{HOTKEY_LABELS[action]}</span>
+                  <kbd className="font-mono text-[10px] bg-input border border-border rounded px-1.5 py-0.5 min-w-12 text-center">
+                    {hotkeyMap[action] || "—"}
+                  </kbd>
+                  <button
+                    className={`text-[10px] px-2 py-0.5 rounded border border-border ${capturingAction === action ? "bg-primary/20 text-primary" : "hover:bg-accent"}`}
+                    onClick={() => setCapturingAction(action)}
+                  >
+                    {capturingAction === action ? "Appuyez…" : "Modifier"}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              className="mt-2 text-[10px] text-muted-foreground hover:text-foreground underline"
+              onClick={() => {
+                setHotkeyMap(() => {
+                  saveHotkeys(DEFAULT_HOTKEYS);
+                  return { ...DEFAULT_HOTKEYS };
+                });
+                setCapturingAction(null);
+              }}
+            >
+              Réinitialiser les raccourcis
+            </button>
           </div>
         </DialogContent>
       </Dialog>

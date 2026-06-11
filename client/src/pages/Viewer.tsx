@@ -87,6 +87,13 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { COLORMAPS } from "@/lib/colormaps";
+import { Palette } from "lucide-react";
+import {
   CINE_FPS_OPTIONS,
   DEFAULT_CINE_FPS,
   nextCineIndex,
@@ -202,6 +209,12 @@ export default function Viewer() {
   const studyId = params.studyId ? parseInt(params.studyId) : undefined;
 
   const [activeTool, setActiveTool] = useState("wwwl");
+  // CLUT (palette couleur) appliquée au viewport actif ; null = niveaux de gris.
+  const [activeColormap, setActiveColormap] = useState<string | null>(null);
+  // Rotation absolue courante (0/90/180/270) pour le bouton « Rotation 90° ».
+  const [imageRotation, setImageRotation] = useState(0);
+  // Vidéo inversée (négatif) sur le viewport actif.
+  const [imageInverted, setImageInverted] = useState(false);
   const [currentSlice, setCurrentSlice] = useState(0);
   const [totalSlices, setTotalSlices] = useState(1);
   const [windowWidth, setWindowWidth] = useState(400);
@@ -1069,6 +1082,103 @@ export default function Viewer() {
             <span className="text-[9px]">{tool.label}</span>
           </button>
         ))}
+
+        {/* Groupe « Image » façon Horos (2D) : CLUT, négatif, rotation, miroir,
+            reset. Regroupé dans un menu déroulant pour ne pas surcharger la barre. */}
+        {viewMode === "2d" && (
+          <>
+            <Separator orientation="vertical" className="h-7 mx-1" />
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  className="toolbar-btn"
+                  title="Image : CLUT, négatif, rotation, miroir"
+                >
+                  <Palette className="w-4 h-4" />
+                  <span className="text-[9px]">Image</span>
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-60 space-y-3">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-muted-foreground">
+                    Palette couleur (CLUT)
+                  </label>
+                  <select
+                    className="w-full text-xs bg-input border border-border rounded px-2 py-1"
+                    value={activeColormap ?? ""}
+                    onChange={e => {
+                      const name = e.target.value || null;
+                      setActiveColormap(name);
+                      activeViewerRef.current?.setColormap(name);
+                    }}
+                  >
+                    <option value="">No CLUT (niveaux de gris)</option>
+                    {COLORMAPS.map(c => (
+                      <option key={c.name} value={c.name}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    className={`toolbar-btn !flex-row gap-1.5 border border-border ${imageInverted ? "active" : ""}`}
+                    title="Négatif (inverser)"
+                    onClick={() => {
+                      const next = !imageInverted;
+                      setImageInverted(next);
+                      activeViewerRef.current?.setInvert(next);
+                    }}
+                  >
+                    <Contrast className="w-4 h-4" />
+                    <span className="text-[10px]">Négatif</span>
+                  </button>
+                  <button
+                    className="toolbar-btn !flex-row gap-1.5 border border-border"
+                    title="Rotation 90°"
+                    onClick={() => {
+                      const deg = (imageRotation + 90) % 360;
+                      setImageRotation(deg);
+                      activeViewerRef.current?.setRotation(deg);
+                    }}
+                  >
+                    <RotateCw className="w-4 h-4" />
+                    <span className="text-[10px]">Rotation 90°</span>
+                  </button>
+                  <button
+                    className="toolbar-btn !flex-row gap-1.5 border border-border"
+                    title="Miroir horizontal"
+                    onClick={() => activeViewerRef.current?.flip("h")}
+                  >
+                    <FlipHorizontal className="w-4 h-4" />
+                    <span className="text-[10px]">Miroir H</span>
+                  </button>
+                  <button
+                    className="toolbar-btn !flex-row gap-1.5 border border-border"
+                    title="Miroir vertical"
+                    onClick={() => activeViewerRef.current?.flip("v")}
+                  >
+                    <FlipVertical className="w-4 h-4" />
+                    <span className="text-[10px]">Miroir V</span>
+                  </button>
+                </div>
+                <button
+                  className="toolbar-btn !flex-row gap-1.5 border border-border w-full"
+                  title="Réinitialiser la vue (Reset Image View)"
+                  onClick={() => {
+                    setImageRotation(0);
+                    setActiveColormap(null);
+                    setImageInverted(false);
+                    activeViewerRef.current?.resetView();
+                  }}
+                >
+                  <Maximize className="w-4 h-4" />
+                  <span className="text-[10px]">Réinitialiser la vue</span>
+                </button>
+              </PopoverContent>
+            </Popover>
+          </>
+        )}
 
         <Separator orientation="vertical" className="h-7 mx-1" />
 

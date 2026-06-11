@@ -847,6 +847,12 @@ export default function Viewer() {
   // Persist measurement annotations to the DB. (v1 inserts a new row per save;
   // there is no update endpoint yet — see the risk note in the PR description.)
   const saveAnnotationMutation = trpc.annotations.save.useMutation();
+  const trpcUtils = trpc.useUtils();
+  const deleteAnnotationMutation = trpc.annotations.delete.useMutation({
+    onSuccess: () => {
+      trpcUtils.annotations.listBySeries.invalidate();
+    },
+  });
   const handleSaveAnnotation = useCallback(
     (a: { instanceId: number; type: any; data: unknown }) => {
       saveAnnotationMutation.mutate(
@@ -2284,6 +2290,19 @@ export default function Viewer() {
                         }}
                       >
                         Aller
+                      </Button>
+                    )}
+                    {a.id != null && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs text-destructive hover:text-destructive"
+                        disabled={deleteAnnotationMutation.isPending}
+                        onClick={() =>
+                          deleteAnnotationMutation.mutate({ id: a.id })
+                        }
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
                       </Button>
                     )}
                   </div>

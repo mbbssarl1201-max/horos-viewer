@@ -26,21 +26,49 @@ export default function ExportPanel({
 }: ExportPanelProps) {
   const [exportFormat, setExportFormat] = useState("png");
   const [exporting, setExporting] = useState(false);
+  const [progressMb, setProgressMb] = useState(0);
 
-  // Téléchargement NON BLOQUANT : un gros export ZIP (centaines de fichiers
-  // assemblés côté serveur depuis MinIO) peut durer un moment. On laisse le
-  // GESTIONNAIRE DE TÉLÉCHARGEMENTS du navigateur s'en charger (barre de
-  // progression, sans figer l'UI). Le nom + l'extension sont fixés par l'attribut
-  // `download` ET confirmés par l'en-tête Content-Disposition du serveur — donc
-  // plus de fichier sans extension (nom = UUID).
-  const triggerDownload = (url: string, filename: string) => {
+  // Téléchargement avec NOM GARANTI : on récupère le fichier en flux (fetch),
+  // on suit la progression (pour ne pas paraître figé), puis on sauvegarde via
+  // un blob URL + attribut `download`. Le nom d'un blob URL avec `download` est
+  // TOUJOURS respecté par le navigateur (contrairement à un lien direct, qui
+  // produisait ici un fichier sans extension nommé UUID, inouvrable).
+  const downloadWithProgress = async (url: string, filename: string) => {
+    setProgressMb(0);
+    const resp = await fetch(url, { credentials: "include" });
+    if (!resp.ok || !resp.body) {
+      let msg = `Erreur ${resp.status}`;
+      try {
+        const j = await resp.json();
+        if (j?.error) msg = j.error;
+      } catch {
+        /* corps non-JSON */
+      }
+      throw new Error(msg);
+    }
+    const reader = resp.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        received += value.length;
+        setProgressMb(Math.round(received / 1048576));
+      }
+    }
+    const blob = new Blob(chunks as BlobPart[], {
+      type: resp.headers.get("content-type") || "application/octet-stream",
+    });
+    const objUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
+    a.href = objUrl;
     a.download = filename;
-    a.rel = "noopener";
     document.body.appendChild(a);
     a.click();
     a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 4000);
   };
 
   const handleExport = async () => {
@@ -69,27 +97,28 @@ export default function ExportPanel({
           toast.error("No study selected for DICOM export");
           return;
         }
-        triggerDownload(
+        toast("Préparation de l'archive DICOM…");
+        await downloadWithProgress(
           `/api/export/dicom-zip/${studyId}`,
           `etude_${studyId}_dicom.zip`
         );
-        toast.success(
-          "Téléchargement lancé (voir la barre de téléchargements). Une grosse étude peut prendre un moment."
-        );
+        toast.success("Archive DICOM téléchargée (etude_X_dicom.zip)");
       } else if (exportFormat === "pdf") {
         if (!studyId) {
           toast.error("No study selected for PDF report");
           return;
         }
-        triggerDownload(
+        toast("Génération du rapport PDF…");
+        await downloadWithProgress(
           `/api/export/pdf-report/${studyId}`,
           `rapport_etude_${studyId}.pdf`
         );
-        toast.success("Rapport PDF — téléchargement lancé");
+        toast.success("Rapport PDF téléchargé");
       }
     } catch (err: any) {
       toast.error(err.message || "Échec de l'export");
     } finally {
+      setProgressMb(0);
       setExporting(false);
       onOpenChange(false);
     }
@@ -175,7 +204,11 @@ export default function ExportPanel({
             ) : (
               <Download className="w-4 h-4" />
             )}
-            {exporting ? "Exporting..." : "Export"}
+            {exporting
+              ? progressMb > 0
+                ? `Téléchargement… ${progressMb} Mo`
+                : "Préparation…"
+              : "Exporter"}
           </Button>
         </div>
       </DialogContent>

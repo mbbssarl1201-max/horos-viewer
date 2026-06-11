@@ -93,6 +93,8 @@ export interface CornerstoneViewerHandle {
   getDicomTags: () => Promise<
     Array<{ tag: string; name: string; vr: string; value: string }>
   >;
+  /** ImageOrientationPatient (6 valeurs) de l'image courante, ou null. */
+  getImageOrientation: () => Promise<number[] | null>;
 }
 
 /**
@@ -587,6 +589,28 @@ const CornerstoneViewer = forwardRef<
         } catch (e) {
           console.warn("[Cornerstone3D] lecture tags DICOM ignorée:", e);
           return [];
+        }
+      },
+      getImageOrientation: async () => {
+        try {
+          const viewport = getViewport();
+          const imageId =
+            typeof viewport?.getCurrentImageId === "function"
+              ? viewport.getCurrentImageId()
+              : null;
+          if (!imageId) return null;
+          const cornerstone = await import("@cornerstonejs/core");
+          const mod = (cornerstone as any).metaData?.get?.(
+            "imagePlaneModule",
+            imageId
+          );
+          const iop = mod?.imageOrientationPatient;
+          if (Array.isArray(iop) && iop.length >= 6) {
+            return iop.slice(0, 6).map((n: any) => Number(n));
+          }
+          return null;
+        } catch {
+          return null;
         }
       },
     }),

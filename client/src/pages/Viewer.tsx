@@ -93,6 +93,7 @@ import {
 } from "@/components/ui/popover";
 import { COLORMAPS } from "@/lib/colormaps";
 import { sortByInstanceNumber, sortBySliceLocation } from "@/lib/sortSeries";
+import { edgeLabelsFromIop } from "@/lib/orientationLabels";
 import { Palette } from "lucide-react";
 import {
   CINE_FPS_OPTIONS,
@@ -221,6 +222,13 @@ export default function Viewer() {
     "instanceNumber"
   );
   const [sortAsc, setSortAsc] = useState(true);
+  // Étiquettes d'orientation anatomique (A/P/L/R/H/F) aux bords du viewport.
+  const [orientLabels, setOrientLabels] = useState<{
+    top: string;
+    bottom: string;
+    left: string;
+    right: string;
+  } | null>(null);
   // Inspecteur de méta-données DICOM (« DICOM Meta-Data / ⌘I » de Horos).
   const [tagInspectorOpen, setTagInspectorOpen] = useState(false);
   const [dicomTags, setDicomTags] = useState<
@@ -500,6 +508,30 @@ export default function Viewer() {
       })),
     [sortedInstances]
   );
+
+  // Étiquettes d'orientation (A/P/L/R) : lues depuis ImageOrientationPatient de
+  // la coupe courante. Best-effort + petit délai (l'image est décodée async par
+  // le loader). Désactivées hors 2D. Ne bloque jamais le rendu.
+  useEffect(() => {
+    if (viewMode !== "2d") {
+      setOrientLabels(null);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const iop = await activeViewerRef.current?.getImageOrientation?.();
+        if (cancelled) return;
+        setOrientLabels(iop ? edgeLabelsFromIop(iop) : null);
+      } catch {
+        if (!cancelled) setOrientLabels(null);
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [viewMode, selectedSeries, currentSlice, sortKey, sortAsc]);
 
   // Auto-select first series
   useEffect(() => {
@@ -2043,6 +2075,23 @@ export default function Viewer() {
             </div>
 
             {/* Overlay - HU Statistics (bottom-left) */}
+            {/* Étiquettes d'orientation anatomique aux bords (A/P/L/R/H/F) */}
+            {viewMode === "2d" && orientLabels && (
+              <div className="pointer-events-none absolute inset-0 text-[11px] font-mono font-semibold text-green-400/70">
+                <span className="absolute top-1 left-1/2 -translate-x-1/2">
+                  {orientLabels.top}
+                </span>
+                <span className="absolute bottom-9 left-1/2 -translate-x-1/2">
+                  {orientLabels.bottom}
+                </span>
+                <span className="absolute left-1 top-1/2 -translate-y-1/2">
+                  {orientLabels.left}
+                </span>
+                <span className="absolute right-1 top-1/2 -translate-y-1/2">
+                  {orientLabels.right}
+                </span>
+              </div>
+            )}
             <div className="absolute bottom-3 left-3 text-[10px] text-green-400/60 font-mono pointer-events-none">
               <div>Zoom: {zoomPercent}%</div>
               {huStats && (

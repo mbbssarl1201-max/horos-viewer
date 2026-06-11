@@ -422,7 +422,13 @@ export default function Viewer() {
   // Études antérieures du MÊME patient (tri date décroissante), via priorStudies.
   const priors = useMemo(() => {
     if (!study) return [] as any[];
-    return findPriors(study as any, (allStudiesData ?? []) as any[]) as any[];
+    // studies.list expose le PatientID DICOM sous `patientDicomId` ; findPriors
+    // attend `patientId` (comme studies.get) → on aligne le champ.
+    const all = ((allStudiesData ?? []) as any[]).map(s => ({
+      ...s,
+      patientId: s.patientId ?? s.patientDicomId,
+    }));
+    return findPriors(study as any, all) as any[];
   }, [study, allStudiesData]);
   const [priorsOpen, setPriorsOpen] = useState(false);
 

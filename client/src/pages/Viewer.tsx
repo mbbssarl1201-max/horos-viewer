@@ -177,19 +177,9 @@ const VIEWER_TOOLS = [
     icon: Spline,
     description: "ROI à main levée",
   },
-  // Segmentation (MVP, côté client — labelmap en mémoire, non persisté).
-  {
-    id: "brush",
-    label: "Pinceau",
-    icon: Brush,
-    description: "Pinceau — peindre la segmentation",
-  },
-  {
-    id: "eraser",
-    label: "Gomme",
-    icon: Eraser,
-    description: "Gomme — effacer sous le curseur",
-  },
+  // NB : segmentation (Pinceau/Gomme) retirée de la barre — le labelmap stack
+  // ne s'initialisait pas de façon fiable (métadonnées pas prêtes) → boutons
+  // morts. À ré-intégrer proprement plus tard si besoin.
   // Caviardage (redaction) des PHI brûlés dans les pixels (US / capture
   // secondaire) : on trace un rectangle, masqué en noir et recomposé sur
   // toute image exportée. Calque overlay, pas un outil Cornerstone.
@@ -1080,19 +1070,6 @@ export default function Viewer() {
           </button>
         ))}
 
-        {/* Effacer la segmentation du viewport actif (2D uniquement). Action, pas
-            un outil : ne change pas `activeTool`. */}
-        {viewMode === "2d" && (
-          <button
-            className="toolbar-btn"
-            title="Effacer la segmentation (labelmap) du viewport actif"
-            onClick={handleClearSegmentation}
-          >
-            <Trash2 className="w-4 h-4" />
-            <span className="text-[9px]">Effacer seg.</span>
-          </button>
-        )}
-
         <Separator orientation="vertical" className="h-7 mx-1" />
 
         {/* View Mode */}
@@ -1465,13 +1442,15 @@ export default function Viewer() {
           <ImagePlus className="w-4 h-4" />
           <span className="text-[9px]">Ajouter l'image</span>
         </button>
+        {/* Action principale : bouton coloré pour qu'il soit repérable
+            immédiatement, même si la barre passe sur 2 rangées. */}
         <button
-          className="toolbar-btn"
-          title="Compte rendu (envoi à un confrère)"
+          className="toolbar-btn bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+          title="Compte rendu + pré-analyse IA (envoi à un confrère)"
           onClick={openReport}
         >
           <FileText className="w-4 h-4" />
-          <span className="text-[9px]">Compte rendu</span>
+          <span className="text-[9px] font-semibold">Compte rendu</span>
         </button>
         <button
           className="toolbar-btn"

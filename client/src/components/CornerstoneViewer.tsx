@@ -390,6 +390,14 @@ const CornerstoneViewer = forwardRef<
   const onRoiStatsRef = useRef<typeof onRoiStats>(undefined);
   // Outil actif (ref pour les écouteurs attachés une seule fois, ex. Baguette).
   const activeToolRef = useRef<string>(activeTool);
+  // Masque coloré du region-grow : canvas offscreen (résolution image) + imageId
+  // de la coupe seed ; overlay <canvas> ajouté impérativement + fonction de tracé.
+  const maskOverlayRef = useRef<{
+    canvas: HTMLCanvasElement;
+    imageId: string;
+  } | null>(null);
+  const overlayElRef = useRef<HTMLCanvasElement | null>(null);
+  const drawMaskOverlayRef = useRef<(() => void) | null>(null);
   // annotationUID → JSON of last-saved data, so a small drag (MODIFIED) that
   // doesn't actually change the measurement isn't re-inserted, and so the
   // exact same annotation isn't saved twice in a row.
@@ -1200,6 +1208,31 @@ const CornerstoneViewer = forwardRef<
           const area = count * (Number(sp?.[0]) || 1) * (Number(sp?.[1]) || 1);
           const histogram = computeHistogram(values, 64).bins;
           onRoiStatsRef.current?.({ mean, stdDev, min, max, area, histogram });
+
+          // Masque coloré : canvas offscreen à la résolution image (rouge
+          // translucide là où le masque est à 1), dessiné en overlay sur la coupe.
+          try {
+            const off = document.createElement("canvas");
+            off.width = cols;
+            off.height = rows;
+            const octx = off.getContext("2d");
+            if (octx) {
+              const img = octx.createImageData(cols, rows);
+              for (let k = 0; k < mask.length; k++) {
+                if (mask[k]) {
+                  img.data[k * 4] = 255;
+                  img.data[k * 4 + 1] = 80;
+                  img.data[k * 4 + 2] = 80;
+                  img.data[k * 4 + 3] = 140;
+                }
+              }
+              octx.putImageData(img, 0, 0);
+              maskOverlayRef.current = { canvas: off, imageId };
+              drawMaskOverlayRef.current?.();
+            }
+          } catch {
+            /* overlay best-effort */
+          }
         } catch (e) {
           console.warn("[Cornerstone3D] region grow ignoré:", e);
         }
@@ -1210,6 +1243,93 @@ const CornerstoneViewer = forwardRef<
     return () => {
       el.removeEventListener("pointerdown", onDown);
       el.removeEventListener("pointerup", onUp);
+    };
+  }, [isInitialized]);
+
+  // Overlay du masque region-grow : un <canvas> ajouté IMPÉRATIVEMENT par-dessus
+  // le canvas Cornerstone (sans toucher au JSX/DOM React). Redessiné à chaque
+  // rendu/changement de caméra ; le masque (résolution image) est plaqué sur la
+  // coupe via la transformation affine image→canvas (worldToCanvas des coins).
+  useEffect(() => {
+    if (!isInitialized) return;
+    const el = viewportRef.current;
+    if (!el) return;
+    let disposed = false;
+    let cleanup = () => {};
+    (async () => {
+      const cornerstone = await import("@cornerstonejs/core");
+      if (disposed || !viewportRef.current) return;
+      const overlay = document.createElement("canvas");
+      overlay.style.cssText =
+        "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2";
+      viewportRef.current.appendChild(overlay);
+      overlayElRef.current = overlay;
+
+      const draw = () => {
+        try {
+          const ov = overlayElRef.current;
+          const host = viewportRef.current;
+          if (!ov || !host) return;
+          const w = host.clientWidth;
+          const h = host.clientHeight;
+          if (ov.width !== w || ov.height !== h) {
+            ov.width = w;
+            ov.height = h;
+          }
+          const ctx = ov.getContext("2d");
+          if (!ctx) return;
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.clearRect(0, 0, w, h);
+          const data = maskOverlayRef.current;
+          if (!data) return;
+          const viewport = renderingEngineRef.current?.getViewport(
+            viewportIdRef.current
+          );
+          if (!viewport) return;
+          const curId = viewport.getCurrentImageId?.();
+          if (curId !== data.imageId) return; // masque seulement sur sa coupe
+          const i2w = (cornerstone as any).utilities?.imageToWorldCoords;
+          if (typeof i2w !== "function") return;
+          const cw = data.canvas.width;
+          const ch = data.canvas.height;
+          const p0 = viewport.worldToCanvas?.(i2w(data.imageId, [0, 0]));
+          const px = viewport.worldToCanvas?.(i2w(data.imageId, [cw, 0]));
+          const py = viewport.worldToCanvas?.(i2w(data.imageId, [0, ch]));
+          if (!p0 || !px || !py) return;
+          const a = (px[0] - p0[0]) / cw;
+          const b = (px[1] - p0[1]) / cw;
+          const c = (py[0] - p0[0]) / ch;
+          const d = (py[1] - p0[1]) / ch;
+          ctx.setTransform(a, b, c, d, p0[0], p0[1]);
+          ctx.drawImage(data.canvas, 0, 0);
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+        } catch {
+          /* tracé best-effort */
+        }
+      };
+      drawMaskOverlayRef.current = draw;
+
+      const { eventTarget, Enums } = cornerstone as any;
+      const onRendered = (evt: any) => {
+        if (evt?.detail?.viewportId === viewportIdRef.current) draw();
+      };
+      eventTarget.addEventListener(Enums.Events.IMAGE_RENDERED, onRendered);
+      draw();
+      cleanup = () => {
+        try {
+          eventTarget.removeEventListener(
+            Enums.Events.IMAGE_RENDERED,
+            onRendered
+          );
+        } catch {}
+        overlay.remove();
+        overlayElRef.current = null;
+        drawMaskOverlayRef.current = null;
+      };
+    })();
+    return () => {
+      disposed = true;
+      cleanup();
     };
   }, [isInitialized]);
 

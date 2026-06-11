@@ -13,7 +13,7 @@
   --color-foreground: oklch(0.93 0.01 250);
   --color-card: oklch(0.18 0.008 250);
   --color-card-foreground: oklch(0.93 0.01 250);
-  --color-popover: oklch(0.20 0.008 250);
+  --color-popover: oklch(0.2 0.008 250);
   --color-popover-foreground: oklch(0.93 0.01 250);
   --color-primary: oklch(0.65 0.15 220);
   --color-primary-foreground: oklch(0.98 0.005 250);
@@ -21,7 +21,7 @@
   --color-secondary-foreground: oklch(0.88 0.01 250);
   --color-muted: oklch(0.22 0.008 250);
   --color-muted-foreground: oklch(0.65 0.01 250);
-  --color-accent: oklch(0.30 0.02 220);
+  --color-accent: oklch(0.3 0.02 220);
   --color-accent-foreground: oklch(0.93 0.01 250);
   --color-destructive: oklch(0.55 0.2 25);
   --color-destructive-foreground: oklch(0.98 0.005 250);
@@ -29,10 +29,10 @@
   --color-input: oklch(0.25 0.01 250);
   --color-ring: oklch(0.65 0.15 220);
   --color-chart-1: oklch(0.65 0.15 220);
-  --color-chart-2: oklch(0.60 0.15 160);
+  --color-chart-2: oklch(0.6 0.15 160);
   --color-chart-3: oklch(0.55 0.15 280);
   --color-chart-4: oklch(0.65 0.15 50);
-  --color-chart-5: oklch(0.60 0.15 320);
+  --color-chart-5: oklch(0.6 0.15 320);
   --color-sidebar: oklch(0.16 0.008 250);
   --color-sidebar-foreground: oklch(0.88 0.01 250);
   --color-sidebar-primary: oklch(0.65 0.15 220);
@@ -118,8 +118,18 @@
   color: oklch(0.93 0.01 250);
 }
 .toolbar-btn.active {
-  background: oklch(0.30 0.04 220);
-  color: oklch(0.90 0.05 220);
+  background: oklch(0.3 0.04 220);
+  color: oklch(0.9 0.05 220);
+}
+/* Action principale « Compte rendu » : accent bleu pour la repérer d'un coup
+   d'œil (définie après .toolbar-btn pour gagner sur background: transparent). */
+.toolbar-btn-cr {
+  background: oklch(0.55 0.14 250);
+  color: oklch(0.98 0 0);
+}
+.toolbar-btn-cr:hover {
+  background: oklch(0.62 0.14 250);
+  color: oklch(0.99 0 0);
 }
 
 /* Container utility */

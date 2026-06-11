@@ -1445,7 +1445,7 @@ export default function Viewer() {
         {/* Action principale : bouton coloré pour qu'il soit repérable
             immédiatement, même si la barre passe sur 2 rangées. */}
         <button
-          className="toolbar-btn bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+          className="toolbar-btn toolbar-btn-cr"
           title="Compte rendu + pré-analyse IA (envoi à un confrère)"
           onClick={openReport}
         >

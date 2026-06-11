@@ -54,7 +54,13 @@ import {
   Trash2,
   Box,
 } from "lucide-react";
-import { polyDataArraysToObj, polyDataArraysStats } from "@/lib/objExport";
+import {
+  polyDataArraysToObj,
+  polyDataArraysStats,
+  sampleVolumeTrilinear,
+  huToRgb,
+  worldToIndex,
+} from "@/lib/objExport";
 import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
 import SeriesThumbnail from "@/components/SeriesThumbnail";
 import {
@@ -182,6 +188,9 @@ export default function Viewer() {
   const [activeCell, setActiveCell] = useState(0);
   const [viewMode, setViewMode] = useState<"2d" | "mpr" | "3d">("2d");
   const [preset3d, setPreset3d] = useState<string>("os");
+  // Rendu réaliste 3D (éclairage cinématique + qualité accrue). ON par défaut ;
+  // l'utilisateur peut le couper si c'est trop lent sur sa machine.
+  const [realistic3d, setRealistic3d] = useState<boolean>(true);
   // Export maillage 3D (.obj) : seuil HU de l'isosurface (≈300 = os) + état de
   // génération (les marching cubes sur un volume CT complet sont lourds).
   const [meshThreshold, setMeshThreshold] = useState<number>(300);
@@ -576,7 +585,9 @@ export default function Viewer() {
 
       const filter = vtkImageMarchingCubes.newInstance({
         contourValue: meshThreshold,
-        computeNormals: false, // vitesse : normales inutiles pour l'export OBJ
+        // Normales activées : l'OBJ exporté (vn + f v//vn) s'ombre correctement
+        // dans MeshLab/Blender. Sert aussi à échantillonner la densité interne.
+        computeNormals: true,
         mergePoints: true,
       });
       filter.setInputData(imageData);
@@ -587,6 +598,14 @@ export default function Viewer() {
         polydata?.getPoints?.()?.getData?.() ?? new Float32Array();
       const polys: Int32Array =
         polydata?.getPolys?.()?.getData?.() ?? new Int32Array();
+      // Normales (peuvent être absentes selon la version → repli gracieux).
+      let normals: Float32Array | undefined;
+      try {
+        const nd = polydata?.getPointData?.()?.getNormals?.()?.getData?.();
+        if (nd && nd.length === points.length) normals = nd as Float32Array;
+      } catch {
+        /* pas de normales → on exporte sans `vn` */
+      }
 
       const stats = polyDataArraysStats(points, polys);
       if (stats.triangleCount === 0) {
@@ -596,7 +615,57 @@ export default function Viewer() {
         return;
       }
 
-      const objText = polyDataArraysToObj(points, polys);
+      // ── Couleur par sommet selon la DENSITÉ RÉELLE (HU) ─────────────────────
+      // Pour chaque sommet du maillage : on convertit sa position monde (mm) en
+      // index de voxel (worldToIndex, hypothèse axis-aligned), on échantillonne
+      // le HU réel par interpolation trilinéaire, puis on mappe HU→gris via une
+      // fenêtre osseuse (WC 500 / WW 2000). Comme l'isosurface est ~uniforme au
+      // seuil, on échantillonne un PETIT PAS VERS L'INTÉRIEUR du matériau (le
+      // long de la normale inverse) : la couleur porte alors la texture de
+      // densité interne (cortical dense vs spongieux) plutôt qu'une teinte plate.
+      //
+      // LIMITATION : worldToIndex suppose une direction de volume identité/axis-
+      // aligned. Si volume.direction n'est pas l'identité (acquisition oblique),
+      // l'échantillonnage serait décalé. On le détecte et, le cas échéant, on
+      // n'échantillonne pas vers l'intérieur (pas = 0) pour rester sûr.
+      const WC_BONE = 500;
+      const WW_BONE = 2000;
+      const dims = volume.dimensions as [number, number, number];
+      const spacing = volume.spacing as [number, number, number];
+      const origin = volume.origin as [number, number, number];
+      // Détection direction non-axis-aligned (hors diagonale ±1).
+      const dir = volume.direction as number[] | undefined;
+      const isAxisAligned =
+        !dir ||
+        (dir.length === 9 &&
+          [dir[1], dir[2], dir[3], dir[5], dir[6], dir[7]].every(
+            v => Math.abs(v) < 1e-6
+          ));
+      // Pas vers l'intérieur (mm) le long de -normale, ~1 voxel min.
+      const minSp = Math.min(spacing[0], spacing[1], spacing[2]) || 1;
+      const inwardStep = normals && isAxisAligned ? minSp : 0;
+
+      const vCount = Math.floor(points.length / 3);
+      const colors = new Float32Array(vCount * 3);
+      for (let v = 0; v < vCount; v++) {
+        let px = points[v * 3];
+        let py = points[v * 3 + 1];
+        let pz = points[v * 3 + 2];
+        if (inwardStep && normals) {
+          // Décalage vers l'intérieur (matériau) le long de -normale.
+          px -= normals[v * 3] * inwardStep;
+          py -= normals[v * 3 + 1] * inwardStep;
+          pz -= normals[v * 3 + 2] * inwardStep;
+        }
+        const [ix, iy, iz] = worldToIndex([px, py, pz], origin, spacing);
+        const hu = sampleVolumeTrilinear(scalars, dims, ix, iy, iz);
+        const [r, g, b] = huToRgb(hu, WC_BONE, WW_BONE);
+        colors[v * 3] = r;
+        colors[v * 3 + 1] = g;
+        colors[v * 3 + 2] = b;
+      }
+
+      const objText = polyDataArraysToObj(points, polys, { colors, normals });
       const safeName = (study?.patientName || `study${studyId ?? ""}`)
         .replace(/[^a-zA-Z0-9_-]+/g, "_")
         .slice(0, 60);
@@ -772,6 +841,21 @@ export default function Viewer() {
             >
               ↺ glisser pour tourner
             </span>
+            <Separator orientation="vertical" className="h-7 mx-1" />
+            {/* Toggle « Rendu réaliste » (éclairage cinématique + qualité accrue).
+                ON par défaut ; à couper si trop lent sur la machine. */}
+            <label
+              className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none"
+              title="Éclairage volumétrique cinématique + échantillonnage haute qualité (plus réaliste mais plus lourd pour le GPU)"
+            >
+              <input
+                type="checkbox"
+                checked={realistic3d}
+                onChange={e => setRealistic3d(e.target.checked)}
+                className="accent-primary"
+              />
+              Rendu réaliste
+            </label>
             <Separator orientation="vertical" className="h-7 mx-1" />
             {/* Export maillage 3D (.obj) : isosurface (marching cubes) au seuil
                 HU choisi. ~300 HU = os. Opération lourde → bouton désactivé +
@@ -1086,6 +1170,7 @@ export default function Viewer() {
                   slabThicknessMm={slabThicknessMm}
                   slabMode={slabMode}
                   preset3d={preset3d}
+                  realistic3d={realistic3d}
                 />
               )}
             </div>

@@ -36,6 +36,12 @@ interface VolumeViewerProps {
   slabMode?: SlabMode;
   /** Preset de rendu volumique 3D (id de PRESETS_3D). Défaut "os". */
   preset3d?: string;
+  /**
+   * Mode "3d" uniquement : active le rendu réaliste (éclairage volumétrique
+   * cinématique + qualité d'échantillonnage accrue). Défaut ON. L'utilisateur
+   * peut le couper si c'est trop lent sur sa machine.
+   */
+  realistic3d?: boolean;
 }
 
 const VOLUME_ENGINE_ID = "horosVolumeEngine";
@@ -69,6 +75,80 @@ function applyShading(vp: any) {
   }
 }
 
+/**
+ * Rendu réaliste « cinématique » sur l'acteur 3D (mode "3d" uniquement).
+ *
+ * Deux leviers, appliqués APRÈS le preset, chacun isolé en try/catch (dégrade
+ * gracieusement si une API manque dans la version installée) :
+ *
+ *  1. Qualité d'échantillonnage via l'API SUPPORTÉE de Cornerstone :
+ *     `viewport.setProperties({ sampleDistanceMultiplier, smoothing })`.
+ *     Un multiplicateur PLUS BAS = plus d'échantillons par rayon = image plus
+ *     nette/fidèle (au prix du GPU). `smoothing` lisse légèrement le bruit CT.
+ *
+ *  2. Éclairage volumétrique global (global illumination) directement sur la
+ *     vtkVolumeProperty de l'acteur. ATTENTION : dans vtk.js 34.x ces réglages
+ *     ont MIGRÉ du VolumeMapper vers la VolumeProperty (appeler les setters sur
+ *     le mapper LÈVE une erreur explicite). On les pose donc sur la propriété :
+ *       • setVolumetricScatteringBlending(~0.5) — diffusion volumétrique
+ *       • setGlobalIlluminationReach(~0.3)      — portée de l'éclairage global
+ *       • setAnisotropy(~0.3)                   — anisotropie de la diffusion
+ *       • setLocalAmbientOcclusion(true) + setComputeNormalFromOpacity(true)
+ *         — occlusion ambiante locale (creux/reliefs plus marqués)
+ *     `volumeShadowSamplingDistFactor` reste, lui, un setter du MAPPER.
+ *
+ * `enabled=false` → on neutralise (multiplicateur 1, GI à 0) pour revenir au
+ * rendu standard rapide.
+ */
+function applyCinematic(vp: any, enabled: boolean) {
+  // 1. Qualité d'échantillonnage (API Cornerstone supportée).
+  try {
+    vp?.setProperties?.({
+      sampleDistanceMultiplier: enabled ? 0.5 : 1.0,
+      smoothing: enabled ? 1 : 0,
+    });
+  } catch {
+    // Propriété absente sur ce type de viewport → ignorer.
+  }
+
+  // 2. Éclairage global cinématique sur la VolumeProperty de l'acteur.
+  try {
+    const actors = vp?.getActors?.();
+    if (!actors || !actors.length) return;
+    for (const entry of actors) {
+      const actor = entry?.actor ?? entry?.volumeActor ?? entry;
+      const property = actor?.getProperty?.();
+      const mapper = actor?.getMapper?.();
+      if (property) {
+        // Chaque setter isolé : une version peut en exposer un sous-ensemble.
+        try {
+          property.setVolumetricScatteringBlending?.(enabled ? 0.5 : 0.0);
+        } catch {}
+        try {
+          property.setGlobalIlluminationReach?.(enabled ? 0.3 : 0.0);
+        } catch {}
+        try {
+          property.setAnisotropy?.(enabled ? 0.3 : 0.0);
+        } catch {}
+        try {
+          property.setComputeNormalFromOpacity?.(enabled);
+        } catch {}
+        try {
+          property.setLocalAmbientOcclusion?.(enabled);
+        } catch {}
+      }
+      if (mapper) {
+        try {
+          // Reste sur le mapper en 34.x. >=1 requis (clampé en interne).
+          mapper.setVolumeShadowSamplingDistFactor?.(enabled ? 5.0 : 1.0);
+        } catch {}
+      }
+    }
+  } catch {
+    // Acteur/mapper indisponible — sera ré-appliqué au prochain rendu.
+  }
+}
+
 export default function VolumeViewer({
   imageUrls,
   orthancImageIds,
@@ -77,6 +157,7 @@ export default function VolumeViewer({
   slabThicknessMm,
   slabMode,
   preset3d,
+  realistic3d = true,
 }: VolumeViewerProps) {
   const axialRef = useRef<HTMLDivElement>(null);
   const sagittalRef = useRef<HTMLDivElement>(null);
@@ -88,6 +169,10 @@ export default function VolumeViewer({
   // Module @cornerstonejs/tools capturé au setup pour un teardown SYNCHRONE dans
   // le cleanup (l'ordre de destruction est critique, cf. cleanup ci-dessous).
   const csToolsRef = useRef<any>(null);
+  // Dernière valeur de realistic3d lisible dans applyPreset (effet principal)
+  // sans le mettre dans ses deps (sinon le toggle reconstruirait le moteur).
+  const realistic3dRef = useRef<boolean>(realistic3d);
+  realistic3dRef.current = realistic3d;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -393,7 +478,14 @@ export default function VolumeViewer({
             } catch {}
             // Ombrage APRÈS le preset (le preset peut redéfinir le shading).
             // Désactivé en MIP : la projection max ne tient pas compte du relief.
-            if (!p.mip) applyShading(vp);
+            if (!p.mip) {
+              applyShading(vp);
+              // Rendu réaliste cinématique (lecture de la dernière valeur via ref).
+              applyCinematic(vp, realistic3dRef.current);
+            } else {
+              // En MIP : pas de GI, juste neutraliser pour rester rapide.
+              applyCinematic(vp, false);
+            }
             vp.render();
           };
           engine.resize(true, false);
@@ -480,13 +572,18 @@ export default function VolumeViewer({
         vp.setProperties({ preset: p.preset });
       } catch {}
       // Ré-appliquer l'ombrage après le preset (sauf en MIP).
-      if (!p.mip) applyShading(vp);
+      if (!p.mip) {
+        applyShading(vp);
+        applyCinematic(vp, realistic3d);
+      } else {
+        applyCinematic(vp, false);
+      }
       vp.render();
     })();
     return () => {
       cancelled = true;
     };
-  }, [preset3d, mode]);
+  }, [preset3d, mode, realistic3d]);
 
   if (error) {
     return (

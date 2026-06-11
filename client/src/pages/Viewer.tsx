@@ -96,6 +96,7 @@ import { COLORMAPS, getColormapLut } from "@/lib/colormaps";
 import { getPresetsForModality } from "@/lib/windowPresets";
 import { sortByInstanceNumber, sortBySliceLocation } from "@/lib/sortSeries";
 import { edgeLabelsFromIop } from "@/lib/orientationLabels";
+import { suggestIsoForModality } from "@/lib/surfaceThreshold";
 import { toggleKeyImage, nextKeyImage, prevKeyImage } from "@/lib/keyImages";
 import { findPriors } from "@/lib/priorStudies";
 import { Palette, Star } from "lucide-react";
@@ -322,6 +323,8 @@ export default function Viewer() {
   // Rendu réaliste 3D (éclairage cinématique + qualité accrue). ON par défaut ;
   // l'utilisateur peut le couper si c'est trop lent sur sa machine.
   const [realistic3d, setRealistic3d] = useState<boolean>(true);
+  // Rendu surfacique 3D (iso-surface) — « 3D Surface Rendering » de Horos.
+  const [surface3d, setSurface3d] = useState<boolean>(false);
   // Export maillage 3D (.obj) : seuil HU de l'isosurface (≈300 = os) + état de
   // génération (les marching cubes sur un volume CT complet sont lourds).
   const [meshThreshold, setMeshThreshold] = useState<number>(300);
@@ -1904,6 +1907,20 @@ export default function Viewer() {
               Rendu réaliste
             </label>
             <Separator orientation="vertical" className="h-7 mx-1" />
+            {/* Toggle « Surface » (3D Surface Rendering) : iso-surface au seuil. */}
+            <label
+              className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none"
+              title="Rendu surfacique (iso-surface) au lieu du volume rendering — équivalent « 3D Surface Rendering » de Horos"
+            >
+              <input
+                type="checkbox"
+                checked={surface3d}
+                onChange={e => setSurface3d(e.target.checked)}
+                className="accent-primary"
+              />
+              Surface
+            </label>
+            <Separator orientation="vertical" className="h-7 mx-1" />
             {/* Export maillage 3D (.obj) : isosurface (marching cubes) au seuil
                 HU choisi. ~300 HU = os. Opération lourde → bouton désactivé +
                 « Génération… » pendant le calcul. */}
@@ -2504,6 +2521,8 @@ export default function Viewer() {
                   slabMode={slabMode}
                   preset3d={preset3d}
                   realistic3d={realistic3d}
+                  surface3d={surface3d}
+                  surfaceIso={suggestIsoForModality(study?.modality)}
                   petImageUrls={fusionActive ? petImageUrls : undefined}
                   fusionOpacity={fusionOpacity}
                   petColormapId={petColormapId}

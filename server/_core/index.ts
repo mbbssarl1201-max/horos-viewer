@@ -229,22 +229,43 @@ async function startServer() {
       );
       archive.pipe(res);
 
+      // Liste de toutes les instances à inclure, puis récupération depuis MinIO
+      // PAR LOTS PARALLÈLES (≈8x plus rapide que séquentiel sur les grandes
+      // séries — c'est de l'I/O réseau). On ajoute chaque fichier au ZIP au fur
+      // et à mesure (archiver streame vers la réponse).
+      const tasks: { key: string; name: string }[] = [];
       for (const s of seriesList) {
         const instanceList = await listInstancesBySeries(s.id);
         for (const inst of instanceList) {
           if (inst.storageKey) {
-            try {
-              const signedUrl = await storageGetSignedUrl(inst.storageKey);
-              const fileResp = await fetch(signedUrl);
-              if (fileResp.ok) {
-                const buffer = Buffer.from(await fileResp.arrayBuffer());
-                const filename = `series_${s.seriesNumber || s.id}/${inst.sopInstanceUid || inst.id}.dcm`;
-                archive.append(buffer, { name: filename });
-              }
-            } catch (e) {
-              console.warn(`[Export] Failed to fetch instance ${inst.id}:`, e);
-            }
+            tasks.push({
+              key: inst.storageKey,
+              name: `series_${s.seriesNumber || s.id}/${inst.sopInstanceUid || inst.id}.dcm`,
+            });
           }
+        }
+      }
+      const CONCURRENCY = 8;
+      for (let i = 0; i < tasks.length; i += CONCURRENCY) {
+        const batch = tasks.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(
+          batch.map(async t => {
+            try {
+              const signedUrl = await storageGetSignedUrl(t.key);
+              const fileResp = await fetch(signedUrl);
+              if (!fileResp.ok) return null;
+              return {
+                name: t.name,
+                buffer: Buffer.from(await fileResp.arrayBuffer()),
+              };
+            } catch (e) {
+              console.warn(`[Export] échec récupération ${t.key}:`, e);
+              return null;
+            }
+          })
+        );
+        for (const r of results) {
+          if (r) archive.append(r.buffer, { name: r.name });
         }
       }
 

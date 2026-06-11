@@ -92,6 +92,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { COLORMAPS, getColormapLut } from "@/lib/colormaps";
+import { getPresetsForModality } from "@/lib/windowPresets";
 import { sortByInstanceNumber, sortBySliceLocation } from "@/lib/sortSeries";
 import { edgeLabelsFromIop } from "@/lib/orientationLabels";
 import { toggleKeyImage, nextKeyImage, prevKeyImage } from "@/lib/keyImages";
@@ -1324,6 +1325,31 @@ export default function Viewer() {
                       </button>
                     ))}
                   </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-muted-foreground">
+                    Fenêtre W/L (selon modalité)
+                  </label>
+                  <select
+                    className="w-full text-xs bg-input border border-border rounded px-2 py-1"
+                    defaultValue=""
+                    onChange={e => {
+                      const presets = getPresetsForModality(study?.modality);
+                      const p = presets.find(x => x.id === e.target.value);
+                      if (p && p.wc != null && p.ww != null) {
+                        activeViewerRef.current?.setVoi(p.wc, p.ww);
+                      }
+                    }}
+                  >
+                    <option value="">Choisir un preset…</option>
+                    {getPresetsForModality(study?.modality)
+                      .filter(p => p.wc != null && p.ww != null)
+                      .map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.label} ({p.wc}/{p.ww})
+                        </option>
+                      ))}
+                  </select>
                 </div>
                 <div className="grid grid-cols-2 gap-1.5">
                   <button

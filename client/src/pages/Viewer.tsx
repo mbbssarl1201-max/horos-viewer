@@ -98,6 +98,7 @@ import { getPresetsForModality } from "@/lib/windowPresets";
 import { sortByInstanceNumber, sortBySliceLocation } from "@/lib/sortSeries";
 import { edgeLabelsFromIop } from "@/lib/orientationLabels";
 import { suggestIsoForModality } from "@/lib/surfaceThreshold";
+import { CONVOLUTION_KERNELS } from "@/lib/convolution";
 import { toggleKeyImage, nextKeyImage, prevKeyImage } from "@/lib/keyImages";
 import { findPriors } from "@/lib/priorStudies";
 import { Palette, Star } from "lucide-react";
@@ -275,6 +276,8 @@ export default function Viewer() {
   const [activeTool, setActiveTool] = useState("wwwl");
   // CLUT (palette couleur) appliquée au viewport actif ; null = niveaux de gris.
   const [activeColormap, setActiveColormap] = useState<string | null>(null);
+  // Filtre de convolution actif (nom de noyau) ou null.
+  const [convolution, setConvolution] = useState<string | null>(null);
   // Rotation absolue courante (0/90/180/270) pour le bouton « Rotation 90° ».
   const [imageRotation, setImageRotation] = useState(0);
   // Vidéo inversée (négatif) sur le viewport actif.
@@ -1563,6 +1566,27 @@ export default function Viewer() {
                     {COLORMAPS.map(c => (
                       <option key={c.name} value={c.name}>
                         {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-muted-foreground">
+                    Filtre de convolution
+                  </label>
+                  <select
+                    className="w-full text-xs bg-input border border-border rounded px-2 py-1"
+                    value={convolution ?? ""}
+                    onChange={e => {
+                      const name = e.target.value || null;
+                      setConvolution(name);
+                      activeViewerRef.current?.setConvolution(name);
+                    }}
+                  >
+                    <option value="">Aucun</option>
+                    {CONVOLUTION_KERNELS.map(k => (
+                      <option key={k.name} value={k.name}>
+                        {k.label}
                       </option>
                     ))}
                   </select>

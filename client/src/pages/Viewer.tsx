@@ -229,6 +229,11 @@ export default function Viewer() {
     "instanceNumber"
   );
   const [sortAsc, setSortAsc] = useState(true);
+  // Niveau d'annotations à l'écran façon Horos : « none » (rien), « basic »
+  // (technique, sans nom patient), « full » (tout, avec nom). Défaut = full.
+  const [annotationLevel, setAnnotationLevel] = useState<
+    "none" | "basic" | "full"
+  >("full");
   // Étiquettes d'orientation anatomique (A/P/L/R/H/F) aux bords du viewport.
   const [orientLabels, setOrientLabels] = useState<{
     top: string;
@@ -1300,6 +1305,28 @@ export default function Viewer() {
                 </div>
                 <div className="space-y-1">
                   <label className="text-[11px] font-medium text-muted-foreground">
+                    Annotations à l'écran
+                  </label>
+                  <div className="flex gap-1.5">
+                    {(
+                      [
+                        ["none", "Aucune"],
+                        ["basic", "Basique"],
+                        ["full", "Complète"],
+                      ] as const
+                    ).map(([lvl, label]) => (
+                      <button
+                        key={lvl}
+                        className={`toolbar-btn !flex-row flex-1 gap-1 border border-border ${annotationLevel === lvl ? "active" : ""}`}
+                        onClick={() => setAnnotationLevel(lvl)}
+                      >
+                        <span className="text-[10px]">{label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-muted-foreground">
                     Tri des coupes (Sort By)
                   </label>
                   <div className="flex gap-1.5">
@@ -2311,8 +2338,9 @@ export default function Viewer() {
                 </div>
               )}
 
-            {/* Overlay - Patient Info (top-left) */}
-            {study && (
+            {/* Overlay - Patient Info (top-left) — niveau « full » uniquement
+                (équivalent « Full (Patient Name) » de Horos) */}
+            {study && annotationLevel === "full" && (
               <div className="absolute top-3 left-3 text-[11px] text-green-400/80 font-mono space-y-0.5 pointer-events-none">
                 <div>{study.patientName || "Unknown"}</div>
                 <div>{study.patientId || ""}</div>
@@ -2321,14 +2349,16 @@ export default function Viewer() {
               </div>
             )}
 
-            {/* Overlay - Window/Level (top-right) */}
-            <div className="absolute top-3 right-3 text-[11px] text-green-400/80 font-mono space-y-0.5 pointer-events-none text-right">
-              <div>WW: {windowWidth}</div>
-              <div>WC: {windowCenter}</div>
-              <div>
-                Slice: {currentSlice + 1}/{totalSlices}
+            {/* Overlay - Window/Level (top-right) — masqué au niveau « none » */}
+            {annotationLevel !== "none" && (
+              <div className="absolute top-3 right-3 text-[11px] text-green-400/80 font-mono space-y-0.5 pointer-events-none text-right">
+                <div>WW: {windowWidth}</div>
+                <div>WC: {windowCenter}</div>
+                <div>
+                  Slice: {currentSlice + 1}/{totalSlices}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Overlay - HU Statistics (bottom-left) */}
             {/* Barre CLUT (« Color Look Up Table Bar ») : palette active + bornes */}
@@ -2363,7 +2393,12 @@ export default function Viewer() {
                 </span>
               </div>
             )}
-            <div className="absolute bottom-3 left-3 text-[10px] text-green-400/60 font-mono pointer-events-none">
+            <div
+              className="absolute bottom-3 left-3 text-[10px] text-green-400/60 font-mono pointer-events-none"
+              style={{
+                display: annotationLevel === "none" ? "none" : undefined,
+              }}
+            >
               <div>Zoom: {zoomPercent}%</div>
               {huStats && (
                 <div className="mt-1 border border-green-400/30 rounded px-2 py-1 bg-black/60">

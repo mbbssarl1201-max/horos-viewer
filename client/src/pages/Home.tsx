@@ -59,6 +59,7 @@ import {
   ClipboardList,
 } from "lucide-react";
 import { useState, useCallback } from "react";
+import { matchAllFields } from "@/lib/studySearch";
 import { toast } from "sonner";
 
 // All DICOM modalities as seen in Horos
@@ -117,6 +118,8 @@ export default function Home() {
   const [showWorklist, setShowWorklist] = useState(false);
   const [selectedStudyId, setSelectedStudyId] = useState<number | null>(null);
   const [showMetaData, setShowMetaData] = useState(false);
+  // Recherche multi-champs (Search ⌘F) — filtrage client de la liste d'études.
+  const [searchQuery, setSearchQuery] = useState("");
 
   const { data: studiesData, isLoading: studiesLoading } =
     trpc.studies.list.useQuery(
@@ -200,7 +203,12 @@ export default function Home() {
       ),
   });
 
-  const studies = studiesData ?? [];
+  const allStudies = studiesData ?? [];
+  // Recherche multi-champs façon Horos (« Search » ⌘F) : filtrage client
+  // insensible casse/accents sur tous les champs de l'étude (ET sur les mots).
+  const studies = searchQuery.trim()
+    ? allStudies.filter((s: any) => matchAllFields(s, searchQuery))
+    : allStudies;
   const selectedStudy = studies.find((s: any) => s.id === selectedStudyId);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -695,6 +703,25 @@ export default function Home() {
 
         {/* Main Study List */}
         <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Recherche multi-champs (Search ⌘F de Horos) */}
+          <div className="h-9 border-b border-border bg-card flex items-center gap-2 px-2 shrink-0">
+            <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Rechercher (nom, ID, accession, modalité, description…)"
+              className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded border border-border"
+              >
+                {studies.length} résultat{studies.length > 1 ? "s" : ""} ✕
+              </button>
+            )}
+          </div>
           {/* Column Headers - Horos style with all columns */}
           <div className="h-8 border-b border-border bg-card/50 flex items-center px-2 text-[10px] font-medium text-muted-foreground shrink-0 select-none">
             <div className="w-36 px-1 flex items-center gap-1 cursor-pointer hover:text-foreground">

@@ -63,6 +63,12 @@ import {
 } from "@/lib/objExport";
 import { downsampleScalarVolume } from "@/lib/volumeDownsample";
 import { meshToBinaryPly } from "@/lib/plyExport";
+import { meshToGlb, polysToTriangleIndices } from "@/lib/glbExport";
+import {
+  buildVertexAdjacency,
+  taubinSmooth,
+  computeVertexNormals,
+} from "@/lib/meshSmooth";
 import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
 import SeriesThumbnail from "@/components/SeriesThumbnail";
 import {
@@ -201,8 +207,11 @@ export default function Viewer() {
   // (1 = pleine, 2 = ½ par axe ≈ 1/8 des voxels, 4 = ¼ ≈ 1/64). Défaut Moyenne
   // pour garder des fichiers raisonnables.
   const [meshFactor, setMeshFactor] = useState<number>(2);
-  // Format d'export : "ply" (binaire compact, défaut) ou "obj" (texte).
-  const [meshFormat, setMeshFormat] = useState<"ply" | "obj">("ply");
+  // Format d'export : "ply" (binaire compact, défaut), "obj" (texte) ou "glb".
+  const [meshFormat, setMeshFormat] = useState<"ply" | "obj" | "glb">("ply");
+  // Lissage de Taubin du maillage avant export (atténue l'aliasing en escalier
+  // des marching cubes sans rétrécir le volume). Activé par défaut.
+  const [meshSmoothing, setMeshSmoothing] = useState<boolean>(true);
   const [huStats, setHuStats] = useState<{
     mean: number;
     stdDev: number;
@@ -623,7 +632,7 @@ export default function Viewer() {
       filter.update();
       const polydata = filter.getOutputData();
 
-      const points: Float32Array =
+      let points: Float32Array =
         polydata?.getPoints?.()?.getData?.() ?? new Float32Array();
       const polys: Int32Array =
         polydata?.getPolys?.()?.getData?.() ?? new Int32Array();
@@ -634,6 +643,19 @@ export default function Viewer() {
         if (nd && nd.length === points.length) normals = nd as Float32Array;
       } catch {
         /* pas de normales → on exporte sans `vn` */
+      }
+
+      // Lissage de Taubin optionnel : on déplace les sommets (sans rétrécir le
+      // volume) puis on RECALCULE les normales — les normales des marching cubes
+      // ne sont plus valides après déplacement. La couleur est échantillonnée
+      // plus bas sur les positions FINALES (lissées), donc cohérente.
+      if (meshSmoothing && points.length > 0 && polys.length > 0) {
+        const adjacency = buildVertexAdjacency(
+          polys,
+          Math.floor(points.length / 3)
+        );
+        points = taubinSmooth(points, adjacency, { iterations: 10 });
+        normals = computeVertexNormals(points, polys);
       }
 
       const stats = polyDataArraysStats(points, polys);
@@ -697,17 +719,21 @@ export default function Viewer() {
         colors[v * 3 + 2] = b;
       }
 
-      // Sérialisation selon le format choisi : PLY binaire (compact) ou OBJ texte.
-      const ext = meshFormat === "ply" ? "ply" : "obj";
-      const blob =
-        meshFormat === "ply"
-          ? meshToBinaryPly({ points, polys, colors, normals })
-          : new Blob(
-              [polyDataArraysToObj(points, polys, { colors, normals })],
-              {
-                type: "text/plain",
-              }
-            );
+      // Sérialisation selon le format choisi : PLY binaire, OBJ texte ou GLB.
+      const ext = meshFormat;
+      let blob: Blob;
+      if (meshFormat === "glb") {
+        // glTF binaire : indices triangulés explicites + COLOR_0 RGB.
+        const indices = polysToTriangleIndices(polys);
+        blob = meshToGlb({ points, indices, normals, colors });
+      } else if (meshFormat === "ply") {
+        blob = meshToBinaryPly({ points, polys, colors, normals });
+      } else {
+        blob = new Blob(
+          [polyDataArraysToObj(points, polys, { colors, normals })],
+          { type: "text/plain" }
+        );
+      }
 
       const safeName = (study?.patientName || `study${studyId ?? ""}`)
         .replace(/[^a-zA-Z0-9_-]+/g, "_")
@@ -736,7 +762,15 @@ export default function Viewer() {
     } finally {
       setMeshExporting(false);
     }
-  }, [meshExporting, meshThreshold, meshFactor, meshFormat, study, studyId]);
+  }, [
+    meshExporting,
+    meshThreshold,
+    meshFactor,
+    meshFormat,
+    meshSmoothing,
+    study,
+    studyId,
+  ]);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
@@ -952,14 +986,31 @@ export default function Viewer() {
             </label>
             <select
               value={meshFormat}
-              onChange={e => setMeshFormat(e.target.value as "ply" | "obj")}
+              onChange={e =>
+                setMeshFormat(e.target.value as "ply" | "obj" | "glb")
+              }
               className="bg-transparent text-[10px] border border-border rounded px-1 py-0.5"
               title="Format du fichier 3D exporté"
               disabled={meshExporting}
             >
               <option value="ply">PLY (binaire, compact)</option>
               <option value="obj">OBJ (texte)</option>
+              <option value="glb">GLB (glTF binaire)</option>
             </select>
+            {/* Lissage de Taubin : atténue l'aliasing en escalier sans rétrécir
+                le volume (normales recalculées après lissage). */}
+            <label
+              className="text-[10px] text-muted-foreground flex items-center gap-1"
+              title="Lissage de Taubin du maillage (atténue l'effet escalier)"
+            >
+              <input
+                type="checkbox"
+                checked={meshSmoothing}
+                onChange={e => setMeshSmoothing(e.target.checked)}
+                disabled={meshExporting}
+              />
+              Lissage
+            </label>
             <button
               className="toolbar-btn"
               title="Extraire une isosurface et télécharger un maillage 3D (PLY binaire ou OBJ texte)"

@@ -61,6 +61,8 @@ import {
   huToRgb,
   worldToIndex,
 } from "@/lib/objExport";
+import { downsampleScalarVolume } from "@/lib/volumeDownsample";
+import { meshToBinaryPly } from "@/lib/plyExport";
 import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
 import SeriesThumbnail from "@/components/SeriesThumbnail";
 import {
@@ -195,6 +197,12 @@ export default function Viewer() {
   // génération (les marching cubes sur un volume CT complet sont lourds).
   const [meshThreshold, setMeshThreshold] = useState<number>(300);
   const [meshExporting, setMeshExporting] = useState(false);
+  // Résolution du maillage exporté : facteur de sous-échantillonnage du volume
+  // (1 = pleine, 2 = ½ par axe ≈ 1/8 des voxels, 4 = ¼ ≈ 1/64). Défaut Moyenne
+  // pour garder des fichiers raisonnables.
+  const [meshFactor, setMeshFactor] = useState<number>(2);
+  // Format d'export : "ply" (binaire compact, défaut) ou "obj" (texte).
+  const [meshFormat, setMeshFormat] = useState<"ply" | "obj">("ply");
   const [huStats, setHuStats] = useState<{
     mean: number;
     stdDev: number;
@@ -514,7 +522,7 @@ export default function Viewer() {
   // Lourd (plusieurs secondes, peut figer brièvement l'onglet) → état de
   // chargement + yield au navigateur avant l'extraction. Tout est encadré par
   // try/catch : un échec ne doit jamais casser le visualiseur.
-  const handleExportObj = useCallback(async () => {
+  const handleExport3d = useCallback(async () => {
     if (meshExporting) return;
     setMeshExporting(true);
     try {
@@ -570,16 +578,37 @@ export default function Viewer() {
         import("@kitware/vtk.js/Common/Core/DataArray"),
       ]);
 
+      // Dimensions/spacing/origin PLEINE résolution : servent à la couleur
+      // (échantillonnage HU fidèle), conservés intacts.
+      const fullDims = volume.dimensions as [number, number, number];
+      const fullSpacing = volume.spacing as [number, number, number];
+      const fullOrigin = volume.origin as [number, number, number];
+
+      // Sous-échantillonnage du volume pour des marching cubes plus légers
+      // (vtk.js 34.x n'a pas de décimation de maillage → on réduit en amont).
+      // La GÉOMÉTRIE devient plus grossière, mais la COULEUR reste échantillonnée
+      // sur le volume PLEINE résolution (voir plus bas).
+      const ds = downsampleScalarVolume(
+        scalars,
+        fullDims,
+        fullSpacing,
+        fullOrigin,
+        meshFactor
+      );
+
       const imageData = vtkImageData.newInstance();
-      imageData.setDimensions(volume.dimensions);
-      imageData.setSpacing(volume.spacing);
-      imageData.setOrigin(volume.origin);
-      if (volume.direction) imageData.setDirection(volume.direction);
+      imageData.setDimensions(ds.dims);
+      imageData.setSpacing(ds.spacing);
+      imageData.setOrigin(ds.origin);
+      // Après sous-échantillonnage par stride, la grille reste alignée sur les
+      // axes monde ; on ne réapplique pas la matrice de direction (identité).
+      if (meshFactor === 1 && volume.direction)
+        imageData.setDirection(volume.direction);
       imageData.getPointData().setScalars(
         vtkDataArray.newInstance({
           name: "scalars",
           numberOfComponents: 1,
-          values: scalars,
+          values: ds.scalars,
         })
       );
 
@@ -628,11 +657,14 @@ export default function Viewer() {
       // aligned. Si volume.direction n'est pas l'identité (acquisition oblique),
       // l'échantillonnage serait décalé. On le détecte et, le cas échéant, on
       // n'échantillonne pas vers l'intérieur (pas = 0) pour rester sûr.
+      // COULEUR fidèle : on échantillonne TOUJOURS sur le volume PLEINE
+      // résolution (full*), pas sur le volume sous-échantillonné, pour garder la
+      // texture de densité même quand la géométrie est grossière.
       const WC_BONE = 500;
       const WW_BONE = 2000;
-      const dims = volume.dimensions as [number, number, number];
-      const spacing = volume.spacing as [number, number, number];
-      const origin = volume.origin as [number, number, number];
+      const dims = fullDims;
+      const spacing = fullSpacing;
+      const origin = fullOrigin;
       // Détection direction non-axis-aligned (hors diagonale ±1).
       const dir = volume.direction as number[] | undefined;
       const isAxisAligned =
@@ -665,21 +697,38 @@ export default function Viewer() {
         colors[v * 3 + 2] = b;
       }
 
-      const objText = polyDataArraysToObj(points, polys, { colors, normals });
+      // Sérialisation selon le format choisi : PLY binaire (compact) ou OBJ texte.
+      const ext = meshFormat === "ply" ? "ply" : "obj";
+      const blob =
+        meshFormat === "ply"
+          ? meshToBinaryPly({ points, polys, colors, normals })
+          : new Blob(
+              [polyDataArraysToObj(points, polys, { colors, normals })],
+              {
+                type: "text/plain",
+              }
+            );
+
       const safeName = (study?.patientName || `study${studyId ?? ""}`)
         .replace(/[^a-zA-Z0-9_-]+/g, "_")
         .slice(0, 60);
-      const blob = new Blob([objText], { type: "text/plain" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `mediview-3d-${safeName || "volume"}.obj`;
+      a.download = `mediview-3d-${safeName || "volume"}.${ext}`;
       a.click();
       URL.revokeObjectURL(a.href);
 
+      const sizeMb = blob.size / (1024 * 1024);
+      const sizeStr =
+        sizeMb >= 1
+          ? `${sizeMb.toLocaleString("fr-CH", { maximumFractionDigits: 1 })} Mo`
+          : `${Math.max(1, Math.round(blob.size / 1024)).toLocaleString(
+              "fr-CH"
+            )} Ko`;
       toast.success(
-        `Maillage exporté : ${stats.triangleCount.toLocaleString(
+        `Maillage exporté (${ext.toUpperCase()}) : ${stats.triangleCount.toLocaleString(
           "fr-CH"
-        )} triangles`
+        )} triangles, ${sizeStr}`
       );
     } catch (e: any) {
       console.error("[ExportOBJ] échec:", e);
@@ -687,7 +736,7 @@ export default function Viewer() {
     } finally {
       setMeshExporting(false);
     }
-  }, [meshExporting, meshThreshold, study, studyId]);
+  }, [meshExporting, meshThreshold, meshFactor, meshFormat, study, studyId]);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
@@ -875,15 +924,51 @@ export default function Viewer() {
               title="Seuil HU de l'isosurface (≈300 = os)"
               disabled={meshExporting}
             />
+            {/* Résolution du maillage : facteur de sous-échantillonnage du
+                volume (vtk.js 34.x sans décimation → on réduit en amont). */}
+            <label
+              className="text-[10px] text-muted-foreground"
+              title="Résolution du maillage : plus basse = fichier plus léger"
+            >
+              Résolution
+            </label>
+            <select
+              value={meshFactor}
+              onChange={e => setMeshFactor(Number(e.target.value))}
+              className="bg-transparent text-[10px] border border-border rounded px-1 py-0.5"
+              title="Résolution du maillage 3D exporté"
+              disabled={meshExporting}
+            >
+              <option value={1}>Pleine</option>
+              <option value={2}>Moyenne (½)</option>
+              <option value={4}>Basse (¼)</option>
+            </select>
+            {/* Format : PLY binaire (compact, défaut) ou OBJ texte. */}
+            <label
+              className="text-[10px] text-muted-foreground"
+              title="Format du fichier 3D exporté"
+            >
+              Format
+            </label>
+            <select
+              value={meshFormat}
+              onChange={e => setMeshFormat(e.target.value as "ply" | "obj")}
+              className="bg-transparent text-[10px] border border-border rounded px-1 py-0.5"
+              title="Format du fichier 3D exporté"
+              disabled={meshExporting}
+            >
+              <option value="ply">PLY (binaire, compact)</option>
+              <option value="obj">OBJ (texte)</option>
+            </select>
             <button
               className="toolbar-btn"
-              title="Extraire une isosurface et télécharger un maillage Wavefront .obj"
-              onClick={handleExportObj}
+              title="Extraire une isosurface et télécharger un maillage 3D (PLY binaire ou OBJ texte)"
+              onClick={handleExport3d}
               disabled={meshExporting}
             >
               <Box className="w-4 h-4" />
               <span className="text-[9px]">
-                {meshExporting ? "Génération…" : "Exporter .obj (3D)"}
+                {meshExporting ? "Génération…" : "Exporter 3D"}
               </span>
             </button>
           </div>

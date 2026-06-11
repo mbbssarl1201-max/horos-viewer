@@ -91,7 +91,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { COLORMAPS } from "@/lib/colormaps";
+import { COLORMAPS, getColormapLut } from "@/lib/colormaps";
 import { sortByInstanceNumber, sortBySliceLocation } from "@/lib/sortSeries";
 import { edgeLabelsFromIop } from "@/lib/orientationLabels";
 import { toggleKeyImage, nextKeyImage, prevKeyImage } from "@/lib/keyImages";
@@ -498,6 +498,28 @@ export default function Viewer() {
       ? sortBySliceLocation(list, sortAsc)
       : sortByInstanceNumber(list, sortAsc);
   }, [instancesList, sortKey, sortAsc]);
+
+  // Dégradé CSS de la barre CLUT (« Color Look Up Table Bar ») : construit à
+  // partir du LUT 256³ de la palette active, échantillonné en 17 paliers. Bas =
+  // valeur basse, haut = valeur haute (sens Horos). null si pas de CLUT.
+  const clutGradient = useMemo(() => {
+    if (!activeColormap) return null;
+    try {
+      const lut = getColormapLut(activeColormap);
+      const stops: string[] = [];
+      const n = 16;
+      for (let i = 0; i <= n; i++) {
+        const idx = Math.round((i / n) * 255);
+        const r = lut[idx * 3];
+        const g = lut[idx * 3 + 1];
+        const b = lut[idx * 3 + 2];
+        stops.push(`rgb(${r},${g},${b}) ${(i / n) * 100}%`);
+      }
+      return `linear-gradient(to top, ${stops.join(", ")})`;
+    } catch {
+      return null;
+    }
+  }, [activeColormap]);
 
   // Tableaux mémoïsés réutilisés par chaque cellule de la mosaïque (référence
   // stable → pas de re-setup parasite du viewport au scroll/W/L).
@@ -2215,6 +2237,21 @@ export default function Viewer() {
             </div>
 
             {/* Overlay - HU Statistics (bottom-left) */}
+            {/* Barre CLUT (« Color Look Up Table Bar ») : palette active + bornes */}
+            {viewMode === "2d" && clutGradient && (
+              <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1">
+                <span className="font-mono text-[9px] text-green-400/80">
+                  {Math.round(windowCenter + windowWidth / 2)}
+                </span>
+                <div
+                  className="h-32 w-3 rounded-sm border border-green-400/30"
+                  style={{ background: clutGradient }}
+                />
+                <span className="font-mono text-[9px] text-green-400/80">
+                  {Math.round(windowCenter - windowWidth / 2)}
+                </span>
+              </div>
+            )}
             {/* Étiquettes d'orientation anatomique aux bords (A/P/L/R/H/F) */}
             {viewMode === "2d" && orientLabels && (
               <div className="pointer-events-none absolute inset-0 text-[11px] font-mono font-semibold text-green-400/70">

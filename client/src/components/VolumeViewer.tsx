@@ -47,6 +47,10 @@ interface VolumeViewerProps {
    * peut le couper si c'est trop lent sur sa machine.
    */
   realistic3d?: boolean;
+  /** Mode "3d" : rendu surfacique (iso-surface) au lieu du volume rendering. */
+  surface3d?: boolean;
+  /** Seuil iso (unités scalaires/HU) pour le rendu surfacique. Défaut ~300 (os CT). */
+  surfaceIso?: number;
   /**
    * Fusion PET-CT (additif, fail-safe) : URLs (MinIO, schéma wadouri:) des
    * coupes de la série PET à superposer sur le CT/volume principal. Si absent
@@ -200,6 +204,37 @@ function applyCinematic(vp: any, enabled: boolean) {
   }
 }
 
+/**
+ * Rendu SURFACIQUE (« 3D Surface Rendering » de Horos) approximé sur le rendu
+ * volumique : on remplace la fonction d'opacité scalaire par un ESCALIER raide
+ * au seuil iso (transparent en dessous, opaque au-dessus) → l'iso-surface
+ * apparaît, l'ombrage déjà actif lui donne le relief. Réversible : `enabled=false`
+ * laisse le preset reprendre la main (ré-appliqué par l'appelant). Best-effort.
+ */
+function applySurface(vp: any, isoValue: number, enabled: boolean) {
+  if (!enabled) return;
+  try {
+    const actors = vp?.getActors?.();
+    if (!actors || !actors.length) return;
+    for (const entry of actors) {
+      const actor = entry?.actor ?? entry?.volumeActor ?? entry;
+      const property = actor?.getProperty?.();
+      const ofun = property?.getScalarOpacity?.(0);
+      if (!ofun) continue;
+      ofun.removeAllPoints?.();
+      ofun.addPoint?.(isoValue - 1, 0.0);
+      ofun.addPoint?.(isoValue, 0.85);
+      ofun.addPoint?.(isoValue + 2000, 0.95);
+      // Surface nette : ombrage ON, opacité de gradient OFF (sinon halo diffus).
+      property.setShade?.(true);
+      property.setUseGradientOpacity?.(0, false);
+    }
+    vp?.render?.();
+  } catch {
+    // Acteur pas prêt — ré-appliqué au prochain applyPreset.
+  }
+}
+
 export default function VolumeViewer({
   imageUrls,
   orthancImageIds,
@@ -209,6 +244,8 @@ export default function VolumeViewer({
   slabMode,
   preset3d,
   realistic3d = true,
+  surface3d = false,
+  surfaceIso = 300,
   petImageUrls,
   petVolumeId,
   fusionOpacity = 0.5,
@@ -228,6 +265,11 @@ export default function VolumeViewer({
   // sans le mettre dans ses deps (sinon le toggle reconstruirait le moteur).
   const realistic3dRef = useRef<boolean>(realistic3d);
   realistic3dRef.current = realistic3d;
+  // Mode surface + seuil iso, lisibles dans applyPreset sans reconstruire le moteur.
+  const surface3dRef = useRef<boolean>(surface3d);
+  surface3dRef.current = surface3d;
+  const surfaceIsoRef = useRef<number>(surfaceIso);
+  surfaceIsoRef.current = surfaceIso;
   // Liste des viewportIds portant le volume PET (renseignée au setup) + id du
   // volume PET effectivement chargé : utilisés par l'effet « fusion » qui ajuste
   // opacité/colormap SANS reconstruire le moteur.
@@ -605,6 +647,8 @@ export default function VolumeViewer({
               applyShading(vp);
               // Rendu réaliste cinématique (lecture de la dernière valeur via ref).
               applyCinematic(vp, realistic3dRef.current);
+              // Mode surfacique (escalier d'opacité au seuil iso) APRÈS le preset.
+              applySurface(vp, surfaceIsoRef.current, surface3dRef.current);
             } else {
               // En MIP : pas de GI, juste neutraliser pour rester rapide.
               applyCinematic(vp, false);
@@ -711,6 +755,7 @@ export default function VolumeViewer({
       if (!p.mip) {
         applyShading(vp);
         applyCinematic(vp, realistic3d);
+        applySurface(vp, surfaceIsoRef.current, surface3d);
       } else {
         applyCinematic(vp, false);
       }
@@ -719,7 +764,7 @@ export default function VolumeViewer({
     return () => {
       cancelled = true;
     };
-  }, [preset3d, mode, realistic3d]);
+  }, [preset3d, mode, realistic3d, surface3d, surfaceIso]);
 
   // Changement d'opacité / colormap de la fusion PET : ré-appliquer SANS
   // reconstruire le moteur (rapide, glissement de curseur fluide). N'agit que si

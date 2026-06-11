@@ -1,4 +1,4 @@
-import { eq, desc, and, like, sql, gte, ne } from "drizzle-orm";
+import { eq, desc, and, like, sql, gte, ne, asc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -12,6 +12,8 @@ import {
   notifications,
   annotations,
   accessLogs,
+  reports,
+  reportAddenda,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
@@ -593,4 +595,27 @@ export async function recordAccess(event: AccessEvent): Promise<void> {
       err
     );
   }
+}
+
+// ============ REPORT QUERIES ============
+
+export async function getReportByStudy(studyId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(reports)
+    .where(eq(reports.studyId, studyId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getReportAddenda(reportId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(reportAddenda)
+    .where(eq(reportAddenda.reportId, reportId))
+    .orderBy(asc(reportAddenda.createdAt));
 }

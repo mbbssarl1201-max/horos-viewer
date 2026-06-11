@@ -219,6 +219,18 @@ const VIEWER_TOOLS = [
     description:
       "Baguette magique — clic pour segmenter une région par seuil (stats + histogramme)",
   },
+  {
+    id: "paint",
+    label: "Pinceau",
+    icon: Brush,
+    description: "Pinceau — peindre un masque (Brush ROI) à la souris",
+  },
+  {
+    id: "erase",
+    label: "Gomme",
+    icon: Eraser,
+    description: "Gomme — effacer le masque peint",
+  },
   // NB : pas d'outil « crosshair » ici — il n'existe pas dans le toolMap 2D et
   // sélectionnait un outil inconnu (cassait le changement d'outil). La MPR
   // s'active via le bouton de mode « MPR » dédié (VolumeViewport), pas un outil.
@@ -1475,6 +1487,48 @@ export default function Viewer() {
             <span className="text-[9px]">{tool.label}</span>
           </button>
         ))}
+
+        {/* Contrôles du masque peint (Brush ROIs) — visibles avec Pinceau/Gomme */}
+        {(activeTool === "paint" || activeTool === "erase") && (
+          <>
+            <Separator orientation="vertical" className="h-7 mx-1" />
+            <button
+              className="toolbar-btn"
+              title="Érosion du masque"
+              onClick={() => activeViewerRef.current?.applyMorphology("erode")}
+            >
+              <span className="text-sm leading-none">⊖</span>
+              <span className="text-[9px]">Érosion</span>
+            </button>
+            <button
+              className="toolbar-btn"
+              title="Dilatation du masque"
+              onClick={() => activeViewerRef.current?.applyMorphology("dilate")}
+            >
+              <span className="text-sm leading-none">⊕</span>
+              <span className="text-[9px]">Dilat.</span>
+            </button>
+            <button
+              className="toolbar-btn"
+              title="Effacer le masque peint"
+              onClick={() => activeViewerRef.current?.clearPaintMask()}
+            >
+              <Trash2 className="w-4 h-4" />
+              <span className="text-[9px]">Effacer</span>
+            </button>
+            <input
+              type="range"
+              min={1}
+              max={30}
+              defaultValue={6}
+              title="Taille du pinceau"
+              className="w-16 accent-primary"
+              onChange={e =>
+                activeViewerRef.current?.setBrushRadius(Number(e.target.value))
+              }
+            />
+          </>
+        )}
 
         {/* Groupe « Image » façon Horos (2D) : CLUT, négatif, rotation, miroir,
             reset. Regroupé dans un menu déroulant pour ne pas surcharger la barre. */}

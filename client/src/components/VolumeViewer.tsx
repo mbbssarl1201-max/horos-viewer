@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { slabModeToBlend, type SlabMode } from "@/lib/slabBlend";
 import { PRESETS_3D, presetParId } from "@/lib/volumePresets3d";
+import {
+  clampFusionOpacity,
+  petColormapVtkName,
+  DEFAULT_PET_COLORMAP_ID,
+} from "@/lib/petFusion";
 
 // Ré-export pour compat (Viewer.tsx importe PRESETS_3D depuis ce module).
 export { PRESETS_3D } from "@/lib/volumePresets3d";
@@ -42,9 +47,55 @@ interface VolumeViewerProps {
    * peut le couper si c'est trop lent sur sa machine.
    */
   realistic3d?: boolean;
+  /**
+   * Fusion PET-CT (additif, fail-safe) : URLs (MinIO, schéma wadouri:) des
+   * coupes de la série PET à superposer sur le CT/volume principal. Si absent
+   * ou < 2 coupes, AUCUNE fusion n'est tentée (comportement historique intact).
+   */
+  petImageUrls?: string[];
+  /** volumeId stable du volume PET (sinon valeur locale par défaut). */
+  petVolumeId?: string;
+  /** Opacité de fusion du PET (0..1). Défaut 0.5. */
+  fusionOpacity?: number;
+  /** Id de colormap PET (cf. PET_COLORMAPS). Défaut "hot". */
+  petColormapId?: string;
 }
 
 const VOLUME_ENGINE_ID = "horosVolumeEngine";
+const PET_VOLUME_ID_DEFAULT = "cornerstoneStreamingImageVolume:HOROS_PET_VOL";
+
+/**
+ * Applique colormap + opacité au volume PET dans une liste de viewports, de
+ * façon ENTIÈREMENT fail-safe (chaque viewport isolé en try/catch). On passe le
+ * `petVolumeId` à `setProperties` pour ne cibler QUE le volume PET (le CT garde
+ * son rendu en niveaux de gris). `opacity` est portée par la colormap
+ * (ColormapPublic.opacity : number → opacité globale du volume coloré).
+ */
+function applyPetFusionProps(
+  engine: any,
+  viewportIds: string[],
+  petVolumeId: string,
+  colormapId: string,
+  opacity: number
+) {
+  const vtkName = petColormapVtkName(colormapId);
+  const op = clampFusionOpacity(opacity);
+  for (const id of viewportIds) {
+    try {
+      const vp = engine?.getViewport?.(id);
+      if (!vp?.setProperties) continue;
+      vp.setProperties(
+        { colormap: { name: vtkName, opacity: op } },
+        petVolumeId
+      );
+    } catch {
+      // Volume PET pas (encore) présent sur ce viewport → ignorer.
+    }
+  }
+  try {
+    engine?.renderViewports?.(viewportIds);
+  } catch {}
+}
 
 /**
  * Active l'ombrage volumétrique (shading) sur l'acteur 3D pour donner de la
@@ -158,6 +209,10 @@ export default function VolumeViewer({
   slabMode,
   preset3d,
   realistic3d = true,
+  petImageUrls,
+  petVolumeId,
+  fusionOpacity = 0.5,
+  petColormapId = DEFAULT_PET_COLORMAP_ID,
 }: VolumeViewerProps) {
   const axialRef = useRef<HTMLDivElement>(null);
   const sagittalRef = useRef<HTMLDivElement>(null);
@@ -173,6 +228,11 @@ export default function VolumeViewer({
   // sans le mettre dans ses deps (sinon le toggle reconstruirait le moteur).
   const realistic3dRef = useRef<boolean>(realistic3d);
   realistic3dRef.current = realistic3d;
+  // Liste des viewportIds portant le volume PET (renseignée au setup) + id du
+  // volume PET effectivement chargé : utilisés par l'effet « fusion » qui ajuste
+  // opacité/colormap SANS reconstruire le moteur.
+  const fusionViewportIdsRef = useRef<string[]>([]);
+  const loadedPetVolumeIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -234,6 +294,66 @@ export default function VolumeViewer({
         const volume = await volumeLoader.createAndCacheVolume(volId, {
           imageIds,
         });
+
+        // ── Fusion PET-CT (additif, fail-safe) ──────────────────────────────
+        // Construit le volume PET si des coupes PET sont fournies (≥ 2). Tout
+        // échec est silencieux : la fusion est un PLUS, jamais un bloqueur du
+        // rendu CT/MPR/3D. addPetFusion() ajoute ensuite le volume aux viewports
+        // déjà initialisés et applique colormap + opacité.
+        const petIds = (petImageUrls ?? []).map(u => `wadouri:${u}`);
+        const petVolId = petVolumeId ?? PET_VOLUME_ID_DEFAULT;
+        let petVolume: any = null;
+        loadedPetVolumeIdRef.current = null;
+        fusionViewportIdsRef.current = [];
+        if (petIds.length >= 2) {
+          try {
+            cornerstone.cache?.removeVolumeLoadObject?.(petVolId);
+          } catch {}
+          try {
+            petVolume = await volumeLoader.createAndCacheVolume(petVolId, {
+              imageIds: petIds,
+            });
+          } catch (e) {
+            console.warn(
+              "[VolumeViewer] PET volume load failed (fusion off):",
+              e
+            );
+            petVolume = null;
+          }
+        }
+
+        // Ajoute le volume PET (s'il existe) aux viewports fournis, applique sa
+        // colormap + opacité, puis le charge en arrière-plan. Fail-safe complet.
+        const addPetFusion = async (viewportIds: string[]) => {
+          if (!petVolume) return;
+          try {
+            const addVolumes =
+              (cornerstone as any).addVolumesToViewports ??
+              (cornerstone as any).default?.addVolumesToViewports;
+            if (typeof addVolumes !== "function") return;
+            await addVolumes(engine, [{ volumeId: petVolId }], viewportIds);
+            loadedPetVolumeIdRef.current = petVolId;
+            fusionViewportIdsRef.current = viewportIds;
+            applyPetFusionProps(
+              engine,
+              viewportIds,
+              petVolId,
+              petColormapId,
+              fusionOpacity
+            );
+            petVolume.load?.(() => {
+              applyPetFusionProps(
+                engine,
+                viewportIds,
+                petVolId,
+                petColormapId,
+                fusionOpacity
+              );
+            });
+          } catch (e) {
+            console.warn("[VolumeViewer] PET fusion overlay failed:", e);
+          }
+        };
 
         // Fresh engine each time.
         if (engineRef.current) {
@@ -315,6 +435,9 @@ export default function VolumeViewer({
             "MPR_OBLIQUE",
           ];
           await setVolumesForViewports(engine, [{ volumeId: volId }], allIds);
+
+          // Fusion PET-CT : superpose le volume PET coloré sur les 4 vues MPR.
+          await addPetFusion(allIds);
 
           // ── ToolGroup ─────────────────────────────────────────────────────
           const TOOLGROUP_ID = "HOROS_MPR_TG";
@@ -538,16 +661,29 @@ export default function VolumeViewer({
         engineRef.current?.destroy();
       } catch {}
       engineRef.current = null;
-      // Purge du volume du cache (mémoire GPU) — peut rester asynchrone.
+      const capturedPetVolId = petVolumeId ?? PET_VOLUME_ID_DEFAULT;
+      // Purge des volumes du cache (mémoire GPU) — peut rester asynchrone.
       import("@cornerstonejs/core")
         .then((cs: any) => {
           try {
             cs.cache?.removeVolumeLoadObject?.(capturedVolId);
           } catch {}
+          try {
+            cs.cache?.removeVolumeLoadObject?.(capturedPetVolId);
+          } catch {}
         })
         .catch(() => {});
     };
-  }, [imageUrls, orthancImageIds, volumeId, mode, slabThicknessMm, slabMode]);
+  }, [
+    imageUrls,
+    orthancImageIds,
+    volumeId,
+    mode,
+    slabThicknessMm,
+    slabMode,
+    petImageUrls,
+    petVolumeId,
+  ]);
 
   // Changement de preset 3D : ré-appliquer SANS reconstruire le moteur (rapide).
   // `preset3d` est volontairement HORS du tableau de deps du useEffect principal.
@@ -584,6 +720,23 @@ export default function VolumeViewer({
       cancelled = true;
     };
   }, [preset3d, mode, realistic3d]);
+
+  // Changement d'opacité / colormap de la fusion PET : ré-appliquer SANS
+  // reconstruire le moteur (rapide, glissement de curseur fluide). N'agit que si
+  // un volume PET est effectivement chargé sur des viewports (fusionViewportIds).
+  useEffect(() => {
+    const engine = engineRef.current;
+    const petVolId = loadedPetVolumeIdRef.current;
+    const viewportIds = fusionViewportIdsRef.current;
+    if (!engine || !petVolId || viewportIds.length === 0) return;
+    applyPetFusionProps(
+      engine,
+      viewportIds,
+      petVolId,
+      petColormapId,
+      fusionOpacity
+    );
+  }, [fusionOpacity, petColormapId]);
 
   if (error) {
     return (

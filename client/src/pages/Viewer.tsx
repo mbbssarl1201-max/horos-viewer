@@ -436,6 +436,8 @@ export default function Viewer() {
     return findPriors(study as any, all) as any[];
   }, [study, allStudiesData]);
   const [priorsOpen, setPriorsOpen] = useState(false);
+  // ROI Manager (« ROI Manager » de Horos) : liste des ROI enregistrées + saut.
+  const [roiManagerOpen, setRoiManagerOpen] = useState(false);
 
   // Fetch series for this study
   const { data: seriesList } = trpc.series.listByStudy.useQuery(
@@ -1523,6 +1525,16 @@ export default function Viewer() {
                 <span className="text-[9px]">Antér. ({priors.length})</span>
               </button>
             )}
+            <button
+              className="toolbar-btn"
+              title="ROI Manager — liste des mesures de la série"
+              onClick={() => setRoiManagerOpen(true)}
+            >
+              <Ruler className="w-4 h-4" />
+              <span className="text-[9px]">
+                ROI ({(savedAnnotations ?? []).length})
+              </span>
+            </button>
           </>
         )}
 
@@ -2065,6 +2077,61 @@ export default function Viewer() {
                 </Button>
               </div>
             ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ROI Manager : liste des mesures enregistrées de la série + saut coupe */}
+      <Dialog open={roiManagerOpen} onOpenChange={setRoiManagerOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>ROI Manager</DialogTitle>
+            <DialogDescription>
+              {(savedAnnotations ?? []).length} mesure(s) enregistrée(s) dans
+              cette série.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-auto divide-y divide-border/40">
+            {(savedAnnotations ?? []).length === 0 ? (
+              <p className="text-xs text-muted-foreground py-3">
+                Aucune mesure enregistrée. Dessinez une ROI (Longueur, Angle,
+                Ellipse…) pour la voir apparaître ici.
+              </p>
+            ) : (
+              (savedAnnotations ?? []).map((a: any, i: number) => {
+                const idx = sortedInstances.findIndex(
+                  (s: any) => s.id === a.instanceId
+                );
+                return (
+                  <div
+                    key={a.id ?? i}
+                    className="flex items-center gap-2 py-2 text-xs"
+                  >
+                    <div className="flex-1">
+                      <div className="font-medium capitalize">
+                        {a.type || "ROI"}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground">
+                        {idx >= 0 ? `Coupe ${idx + 1}` : "Coupe inconnue"}
+                      </div>
+                    </div>
+                    {idx >= 0 && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs"
+                        onClick={() => {
+                          setCurrentSlice(idx);
+                          setRoiManagerOpen(false);
+                        }}
+                      >
+                        Aller
+                      </Button>
+                    )}
+                  </div>
+                );
+              })
+            )}
           </div>
         </DialogContent>
       </Dialog>

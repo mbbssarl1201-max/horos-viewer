@@ -10,6 +10,7 @@ import { patchImagerPixelSpacing } from "@/lib/imagerPixelSpacing";
 import { getColormapLut, isValidColormap } from "@/lib/colormaps";
 import { lookupTag, formatTagValue } from "@/lib/dicomTagDictionary";
 import { computeHistogram } from "@/lib/roiHistogram";
+import { growRegion2D } from "@/lib/regionGrow";
 import {
   isSegmentationTool,
   resolveBrushStrategy,
@@ -387,6 +388,8 @@ const CornerstoneViewer = forwardRef<
   const currentSliceRef = useRef(0);
   const onSaveAnnotationRef = useRef<typeof onSaveAnnotation>(undefined);
   const onRoiStatsRef = useRef<typeof onRoiStats>(undefined);
+  // Outil actif (ref pour les écouteurs attachés une seule fois, ex. Baguette).
+  const activeToolRef = useRef<string>(activeTool);
   // annotationUID → JSON of last-saved data, so a small drag (MODIFIED) that
   // doesn't actually change the measurement isn't re-inserted, and so the
   // exact same annotation isn't saved twice in a row.
@@ -401,6 +404,7 @@ const CornerstoneViewer = forwardRef<
   currentSliceRef.current = currentSlice;
   onSaveAnnotationRef.current = onSaveAnnotation;
   onRoiStatsRef.current = onRoiStats;
+  activeToolRef.current = activeTool;
 
   // Effacement du labelmap (bouton « Effacer seg. » de la barre). On retire la
   // valeur du segment actif sur toutes les coupes ; best-effort, sans jamais
@@ -1110,6 +1114,104 @@ const CornerstoneViewer = forwardRef<
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Baguette magique (« Grow Region » de Horos) : un clic « seed » lance une
+  // croissance de région par seuil (lib/regionGrow) ; on renvoie les stats
+  // (moyenne/écart-type/min/max/surface + histogramme) via onRoiStats, réutilisant
+  // le panneau ROI. Best-effort, jamais bloquant. Distingue clic vs glisser (>5px).
+  useEffect(() => {
+    if (!isInitialized) return;
+    const el = viewportRef.current;
+    if (!el) return;
+    let downPos: { x: number; y: number } | null = null;
+    const onDown = (e: PointerEvent) => {
+      downPos = { x: e.clientX, y: e.clientY };
+    };
+    const onUp = (e: PointerEvent) => {
+      const start = downPos;
+      downPos = null;
+      if (activeToolRef.current !== "regiongrow" || !start) return;
+      if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 5) return;
+      (async () => {
+        try {
+          const cornerstone = await import("@cornerstonejs/core");
+          const viewport = renderingEngineRef.current?.getViewport(
+            viewportIdRef.current
+          );
+          if (!viewport) return;
+          const rect = el.getBoundingClientRect();
+          const canvasPt: [number, number] = [
+            e.clientX - rect.left,
+            e.clientY - rect.top,
+          ];
+          const world = viewport.canvasToWorld?.(canvasPt);
+          const imageId = viewport.getCurrentImageId?.();
+          if (!world || !imageId) return;
+          const w2i = (cornerstone as any).utilities?.worldToImageCoords;
+          const ij = typeof w2i === "function" ? w2i(imageId, world) : null;
+          if (!ij) return;
+          const si = Math.round(ij[0]);
+          const sj = Math.round(ij[1]);
+          const image = (cornerstone as any).cache?.getImage?.(imageId);
+          const pixelData = image?.getPixelData?.();
+          const cols = image?.columns;
+          const rows = image?.rows;
+          if (!pixelData || !cols || !rows) return;
+          if (si < 0 || sj < 0 || si >= cols || sj >= rows) return;
+          const slope = image.slope ?? 1;
+          const intercept = image.intercept ?? 0;
+          const seed = pixelData[sj * cols + si];
+          const tol = 100; // tolérance en unités brutes autour du seed
+          const mask = growRegion2D(
+            Array.from(pixelData as ArrayLike<number>),
+            cols,
+            rows,
+            [si, sj],
+            seed - tol,
+            seed + tol
+          );
+          let count = 0;
+          let sum = 0;
+          let sumSq = 0;
+          let min = Infinity;
+          let max = -Infinity;
+          const values: number[] = [];
+          for (let k = 0; k < mask.length; k++) {
+            if (!mask[k]) continue;
+            const hu = pixelData[k] * slope + intercept;
+            count++;
+            sum += hu;
+            sumSq += hu * hu;
+            if (hu < min) min = hu;
+            if (hu > max) max = hu;
+            values.push(hu);
+          }
+          if (count === 0) return;
+          const mean = sum / count;
+          const stdDev = Math.sqrt(Math.max(0, sumSq / count - mean * mean));
+          const mod = (cornerstone as any).metaData?.get?.(
+            "imagePlaneModule",
+            imageId
+          );
+          const sp = mod?.pixelSpacing || [
+            mod?.rowPixelSpacing ?? 1,
+            mod?.columnPixelSpacing ?? 1,
+          ];
+          const area = count * (Number(sp?.[0]) || 1) * (Number(sp?.[1]) || 1);
+          const histogram = computeHistogram(values, 64).bins;
+          onRoiStatsRef.current?.({ mean, stdDev, min, max, area, histogram });
+        } catch (e) {
+          console.warn("[Cornerstone3D] region grow ignoré:", e);
+        }
+      })();
+    };
+    el.addEventListener("pointerdown", onDown);
+    el.addEventListener("pointerup", onUp);
+    return () => {
+      el.removeEventListener("pointerdown", onDown);
+      el.removeEventListener("pointerup", onUp);
+    };
+  }, [isInitialized]);
 
   // Re-hydration: re-draw previously-saved annotations once the viewport is
   // ready. Runs when the saved set or the loaded stack changes. addAnnotation

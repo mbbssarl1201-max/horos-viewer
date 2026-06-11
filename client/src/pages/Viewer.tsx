@@ -52,6 +52,7 @@ import {
   Brush,
   Eraser,
   Trash2,
+  Wand2,
   Box,
   SquareDashedBottom,
 } from "lucide-react";
@@ -208,6 +209,13 @@ const VIEWER_TOOLS = [
     icon: SquareDashedBottom,
     description:
       "Caviarder — masquer en noir une zone (PHI brûlé) ; appliqué aux exports",
+  },
+  {
+    id: "regiongrow",
+    label: "Baguette",
+    icon: Wand2,
+    description:
+      "Baguette magique — clic pour segmenter une région par seuil (stats + histogramme)",
   },
   // NB : pas d'outil « crosshair » ici — il n'existe pas dans le toolMap 2D et
   // sélectionnait un outil inconnu (cassait le changement d'outil). La MPR
@@ -880,7 +888,9 @@ export default function Viewer() {
   // ROI tools clear the stats overlay when deselected (it now updates via the
   // ANNOTATION_COMPLETED/MODIFIED events wired in CornerstoneViewer).
   useEffect(() => {
-    if (!["ellipse", "rect"].includes(activeTool)) setHuStats(null);
+    // regiongrow (Baguette) alimente aussi ce panneau → on ne l'efface pas.
+    if (!["ellipse", "rect", "regiongrow"].includes(activeTool))
+      setHuStats(null);
   }, [activeTool]);
 
   // Handle scroll on viewport for slice navigation

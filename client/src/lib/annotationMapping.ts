@@ -112,6 +112,8 @@ export interface RoiStats {
   min: number;
   max: number;
   area: number;
+  /** Distribution des valeurs (HU) dans la ROI — « Histogram of Selected ROI ». */
+  histogram?: number[];
 }
 
 export function extractRoiStats(annotation: unknown): RoiStats | null {

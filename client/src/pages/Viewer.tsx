@@ -270,6 +270,7 @@ export default function Viewer() {
     min: number;
     max: number;
     area: number;
+    histogram?: number[];
   } | null>(null);
   const [slabThicknessMm, setSlabThicknessMm] = useState(0);
   const [slabMode, setSlabMode] = useState<SlabMode>("mip");
@@ -2015,6 +2016,28 @@ export default function Viewer() {
                     {huStats.max.toFixed(0)}
                   </div>
                   <div>Area: {huStats.area.toFixed(1)} mm²</div>
+                  {huStats.histogram && huStats.histogram.length > 0 && (
+                    <div className="mt-1">
+                      <div className="text-green-400/70 text-[8px] mb-0.5">
+                        Histogramme
+                      </div>
+                      <div className="flex items-end gap-px h-8 w-40">
+                        {(() => {
+                          const max = Math.max(...huStats.histogram!, 1);
+                          return huStats.histogram!.map((c, i) => (
+                            <div
+                              key={i}
+                              className="flex-1 bg-green-400/50"
+                              style={{
+                                height: `${Math.max(1, (c / max) * 100)}%`,
+                              }}
+                              title={`${c}`}
+                            />
+                          ));
+                        })()}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

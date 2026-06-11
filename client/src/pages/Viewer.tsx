@@ -215,6 +215,26 @@ export default function Viewer() {
   const [imageRotation, setImageRotation] = useState(0);
   // Vidéo inversée (négatif) sur le viewport actif.
   const [imageInverted, setImageInverted] = useState(false);
+  // Inspecteur de méta-données DICOM (« DICOM Meta-Data / ⌘I » de Horos).
+  const [tagInspectorOpen, setTagInspectorOpen] = useState(false);
+  const [dicomTags, setDicomTags] = useState<
+    Array<{ tag: string; name: string; vr: string; value: string }>
+  >([]);
+  const [tagQuery, setTagQuery] = useState("");
+  const [tagsLoading, setTagsLoading] = useState(false);
+
+  const openTagInspector = useCallback(async () => {
+    setTagInspectorOpen(true);
+    setTagsLoading(true);
+    try {
+      const tags = (await activeViewerRef.current?.getDicomTags?.()) ?? [];
+      setDicomTags(tags);
+    } catch {
+      setDicomTags([]);
+    } finally {
+      setTagsLoading(false);
+    }
+  }, []);
   const [currentSlice, setCurrentSlice] = useState(0);
   const [totalSlices, setTotalSlices] = useState(1);
   const [windowWidth, setWindowWidth] = useState(400);
@@ -1177,6 +1197,14 @@ export default function Viewer() {
                 </button>
               </PopoverContent>
             </Popover>
+            <button
+              className="toolbar-btn"
+              title="Méta-données DICOM (tags)"
+              onClick={openTagInspector}
+            >
+              <FileText className="w-4 h-4" />
+              <span className="text-[9px]">Tags</span>
+            </button>
           </>
         )}
 
@@ -1612,6 +1640,74 @@ export default function Viewer() {
                 <span className="text-foreground">{s.label}</span>
               </div>
             ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Inspecteur de méta-données DICOM (« DICOM Meta-Data / ⌘I » de Horos) */}
+      <Dialog open={tagInspectorOpen} onOpenChange={setTagInspectorOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Méta-données DICOM</DialogTitle>
+            <DialogDescription>
+              Tags de l'image courante ({dicomTags.length}).
+            </DialogDescription>
+          </DialogHeader>
+          <input
+            type="text"
+            value={tagQuery}
+            onChange={e => setTagQuery(e.target.value)}
+            placeholder="Filtrer par tag, nom ou valeur…"
+            className="w-full text-xs bg-input border border-border rounded px-2 py-1.5"
+          />
+          <div className="max-h-[60vh] overflow-auto border border-border rounded">
+            {tagsLoading ? (
+              <p className="text-xs text-muted-foreground p-3">Chargement…</p>
+            ) : dicomTags.length === 0 ? (
+              <p className="text-xs text-muted-foreground p-3">
+                Aucun tag (image non décodée ou format non lisible).
+              </p>
+            ) : (
+              <table className="w-full text-[11px] font-mono">
+                <thead className="sticky top-0 bg-card">
+                  <tr className="text-left text-muted-foreground">
+                    <th className="px-2 py-1 font-medium">Tag</th>
+                    <th className="px-2 py-1 font-medium">Nom</th>
+                    <th className="px-2 py-1 font-medium">VR</th>
+                    <th className="px-2 py-1 font-medium">Valeur</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dicomTags
+                    .filter(t => {
+                      const q = tagQuery.trim().toLowerCase();
+                      if (!q) return true;
+                      return (
+                        t.tag.toLowerCase().includes(q) ||
+                        t.name.toLowerCase().includes(q) ||
+                        t.value.toLowerCase().includes(q)
+                      );
+                    })
+                    .map(t => (
+                      <tr
+                        key={t.tag}
+                        className="border-t border-border/50 hover:bg-accent/40"
+                      >
+                        <td className="px-2 py-1 whitespace-nowrap text-primary">
+                          {t.tag}
+                        </td>
+                        <td className="px-2 py-1 whitespace-nowrap">
+                          {t.name}
+                        </td>
+                        <td className="px-2 py-1 text-muted-foreground">
+                          {t.vr}
+                        </td>
+                        <td className="px-2 py-1 break-all">{t.value}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </DialogContent>
       </Dialog>

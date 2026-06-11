@@ -8,6 +8,7 @@ import {
 } from "react";
 import { patchImagerPixelSpacing } from "@/lib/imagerPixelSpacing";
 import { getColormapLut, isValidColormap } from "@/lib/colormaps";
+import { lookupTag, formatTagValue } from "@/lib/dicomTagDictionary";
 import {
   isSegmentationTool,
   resolveBrushStrategy,
@@ -87,6 +88,10 @@ export interface CornerstoneViewerHandle {
   flip: (axis: "h" | "v") => void;
   /** Réinitialise la vue (caméra + propriétés) — « Reset Image View ». */
   resetView: () => void;
+  /** Tous les tags DICOM de l'image courante (inspecteur « DICOM Meta-Data »). */
+  getDicomTags: () => Promise<
+    Array<{ tag: string; name: string; vr: string; value: string }>
+  >;
 }
 
 /**
@@ -522,6 +527,65 @@ const CornerstoneViewer = forwardRef<
           viewport.render();
         } catch (e) {
           console.warn("[Cornerstone3D] reset vue ignoré:", e);
+        }
+      },
+      getDicomTags: async () => {
+        try {
+          const viewport = getViewport();
+          if (!viewport) return [];
+          const imageId =
+            typeof viewport.getCurrentImageId === "function"
+              ? viewport.getCurrentImageId()
+              : null;
+          if (!imageId) return [];
+          const dicomImageLoader = await import(
+            "@cornerstonejs/dicom-image-loader"
+          );
+          const wadouri = (dicomImageLoader as any)?.wadouri;
+          if (!wadouri?.parseImageId || !wadouri?.dataSetCacheManager?.get)
+            return [];
+          const parsed = wadouri.parseImageId(imageId);
+          if (!parsed?.url) return [];
+          let url = parsed.url;
+          if (parsed.frame) url = `${url}&frame=${parsed.frame}`;
+          const dataSet = wadouri.dataSetCacheManager.get(url);
+          if (!dataSet?.elements) return [];
+          const out: Array<{
+            tag: string;
+            name: string;
+            vr: string;
+            value: string;
+          }> = [];
+          for (const key of Object.keys(dataSet.elements)) {
+            if (!/^x[0-9a-f]{8}$/i.test(key)) continue;
+            const group = key.slice(1, 5).toUpperCase();
+            const element = key.slice(5, 9).toUpperCase();
+            const tag = `${group},${element}`;
+            const info = lookupTag(tag);
+            const el = dataSet.elements[key];
+            const vr = info?.vr || el?.vr || "";
+            let raw: string | undefined;
+            try {
+              raw = dataSet.string(key);
+            } catch {
+              raw = undefined;
+            }
+            const value =
+              raw != null && raw !== ""
+                ? formatTagValue(vr, raw)
+                : `<${vr || "?"}, ${el?.length ?? "?"} octets>`;
+            out.push({
+              tag,
+              name: info?.name || info?.keyword || "Tag privé/inconnu",
+              vr,
+              value,
+            });
+          }
+          out.sort((a, b) => a.tag.localeCompare(b.tag));
+          return out;
+        } catch (e) {
+          console.warn("[Cornerstone3D] lecture tags DICOM ignorée:", e);
+          return [];
         }
       },
     }),

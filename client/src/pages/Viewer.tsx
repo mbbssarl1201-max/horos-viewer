@@ -92,6 +92,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { COLORMAPS } from "@/lib/colormaps";
+import { sortByInstanceNumber, sortBySliceLocation } from "@/lib/sortSeries";
 import { Palette } from "lucide-react";
 import {
   CINE_FPS_OPTIONS,
@@ -215,6 +216,11 @@ export default function Viewer() {
   const [imageRotation, setImageRotation] = useState(0);
   // Vidéo inversée (négatif) sur le viewport actif.
   const [imageInverted, setImageInverted] = useState(false);
+  // Tri des coupes (« Sort By » de Horos) : clé + sens.
+  const [sortKey, setSortKey] = useState<"instanceNumber" | "sliceLocation">(
+    "instanceNumber"
+  );
+  const [sortAsc, setSortAsc] = useState(true);
   // Inspecteur de méta-données DICOM (« DICOM Meta-Data / ⌘I » de Horos).
   const [tagInspectorOpen, setTagInspectorOpen] = useState(false);
   const [dicomTags, setDicomTags] = useState<
@@ -471,19 +477,28 @@ export default function Viewer() {
     };
   }, [fusionActive, petImageUrls]);
 
+  // Coupes triées selon le mode « Sort By » (n° d'instance / position, ↑↓).
+  // Par défaut n° d'instance croissant = ordre serveur historique inchangé.
+  const sortedInstances = useMemo(() => {
+    const list = (instancesList ?? []) as any[];
+    return sortKey === "sliceLocation"
+      ? sortBySliceLocation(list, sortAsc)
+      : sortByInstanceNumber(list, sortAsc);
+  }, [instancesList, sortKey, sortAsc]);
+
   // Tableaux mémoïsés réutilisés par chaque cellule de la mosaïque (référence
   // stable → pas de re-setup parasite du viewport au scroll/W/L).
   const cellImageUrls = useMemo(
-    () => (instancesList ?? []).map((inst: any) => inst.storageUrl || ""),
-    [instancesList]
+    () => sortedInstances.map((inst: any) => inst.storageUrl || ""),
+    [sortedInstances]
   );
   const cellInstances = useMemo(
     () =>
-      (instancesList ?? []).map((inst: any) => ({
+      sortedInstances.map((inst: any) => ({
         id: inst.id,
         storageUrl: inst.storageUrl,
       })),
-    [instancesList]
+    [sortedInstances]
   );
 
   // Auto-select first series
@@ -1140,6 +1155,32 @@ export default function Viewer() {
                       </option>
                     ))}
                   </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-muted-foreground">
+                    Tri des coupes (Sort By)
+                  </label>
+                  <div className="flex gap-1.5">
+                    <select
+                      className="flex-1 text-xs bg-input border border-border rounded px-2 py-1"
+                      value={sortKey}
+                      onChange={e =>
+                        setSortKey(
+                          e.target.value as "instanceNumber" | "sliceLocation"
+                        )
+                      }
+                    >
+                      <option value="instanceNumber">Numéro d'instance</option>
+                      <option value="sliceLocation">Position de coupe</option>
+                    </select>
+                    <button
+                      className="toolbar-btn !flex-row gap-1 border border-border px-2"
+                      title={sortAsc ? "Croissant" : "Décroissant"}
+                      onClick={() => setSortAsc(a => !a)}
+                    >
+                      <span className="text-[10px]">{sortAsc ? "↑" : "↓"}</span>
+                    </button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-1.5">
                   <button

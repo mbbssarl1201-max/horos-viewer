@@ -23,6 +23,7 @@ import NotificationsPanel from "@/components/NotificationsPanel";
 import ExportPanel from "@/components/ExportPanel";
 import AnonymizeDialog from "@/components/AnonymizeDialog";
 import QueryPACS from "@/components/QueryPACS";
+import WorklistDialog from "@/components/WorklistDialog";
 import { useLocation } from "wouter";
 import {
   Database,
@@ -55,6 +56,7 @@ import {
   Server,
   Plus,
   ChevronDown,
+  ClipboardList,
 } from "lucide-react";
 import { useState, useCallback } from "react";
 import { toast } from "sonner";
@@ -112,6 +114,7 @@ export default function Home() {
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showAnonymizeDialog, setShowAnonymizeDialog] = useState(false);
   const [showQueryPACS, setShowQueryPACS] = useState(false);
+  const [showWorklist, setShowWorklist] = useState(false);
   const [selectedStudyId, setSelectedStudyId] = useState<number | null>(null);
   const [showMetaData, setShowMetaData] = useState(false);
 
@@ -450,6 +453,11 @@ export default function Home() {
           icon={Search}
           label="Query"
           onClick={() => setShowQueryPACS(true)}
+        />
+        <ToolbarButton
+          icon={ClipboardList}
+          label="Worklist"
+          onClick={() => setShowWorklist(true)}
         />
         <ToolbarButton
           icon={Shield}
@@ -927,6 +935,8 @@ export default function Home() {
 
       {/* Query PACS Dialog */}
       <QueryPACS open={showQueryPACS} onOpenChange={setShowQueryPACS} />
+
+      <WorklistDialog open={showWorklist} onOpenChange={setShowWorklist} />
 
       {/* Add PACS Server Dialog */}
       <Dialog open={showAddServer} onOpenChange={setShowAddServer}>

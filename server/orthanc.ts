@@ -341,6 +341,74 @@ export async function cStoreStudy(params: {
 }
 
 /**
+ * Modality Worklist (MWL) query via Orthanc's REST API.
+ *
+ * Orthanc forwards a C-FIND to a remote MWL SCP through
+ * `POST /modalities/{id}/find-worklist` (available when the queried modality is
+ * configured and Orthanc supports worklist relaying). The body is an
+ * `{ Query: {...} }` of DICOM tags at the worklist level; the response is an
+ * array of DICOM-JSON answers.
+ *
+ * FAIL-SOFT by contract: a demo PACS often has NO worklist configured. Any
+ * non-OK status or transport error resolves to `{ available: false, ... }`
+ * rather than throwing, so the UI can show "Worklist indisponible" without the
+ * viewer breaking. Reuses safeAeTitle to block path traversal / SSRF.
+ */
+export async function findWorklist(params: {
+  aet: string;
+  query?: Record<string, string>;
+}): Promise<{
+  available: boolean;
+  answers: any[];
+  error?: string;
+}> {
+  // Scheduled Procedure Step Sequence (0040,0100) carries the per-step fields
+  // (modality, scheduled date/time, description). We send it as an empty SQ to
+  // request those tags back, alongside top-level patient/accession matchers.
+  const query: Record<string, unknown> = {
+    PatientName: "",
+    PatientID: "",
+    AccessionNumber: "",
+    "0040,0100": [
+      {
+        Modality: "",
+        ScheduledProcedureStepStartDate: "",
+        ScheduledProcedureStepStartTime: "",
+        ScheduledProcedureStepDescription: "",
+        ScheduledStationAETitle: "",
+      },
+    ],
+    ...(params.query ?? {}),
+  };
+
+  try {
+    const res = await orthancFetch(
+      `/modalities/${safeAeTitle(params.aet)}/find-worklist`,
+      {
+        method: "POST",
+        body: JSON.stringify({ Query: query, Short: false }),
+      }
+    );
+    if (!res.ok) {
+      // 404 typically means the worklist endpoint / modality isn't configured.
+      return {
+        available: false,
+        answers: [],
+        error: `HTTP ${res.status}`,
+      };
+    }
+    const answers = await res.json();
+    return { available: true, answers: Array.isArray(answers) ? answers : [] };
+  } catch (err: any) {
+    return {
+      available: false,
+      answers: [],
+      error: err?.message || "Worklist query failed",
+    };
+  }
+}
+
+/**
  * List configured modalities in Orthanc
  */
 export async function listModalities(): Promise<string[]> {

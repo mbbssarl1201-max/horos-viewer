@@ -23,6 +23,10 @@ declare module "dcmjs" {
       DicomMetaDictionary: {
         denaturalizeDataset(dataset: Record<string, any>): Record<string, any>;
         naturalizeDataset(dict: Record<string, any>): Record<string, any>;
+        // Generators used when building derived objects (SR / GSPS).
+        uid(): string;
+        date(date?: Date): string;
+        time(date?: Date): string;
       };
     };
     [key: string]: any;

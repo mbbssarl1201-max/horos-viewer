@@ -91,6 +91,7 @@ import {
   layoutGridClass,
   clampActiveCell,
 } from "@/lib/viewportLayout";
+import { pickHangingProtocol } from "@/lib/hangingProtocols";
 import { toast } from "sonner";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 
@@ -287,6 +288,30 @@ export default function Viewer() {
       setSelectedSeries(seriesList[0].id);
     }
   }, [seriesList, selectedSeries]);
+
+  // Protocole d'accrochage : applique automatiquement la disposition + le preset
+  // W/L + l'outil initial selon la modalité / description de la série ouverte
+  // (ex. CT thorax → poumon). On l'applique UNE SEULE FOIS par série pour ne pas
+  // « combattre » les réglages manuels de l'utilisateur après chargement.
+  const appliedProtocolForSeries = useRef<number | null>(null);
+  useEffect(() => {
+    if (!selectedSeries || !seriesList) return;
+    if (appliedProtocolForSeries.current === selectedSeries) return;
+    const s = (seriesList as any[]).find(x => x.id === selectedSeries);
+    if (!s) return;
+    appliedProtocolForSeries.current = selectedSeries;
+    const protocol = pickHangingProtocol(
+      s.modality || study?.modality,
+      s.seriesDescription
+    );
+    const preset = WL_PRESETS.find(p => p.name === protocol.wlPreset);
+    if (preset) {
+      setWindowWidth(preset.ww);
+      setWindowCenter(preset.wc);
+    }
+    setViewportLayout(protocol.layout);
+    setActiveTool(protocol.initialTool);
+  }, [selectedSeries, seriesList, study]);
 
   // Update total slices when instances change
   useEffect(() => {
@@ -523,6 +548,62 @@ export default function Viewer() {
       toast.error("Échec de l'envoi : " + (e?.message || "erreur"));
     }
   }, [studyId, sendReportMutation]);
+
+  // Export DICOM des annotations : SR (mesures) et GSPS (calques graphiques).
+  // Le serveur construit l'objet Part-10 (dcmjs) à partir des annotations
+  // enregistrées de la série ; on télécharge les octets .dcm renvoyés en base64.
+  const exportSrMutation = trpc.annotations.exportSr.useMutation();
+  const exportGspsMutation = trpc.annotations.exportGsps.useMutation();
+
+  const downloadDicom = (filename: string, dicomBase64: string) => {
+    const bytes = Uint8Array.from(atob(dicomBase64), c => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: "application/dicom" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const handleExportSr = useCallback(async () => {
+    if (!selectedSeries) {
+      toast.error("Sélectionnez une série");
+      return;
+    }
+    try {
+      const res = await exportSrMutation.mutateAsync({
+        seriesId: selectedSeries,
+      });
+      if (!res.success) {
+        toast.error(res.error || "Export SR impossible");
+        return;
+      }
+      downloadDicom(res.filename, res.dicomBase64);
+      toast.success("Compte rendu structuré (SR) exporté");
+    } catch (e: any) {
+      toast.error("Échec de l'export SR : " + (e?.message || "erreur"));
+    }
+  }, [selectedSeries, exportSrMutation]);
+
+  const handleExportGsps = useCallback(async () => {
+    if (!selectedSeries) {
+      toast.error("Sélectionnez une série");
+      return;
+    }
+    try {
+      const res = await exportGspsMutation.mutateAsync({
+        seriesId: selectedSeries,
+      });
+      if (!res.success) {
+        toast.error(res.error || "Export GSPS impossible");
+        return;
+      }
+      downloadDicom(res.filename, res.dicomBase64);
+      toast.success("État de présentation (GSPS) exporté");
+    } catch (e: any) {
+      toast.error("Échec de l'export GSPS : " + (e?.message || "erreur"));
+    }
+  }, [selectedSeries, exportGspsMutation]);
 
   // Export du volume 3D chargé en maillage de surface Wavefront .OBJ.
   // Pipeline : volume Cornerstone (vtkImageData) → marching cubes VTK.js
@@ -1093,6 +1174,28 @@ export default function Viewer() {
         >
           <FileText className="w-4 h-4" />
           <span className="text-[9px]">Compte rendu</span>
+        </button>
+        <button
+          className="toolbar-btn"
+          title="Exporter les mesures en DICOM SR (compte rendu structuré)"
+          onClick={handleExportSr}
+          disabled={exportSrMutation.isPending || !selectedSeries}
+        >
+          <FileText className="w-4 h-4" />
+          <span className="text-[9px]">
+            {exportSrMutation.isPending ? "…" : "Exporter SR"}
+          </span>
+        </button>
+        <button
+          className="toolbar-btn"
+          title="Exporter les annotations en DICOM GSPS (état de présentation)"
+          onClick={handleExportGsps}
+          disabled={exportGspsMutation.isPending || !selectedSeries}
+        >
+          <Layers className="w-4 h-4" />
+          <span className="text-[9px]">
+            {exportGspsMutation.isPending ? "…" : "Exporter GSPS"}
+          </span>
         </button>
         <button
           className="toolbar-btn"

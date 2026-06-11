@@ -53,6 +53,7 @@ import {
   Eraser,
   Trash2,
   Wand2,
+  Film,
   Box,
   SquareDashedBottom,
 } from "lucide-react";
@@ -982,6 +983,70 @@ export default function Viewer() {
     window.location.href = `/api/export/dicom-zip/${studyId}`;
   }, [studyId]);
 
+  // Export vidéo (« Export to Movie » de Horos) — équivalent web 100% client :
+  // on enregistre le canvas live (MediaRecorder + captureStream) pendant une
+  // boucle de lecture ciné, puis on télécharge un .webm (format vidéo natif web).
+  const handleExportVideo = useCallback(() => {
+    const canvas = getViewportCanvas();
+    if (!canvas || typeof (canvas as any).captureStream !== "function") {
+      toast.error("Export vidéo non supporté par ce navigateur");
+      return;
+    }
+    if (totalSlices <= 1) {
+      toast.error("Série mono-coupe : rien à animer");
+      return;
+    }
+    if (typeof MediaRecorder === "undefined") {
+      toast.error("Enregistrement vidéo non supporté par ce navigateur");
+      return;
+    }
+    let stream: MediaStream;
+    try {
+      stream = (canvas as any).captureStream(cineFps);
+    } catch {
+      toast.error("Capture du flux vidéo impossible");
+      return;
+    }
+    const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+      ? "video/webm;codecs=vp9"
+      : "video/webm";
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(stream, { mimeType: mime });
+    } catch {
+      toast.error("Enregistrement vidéo non supporté");
+      return;
+    }
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = e => {
+      if (e.data && e.data.size) chunks.push(e.data);
+    };
+    recorder.onstop = () => {
+      setCinePlaying(false);
+      const blob = new Blob(chunks, { type: "video/webm" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `cine_etude${studyId ?? ""}.webm`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast.success("Vidéo ciné exportée (.webm)");
+    };
+    toast("Enregistrement du ciné… (ne change pas d'onglet)");
+    setCinePlaying(true);
+    recorder.start();
+    // Durée = une boucle complète de la série (plafonnée à 20 s).
+    const durationMs = Math.min(20000, (totalSlices / cineFps) * 1000 + 600);
+    setTimeout(() => {
+      try {
+        recorder.stop();
+      } catch {
+        /* déjà arrêté */
+      }
+    }, durationMs);
+  }, [studyId, totalSlices, cineFps]);
+
   // Planche d'impression — équivalent web du « DICOM Print » de Horos. On
   // assemble une grille d'images (images-clés capturées + vue courante) dans une
   // fenêtre imprimable, puis on lance l'impression du navigateur (papier ou PDF).
@@ -1614,6 +1679,14 @@ export default function Viewer() {
             >
               <Printer className="w-4 h-4" />
               <span className="text-[9px]">Planche</span>
+            </button>
+            <button
+              className="toolbar-btn"
+              title="Export vidéo du ciné (.webm) — équivalent Export to Movie"
+              onClick={handleExportVideo}
+            >
+              <Film className="w-4 h-4" />
+              <span className="text-[9px]">Vidéo</span>
             </button>
             <button
               className={`toolbar-btn ${keyImageSlices.includes(currentSlice) ? "active" : ""}`}

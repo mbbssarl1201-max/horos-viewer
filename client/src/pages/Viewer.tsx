@@ -1051,7 +1051,10 @@ export default function Viewer() {
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       {/* Top Toolbar */}
-      <div className="h-12 border-b border-border bg-card flex items-center px-2 gap-1 shrink-0">
+      {/* Barre d'outils : `flex-wrap` + hauteur mini pour que TOUS les boutons
+          restent visibles (sinon, avec ~48 boutons, les derniers — dont
+          « Compte rendu »/« Email » — débordaient hors écran et étaient coupés). */}
+      <div className="min-h-12 border-b border-border bg-card flex flex-wrap items-center px-2 gap-1 shrink-0">
         <Button
           variant="ghost"
           size="sm"

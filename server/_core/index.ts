@@ -10,6 +10,8 @@ import { registerDicomwebProxy } from "../dicomwebProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { logger } from "./logger";
+import { initSentry } from "./sentry";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -79,9 +81,94 @@ async function startServer() {
     next();
   });
 
+  // Public health probe (no auth, no PHI). Returns 200 when DB + storage are
+  // reachable, 503 otherwise — suitable for Docker/Traefik healthchecks.
+  const startedAt = Date.now();
+  app.get("/healthz", async (_req, res) => {
+    let dbOk = false;
+    let storageOk = false;
+    try {
+      const { getDb } = await import("../db");
+      const db = await getDb();
+      if (db) {
+        const { sql } = await import("drizzle-orm");
+        await db.execute(sql`SELECT 1`);
+        dbOk = true;
+      }
+    } catch {
+      dbOk = false;
+    }
+    try {
+      const { isStorageConfigured } = await import("../storage");
+      // Light check: configured is enough here — a full S3 round-trip on every
+      // probe would add load and a network dependency to liveness.
+      storageOk = isStorageConfigured();
+    } catch {
+      storageOk = false;
+    }
+    const healthy = dbOk && storageOk;
+    res.status(healthy ? 200 : 503).json({
+      status: healthy ? "ok" : "degraded",
+      db: dbOk ? "up" : "down",
+      storage: storageOk ? "ok" : "unconfigured",
+      uptime: Math.floor((Date.now() - startedAt) / 1000),
+    });
+  });
+
   registerStorageProxy(app);
   registerDicomwebProxy(app);
   registerOAuthRoutes(app);
+
+  // Authenticated CSV export of the audit trail (access_logs) — admin only.
+  // Mirrors the audit.export tRPC procedure but streams a downloadable CSV.
+  app.get("/api/audit/export.csv", async (req, res) => {
+    try {
+      const { sdk } = await import("./sdk");
+      const { isAdmin } = await import("../rbac");
+      let user;
+      try {
+        user = await sdk.authenticateRequest(req as any);
+      } catch {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      if (!isAdmin(user)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      const { queryAuditLogs, buildAuditCsv } = await import("../audit");
+      const { recordAccess } = await import("../db");
+      const parseDate = (v: unknown): Date | undefined => {
+        if (typeof v !== "string" || !v) return undefined;
+        const d = new Date(v);
+        return isNaN(d.getTime()) ? undefined : d;
+      };
+      const limitRaw = parseInt(String(req.query.limit ?? ""), 10);
+      const rows = await queryAuditLogs({
+        from: parseDate(req.query.from),
+        to: parseDate(req.query.to),
+        limit: Number.isNaN(limitRaw) ? undefined : limitRaw,
+      });
+      await recordAccess({
+        userId: user.id,
+        action: "audit.export.csv",
+        studyId: null,
+        detail: `rows=${rows.length}`,
+        ipAddress: req.ip ?? null,
+      });
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="audit-logs.csv"`
+      );
+      res.send(buildAuditCsv(rows));
+    } catch (err: any) {
+      logger.error("audit.export_csv_failed", { error: String(err) });
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Audit export failed" });
+      }
+    }
+  });
   // Export routes (ZIP DICOM + PDF) - must be before tRPC
   app.get("/api/export/dicom-zip/:studyId", async (req, res) => {
     try {
@@ -244,11 +331,7 @@ async function startServer() {
       doc.setFontSize(8);
       doc.setTextColor(100, 100, 100);
       doc.text(`Generated: ${new Date().toISOString()}`, 20, 280);
-      doc.text(
-        "MediView - For diagnostic purposes only",
-        20,
-        286
-      );
+      doc.text("MediView - For diagnostic purposes only", 20, 286);
 
       const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
       res.setHeader("Content-Type", "application/pdf");
@@ -286,9 +369,17 @@ async function startServer() {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
+  // Observability opt-in: enables Sentry only if SENTRY_DSN is set AND
+  // @sentry/node is installed (no-op otherwise). Never throws.
+  await initSentry();
+
   server.listen(port, () => {
+    logger.info("server.started", { port, env: process.env.NODE_ENV });
     console.log(`Server running on http://localhost:${port}/`);
   });
 }
 
-startServer().catch(console.error);
+startServer().catch(err => {
+  logger.error("server.start_failed", { error: String(err) });
+  console.error(err);
+});

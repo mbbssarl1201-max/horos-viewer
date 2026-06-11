@@ -42,4 +42,8 @@ export const ENV = {
   // transitions de statut/priorité d'une étude. OPT-IN : si vide, AUCUNE
   // notification automatique n'est envoyée (la fonctionnalité est un no-op).
   risNotifyEmail: process.env.RIS_NOTIFY_EMAIL ?? "",
+  // Observabilité (opt-in). Si défini ET que @sentry/node est installé, les
+  // erreurs serveur sont remontées à Sentry. Sinon, no-op (aucune dépendance
+  // ajoutée). Pour activer : `npm i @sentry/node` puis définir SENTRY_DSN.
+  sentryDsn: process.env.SENTRY_DSN ?? "",
 };

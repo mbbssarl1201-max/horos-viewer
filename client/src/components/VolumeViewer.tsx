@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { slabModeToBlend, type SlabMode } from "@/lib/slabBlend";
 import { PRESETS_3D, presetParId } from "@/lib/volumePresets3d";
+import { catmullRomSpline } from "@/lib/flyThruPath";
 import {
   clampFusionOpacity,
   petColormapVtkName,
@@ -51,6 +52,8 @@ interface VolumeViewerProps {
   surface3d?: boolean;
   /** Seuil iso (unités scalaires/HU) pour le rendu surfacique. Défaut ~300 (os CT). */
   surfaceIso?: number;
+  /** Compteur : chaque incrément déclenche une animation fly-thru (endoscopie). */
+  flyThruNonce?: number;
   /**
    * Fusion PET-CT (additif, fail-safe) : URLs (MinIO, schéma wadouri:) des
    * coupes de la série PET à superposer sur le CT/volume principal. Si absent
@@ -246,6 +249,7 @@ export default function VolumeViewer({
   realistic3d = true,
   surface3d = false,
   surfaceIso = 300,
+  flyThruNonce = 0,
   petImageUrls,
   petVolumeId,
   fusionOpacity = 0.5,
@@ -765,6 +769,67 @@ export default function VolumeViewer({
       cancelled = true;
     };
   }, [preset3d, mode, realistic3d, surface3d, surfaceIso]);
+
+  // Fly-thru / endoscopie virtuelle (« 3D Endoscopy » de Horos) : à chaque
+  // incrément de flyThruNonce, anime la caméra le long d'un chemin de Catmull-Rom
+  // (départ → centre → au-delà), donnant un vol vers l'intérieur du volume, puis
+  // restaure la caméra initiale. Best-effort, sans reconstruire le moteur.
+  useEffect(() => {
+    if (mode !== "3d" || !flyThruNonce) return;
+    const vp = engineRef.current?.getViewport?.("VR_3D") as any;
+    if (!vp?.getCamera || !vp?.setCamera) return;
+    let cancelled = false;
+    let raf = 0;
+    try {
+      const cam0 = vp.getCamera();
+      const pos = cam0.position as number[];
+      const fp = cam0.focalPoint as number[];
+      const up = cam0.viewUp as number[];
+      const dx = fp[0] - pos[0];
+      const dy = fp[1] - pos[1];
+      const dz = fp[2] - pos[2];
+      const dist = Math.hypot(dx, dy, dz) || 1;
+      const dir = [dx / dist, dy / dist, dz / dist];
+      const beyond = [
+        fp[0] + dir[0] * dist,
+        fp[1] + dir[1] * dist,
+        fp[2] + dir[2] * dist,
+      ];
+      const path = catmullRomSpline([pos as any, fp as any, beyond as any], 30);
+      let i = 0;
+      const step = () => {
+        if (cancelled || i >= path.length) {
+          try {
+            vp.setCamera(cam0);
+            vp.render();
+          } catch {}
+          return;
+        }
+        const p = path[i] as number[];
+        i++;
+        try {
+          vp.setCamera({
+            position: p,
+            focalPoint: [
+              p[0] + dir[0] * 10,
+              p[1] + dir[1] * 10,
+              p[2] + dir[2] * 10,
+            ],
+            viewUp: up,
+          });
+          vp.render();
+        } catch {}
+        raf = requestAnimationFrame(step);
+      };
+      step();
+    } catch {
+      /* caméra indisponible — fly-thru ignoré */
+    }
+    return () => {
+      cancelled = true;
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [flyThruNonce, mode]);
 
   // Changement d'opacité / colormap de la fusion PET : ré-appliquer SANS
   // reconstruire le moteur (rapide, glissement de curseur fluide). N'agit que si

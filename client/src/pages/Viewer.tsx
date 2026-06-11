@@ -345,6 +345,8 @@ export default function Viewer() {
   const [realistic3d, setRealistic3d] = useState<boolean>(true);
   // Rendu surfacique 3D (iso-surface) — « 3D Surface Rendering » de Horos.
   const [surface3d, setSurface3d] = useState<boolean>(false);
+  // Fly-thru / endoscopie : un compteur incrémenté déclenche l'animation caméra.
+  const [flyThruNonce, setFlyThruNonce] = useState(0);
   // Export maillage 3D (.obj) : seuil HU de l'isosurface (≈300 = os) + état de
   // génération (les marching cubes sur un volume CT complet sont lourds).
   const [meshThreshold, setMeshThreshold] = useState<number>(300);
@@ -2105,6 +2107,16 @@ export default function Viewer() {
               Surface
             </label>
             <Separator orientation="vertical" className="h-7 mx-1" />
+            {/* Fly-thru / endoscopie virtuelle (3D Endoscopy de Horos) */}
+            <button
+              className="toolbar-btn"
+              title="Fly-thru — vol de caméra vers l'intérieur du volume (endoscopie)"
+              onClick={() => setFlyThruNonce(n => n + 1)}
+            >
+              <Spline className="w-4 h-4" />
+              <span className="text-[9px]">Fly-thru</span>
+            </button>
+            <Separator orientation="vertical" className="h-7 mx-1" />
             {/* Export maillage 3D (.obj) : isosurface (marching cubes) au seuil
                 HU choisi. ~300 HU = os. Opération lourde → bouton désactivé +
                 « Génération… » pendant le calcul. */}
@@ -2733,6 +2745,7 @@ export default function Viewer() {
                   realistic3d={realistic3d}
                   surface3d={surface3d}
                   surfaceIso={suggestIsoForModality(study?.modality)}
+                  flyThruNonce={flyThruNonce}
                   petImageUrls={fusionActive ? petImageUrls : undefined}
                   fusionOpacity={fusionOpacity}
                   petColormapId={petColormapId}

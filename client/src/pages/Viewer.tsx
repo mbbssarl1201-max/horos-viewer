@@ -96,6 +96,7 @@ import { getPresetsForModality } from "@/lib/windowPresets";
 import { sortByInstanceNumber, sortBySliceLocation } from "@/lib/sortSeries";
 import { edgeLabelsFromIop } from "@/lib/orientationLabels";
 import { toggleKeyImage, nextKeyImage, prevKeyImage } from "@/lib/keyImages";
+import { findPriors } from "@/lib/priorStudies";
 import { Palette, Star } from "lucide-react";
 import {
   CINE_FPS_OPTIONS,
@@ -412,6 +413,18 @@ export default function Viewer() {
     { id: studyId! },
     { enabled: !!studyId }
   );
+
+  // Antériorités / comparatif : toutes les études (pour rapprocher par patient).
+  const { data: allStudiesData } = trpc.studies.list.useQuery(
+    {},
+    { enabled: !!study }
+  );
+  // Études antérieures du MÊME patient (tri date décroissante), via priorStudies.
+  const priors = useMemo(() => {
+    if (!study) return [] as any[];
+    return findPriors(study as any, (allStudiesData ?? []) as any[]) as any[];
+  }, [study, allStudiesData]);
+  const [priorsOpen, setPriorsOpen] = useState(false);
 
   // Fetch series for this study
   const { data: seriesList } = trpc.series.listByStudy.useQuery(
@@ -1467,6 +1480,16 @@ export default function Viewer() {
                 </button>
               </>
             )}
+            {priors.length > 0 && (
+              <button
+                className="toolbar-btn"
+                title="Antériorités du même patient"
+                onClick={() => setPriorsOpen(true)}
+              >
+                <Layers className="w-4 h-4" />
+                <span className="text-[9px]">Antér. ({priors.length})</span>
+              </button>
+            )}
           </>
         )}
 
@@ -1970,6 +1993,45 @@ export default function Viewer() {
                 </tbody>
               </table>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Antériorités / comparatif : études antérieures du même patient */}
+      <Dialog open={priorsOpen} onOpenChange={setPriorsOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Antériorités du patient</DialogTitle>
+            <DialogDescription>
+              {study?.patientName || "Patient"} — {priors.length} étude(s)
+              antérieure(s).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-auto divide-y divide-border/40">
+            {priors.map((p: any) => (
+              <div key={p.id} className="flex items-center gap-2 py-2 text-xs">
+                <div className="flex-1">
+                  <div className="font-medium">
+                    {p.studyDescription || p.modality || "Étude"}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {p.modality || "?"} · {p.studyDate || "date ?"} ·{" "}
+                    {p.numberOfImages || p.imageCount || "?"} img
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    setPriorsOpen(false);
+                    navigate(`/viewer/${p.id}`);
+                  }}
+                >
+                  Ouvrir
+                </Button>
+              </div>
+            ))}
           </div>
         </DialogContent>
       </Dialog>

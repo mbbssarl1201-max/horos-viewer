@@ -29,6 +29,8 @@ export interface ReportPdfInput {
   keyImages: KeyImage[];
   aiAssisted?: boolean;
   antecedents?: string;
+  /** Addenda datés à rendre après la signature (corrections post-signature). */
+  addenda?: { text: string; date: string; author: string }[];
 }
 
 const MARGIN = 14;
@@ -160,6 +162,24 @@ export function buildReportPdf(input: ReportPdfInput): Buffer {
   doc.setFontSize(8);
   doc.setTextColor(130);
   doc.text(CHAMPEL_HEADER.motto, W - MARGIN, y, { align: "right" });
+
+  if (input.addenda && input.addenda.length) {
+    for (const ad of input.addenda) {
+      y += 8;
+      if (y > doc.internal.pageSize.getHeight() - 20) {
+        doc.addPage();
+        y = 14;
+      }
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text(`Addendum — ${ad.author}, ${ad.date}`, MARGIN, y);
+      y += 5;
+      doc.setFont("helvetica", "normal");
+      const lines = doc.splitTextToSize(ad.text, W - 2 * MARGIN);
+      doc.text(lines, MARGIN, y);
+      y += lines.length * 5;
+    }
+  }
 
   return Buffer.from(doc.output("arraybuffer"));
 }

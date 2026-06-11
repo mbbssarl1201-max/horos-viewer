@@ -59,6 +59,28 @@ describe("buildReportPdf", () => {
     expect(withAntecedents.length).toBeGreaterThan(without.length);
     expect(withAntecedents.subarray(0, 4).toString()).toBe("%PDF");
   });
+  it("inclut les addenda dans le PDF", () => {
+    const buf = buildReportPdf({
+      study: { id: 1, patientName: "X", modality: "CT" },
+      report: {
+        indication: "",
+        technique: "",
+        resultats: "RAS",
+        conclusion: "Normal",
+      },
+      signature: "Dr Test — 12/06/2026",
+      keyImages: [],
+      addenda: [
+        {
+          text: "Précision ajoutée",
+          date: "12/06/2026 14:00",
+          author: "Dr Test",
+        },
+      ],
+    });
+    expect(buf.length).toBeGreaterThan(800);
+    expect(buf.subarray(0, 4).toString()).toBe("%PDF");
+  });
   it("n'échoue pas avec une image clé PNG", () => {
     const onePx =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";

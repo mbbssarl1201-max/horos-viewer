@@ -90,10 +90,72 @@ const SMART_ALBUMS = [
   { key: "database", label: "Database", icon: Database },
   { key: "comments", label: "Cases with comments", icon: MessageSquare },
   { key: "interesting", label: "Interesting Cases", icon: Star },
-  { key: "recent_hour", label: "Just Acquired (last hour)", icon: Clock },
+  { key: "recent_hour", label: "Just Acquired (today)", icon: Clock },
   { key: "added_hour", label: "Just Added (last hour)", icon: Plus },
   { key: "opened", label: "Just Opened", icon: FolderOpen },
 ];
+
+// Suivi local des études ouvertes (« Just Opened ») — pas de PHI, juste des ids.
+const OPENED_STUDIES_KEY = "mediview:openedStudies";
+function readOpenedIds(): number[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(OPENED_STUDIES_KEY) || "[]");
+    return Array.isArray(v) ? v.filter(n => typeof n === "number") : [];
+  } catch {
+    return [];
+  }
+}
+function recordOpenedId(id: number): number[] {
+  const next = [id, ...readOpenedIds().filter(x => x !== id)].slice(0, 50);
+  try {
+    localStorage.setItem(OPENED_STUDIES_KEY, JSON.stringify(next));
+  } catch {
+    /* quota / mode privé : best-effort */
+  }
+  return next;
+}
+
+// Parse une date d'étude (DICOM YYYYMMDD ou ISO) ou un timestamp → ms, ou null.
+function parseStudyMs(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const s = String(v).trim();
+  if (!s) return null;
+  if (/^\d{8}$/.test(s)) {
+    const y = +s.slice(0, 4),
+      m = +s.slice(4, 6) - 1,
+      d = +s.slice(6, 8);
+    return new Date(y, m, d).getTime();
+  }
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : null;
+}
+
+// Prédicat de smart album évalué côté client (sans DB). « last hour » utilise
+// createdAt (timestamp réel) ; « today » utilise studyDate (souvent date seule).
+function albumMatches(study: any, key: string, openedIds: number[]): boolean {
+  const now = Date.now();
+  switch (key) {
+    case "database":
+      return true;
+    case "comments":
+      return !!(study?.comments && String(study.comments).trim());
+    case "interesting":
+      return study?.priority === "stat" || study?.priority === "urgent";
+    case "recent_hour": {
+      const ms = parseStudyMs(study?.studyDate);
+      return ms != null && now - ms < 24 * 3600 * 1000;
+    }
+    case "added_hour": {
+      const ms = parseStudyMs(study?.createdAt);
+      return ms != null && now - ms < 3600 * 1000;
+    }
+    case "opened":
+      return openedIds.includes(study?.id);
+    default:
+      return true;
+  }
+}
 
 // Time interval filter options
 const TIME_FILTERS = [
@@ -120,6 +182,8 @@ export default function Home() {
   const [showMetaData, setShowMetaData] = useState(false);
   // Recherche multi-champs (Search ⌘F) — filtrage client de la liste d'études.
   const [searchQuery, setSearchQuery] = useState("");
+  // Ids des études récemment ouvertes (smart album « Just Opened »).
+  const [openedIds, setOpenedIds] = useState<number[]>(() => readOpenedIds());
 
   const { data: studiesData, isLoading: studiesLoading } =
     trpc.studies.list.useQuery(
@@ -204,11 +268,24 @@ export default function Home() {
   });
 
   const allStudies = studiesData ?? [];
-  // Recherche multi-champs façon Horos (« Search » ⌘F) : filtrage client
-  // insensible casse/accents sur tous les champs de l'étude (ET sur les mots).
+  // Filtrage par smart album (côté client) PUIS recherche multi-champs façon
+  // Horos (« Search » ⌘F, insensible casse/accents, ET sur les mots).
+  const albumStudies = allStudies.filter((s: any) =>
+    albumMatches(s, selectedAlbum, openedIds)
+  );
   const studies = searchQuery.trim()
-    ? allStudies.filter((s: any) => matchAllFields(s, searchQuery))
-    : allStudies;
+    ? albumStudies.filter((s: any) => matchAllFields(s, searchQuery))
+    : albumStudies;
+
+  // Ouvre une étude dans le viewer en l'enregistrant comme « récemment ouverte »
+  // (alimente le smart album « Just Opened »).
+  const openStudy = useCallback(
+    (id: number) => {
+      setOpenedIds(recordOpenedId(id));
+      navigate(`/viewer/${id}`);
+    },
+    [navigate]
+  );
   const selectedStudy = studies.find((s: any) => s.id === selectedStudyId);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -354,21 +431,21 @@ export default function Home() {
           <MenuBarItem
             label="2D Viewer"
             onClick={() => {
-              if (selectedStudyId) navigate(`/viewer/${selectedStudyId}`);
+              if (selectedStudyId) openStudy(selectedStudyId);
               else toast("Select a study first");
             }}
           />
           <MenuBarItem
             label="3D Viewer"
             onClick={() => {
-              if (selectedStudyId) navigate(`/viewer/${selectedStudyId}`);
+              if (selectedStudyId) openStudy(selectedStudyId);
               else toast("Select a study first");
             }}
           />
           <MenuBarItem
             label="ROI"
             onClick={() => {
-              if (selectedStudyId) navigate(`/viewer/${selectedStudyId}`);
+              if (selectedStudyId) openStudy(selectedStudyId);
               else toast("Select a study first");
             }}
           />
@@ -513,7 +590,7 @@ export default function Home() {
           icon={Eye}
           label="2D Viewer"
           onClick={() => {
-            if (selectedStudyId) navigate(`/viewer/${selectedStudyId}`);
+            if (selectedStudyId) openStudy(selectedStudyId);
             else toast("Select a study to open viewer");
           }}
         />
@@ -521,7 +598,7 @@ export default function Home() {
           icon={PenTool}
           label="ROIs & Keys"
           onClick={() => {
-            if (selectedStudyId) navigate(`/viewer/${selectedStudyId}`);
+            if (selectedStudyId) openStudy(selectedStudyId);
             else toast("Select a study first");
           }}
         />
@@ -529,7 +606,7 @@ export default function Home() {
           icon={Layers}
           label="4D Viewer"
           onClick={() => {
-            if (selectedStudyId) navigate(`/viewer/${selectedStudyId}`);
+            if (selectedStudyId) openStudy(selectedStudyId);
             else toast("4D Viewer coming soon");
           }}
         />
@@ -606,7 +683,11 @@ export default function Home() {
                     <album.icon className="w-3.5 h-3.5 shrink-0" />
                     <span className="truncate">{album.label}</span>
                     <span className="ml-auto text-[10px] text-muted-foreground">
-                      {album.key === "database" ? studies.length : 0}
+                      {
+                        allStudies.filter((s: any) =>
+                          albumMatches(s, album.key, openedIds)
+                        ).length
+                      }
                     </span>
                   </button>
                 ))}
@@ -802,7 +883,7 @@ export default function Home() {
                         : ""
                     }`}
                     onClick={() => setSelectedStudyId(study.id)}
-                    onDoubleClick={() => navigate(`/viewer/${study.id}`)}
+                    onDoubleClick={() => openStudy(study.id)}
                   >
                     <div className="w-36 px-1 font-medium truncate text-foreground">
                       {study.patientName || "-"}

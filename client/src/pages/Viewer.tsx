@@ -1935,6 +1935,12 @@ export default function Viewer() {
                   onClick={() => {
                     setComparePriorStudyId(null);
                     setComparePriorSeriesId(null);
+                    // Reset complet : le prochain comparatif démarre lié,
+                    // sans hériter du slice/W-L de la session précédente.
+                    setCompareSyncOn(true);
+                    setPriorSlice(0);
+                    setPriorWindowWidth(400);
+                    setPriorWindowCenter(40);
                   }}
                 >
                   <Square className="w-4 h-4" />

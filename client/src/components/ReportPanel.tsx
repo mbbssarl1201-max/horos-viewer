@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
+import { Button } from "@/components/ui/button";
 import { findBoneSeries, BONE_WINDOW } from "@/lib/boneSeries";
 
 export interface ReportKeyImage {
@@ -26,6 +27,20 @@ interface ReportPanelProps {
   onClose: () => void;
 }
 
+type Sections = {
+  indication: string;
+  technique: string;
+  resultats: string;
+  conclusion: string;
+};
+
+const SECTION_KEYS = [
+  "indication",
+  "technique",
+  "resultats",
+  "conclusion",
+] as const;
+
 export default function ReportPanel({
   studyId,
   seriesId,
@@ -40,17 +55,49 @@ export default function ReportPanel({
   const [to, setTo] = useState("");
   const [signature, setSignature] = useState("");
   const [antecedents, setAntecedents] = useState("");
-  const [indication, setIndication] = useState("");
-  const [technique, setTechnique] = useState("");
-  const [resultats, setResultats] = useState("");
-  const [conclusion, setConclusion] = useState("");
+  // Les 4 sections du compte-rendu, hydratées depuis le brouillon persisté.
+  const [sections, setSections] = useState<Sections>({
+    indication: "",
+    technique: "",
+    resultats: "",
+    conclusion: "",
+  });
+  const [addendumText, setAddendumText] = useState("");
   const [includeVideo, setIncludeVideo] = useState(true);
   const [message, setMessage] = useState("");
 
-  const send = trpc.email.sendStudyReport.useMutation();
+  // --- Compte-rendu persisté (router `reports`) ---------------------------
+  const reportQuery = trpc.reports.getByStudy.useQuery({ studyId });
+  const upsertDraft = trpc.reports.upsertDraft.useMutation();
+  const aiGenerate = trpc.reports.aiGenerate.useMutation();
+  const signReport = trpc.reports.sign.useMutation();
+  const addAddendum = trpc.reports.addAddendum.useMutation();
+  const trpcUtils = trpc.useUtils();
+
+  const report = reportQuery.data?.report ?? null;
+  const isSigned = report?.status === "signed";
+
+  // Hydrate les sections locales depuis le compte-rendu persisté (à chaque
+  // changement d'identifiant de compte-rendu, ex. création du brouillon).
+  useEffect(() => {
+    if (report) {
+      setSections({
+        indication: report.indication ?? "",
+        technique: report.technique ?? "",
+        resultats: report.resultats ?? "",
+        conclusion: report.conclusion ?? "",
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [report?.id]);
+
+  // --- Pré-analyse IA enrichie (anomalie, coupe-clé) ----------------------
+  // Conservée : elle apporte l'indicateur d'anomalie + la désignation de la
+  // coupe-clé que le router `reports.aiGenerate` ne renvoie pas. Le bouton
+  // « Analyser les fractures » force la série osseuse en fenêtre Bone.
   const preanalyze = trpc.email.aiPreanalysis.useMutation();
+  const send = trpc.email.sendStudyReport.useMutation();
   const history = trpc.studies.patientHistory.useQuery({ studyId });
-  const [aiAssisted, setAiAssisted] = useState(false);
   const [aiAbnormal, setAiAbnormal] = useState<boolean | null>(null);
   const [aiKeySlice, setAiKeySlice] = useState<number | null>(null);
   // Série réellement analysée (peut différer de la série ouverte, ex. bouton
@@ -70,9 +117,6 @@ export default function ReportPanel({
     const ww = override?.windowWidth ?? windowWidth;
     const res = await preanalyze.mutateAsync({
       studyId,
-      // Le serveur échantillonne toute la série ; on transmet la série analysée
-      // et la fenêtre W/L (fractures visibles en fenêtre osseuse). Les images
-      // clés capturées servent de repli si l'échantillonnage échoue.
       seriesId: sid,
       windowCenter: wc,
       windowWidth: ww,
@@ -80,18 +124,19 @@ export default function ReportPanel({
         pngBase64: k.pngBase64,
         sliceIndex: k.sliceIndex,
       })),
-      indication: indication || undefined,
+      indication: sections.indication || undefined,
       antecedents: antecedentsArg || undefined,
     });
     setAnalyzedSeriesId(sid);
-    if (res.technique) setTechnique(res.technique);
-    setResultats(res.resultats);
-    setConclusion(res.conclusion);
-    setAiAssisted(true);
+    // On ne pré-remplit que les champs vides pour ne pas écraser le médecin.
+    setSections(s => ({
+      indication: s.indication,
+      technique: s.technique || res.technique || "",
+      resultats: s.resultats || res.resultats,
+      conclusion: s.conclusion || res.conclusion,
+    }));
     setAiAbnormal(res.abnormal ?? null);
     setAiKeySlice(res.keySliceNumber ?? null);
-    // Coupe désignée par l'IA → ajoutée comme image clé du compte rendu
-    // (dédup par numéro de coupe pour ne pas l'ajouter en double si on relance).
     if (
       res.keyImage &&
       onAddKeyImage &&
@@ -104,8 +149,7 @@ export default function ReportPanel({
     }
   };
 
-  // Pré-remplit le champ Antécédents avec l'historique d'imagerie récupéré,
-  // uniquement s'il est encore vide (pour ne pas écraser les saisies du médecin).
+  // Pré-remplit Antécédents avec l'historique d'imagerie (si encore vide).
   useEffect(() => {
     if (history.data?.antecedents && !antecedents) {
       setAntecedents(history.data.antecedents);
@@ -113,17 +157,16 @@ export default function ReportPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [history.data]);
 
-  // Lancement AUTOMATIQUE de la pré-analyse à l'ouverture : dès qu'au moins une
-  // image clé est disponible (capturée auto par le bouton « Compte rendu »), on
-  // génère le brouillon une seule fois, sans clic. Fail-soft : en cas d'échec,
-  // le médecin peut relancer via le bouton « Pré-analyse IA ».
+  // Auto-pré-analyse à l'ouverture (une seule fois), uniquement si aucun
+  // compte-rendu persisté n'existe encore et qu'une image clé est disponible.
   const autoRan = useRef(false);
   useEffect(() => {
     if (
       !autoRan.current &&
       keyImages.length > 0 &&
       history.isFetched &&
-      !aiAssisted &&
+      reportQuery.isFetched &&
+      !report &&
       !preanalyze.isPending
     ) {
       autoRan.current = true;
@@ -131,14 +174,16 @@ export default function ReportPanel({
       void runPreanalysis(auto).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyImages.length, history.isFetched]);
+  }, [keyImages.length, history.isFetched, reportQuery.isFetched]);
+
+  const aiAssisted = aiAbnormal !== null || aiGenerate.data != null;
 
   const submit = async () => {
     await send.mutateAsync({
       to,
       studyId,
       seriesId,
-      report: { indication, technique, resultats, conclusion },
+      report: sections,
       signature,
       windowWidth,
       windowCenter,
@@ -173,24 +218,135 @@ export default function ReportPanel({
         placeholder="Antécédents médicaux (optionnel)"
         value={antecedents}
         onChange={e => setAntecedents(e.target.value)}
+        disabled={isSigned}
       />
-      <textarea
-        className={field}
-        rows={2}
-        placeholder="Indication"
-        value={indication}
-        onChange={e => setIndication(e.target.value)}
-      />
-      <textarea
-        className={field}
-        rows={2}
-        placeholder="Technique"
-        value={technique}
-        onChange={e => setTechnique(e.target.value)}
-      />
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium">Résultats / Conclusion</span>
-        <div className="flex items-center gap-1">
+
+      {/* --- Éditeur 4 sections ------------------------------------------- */}
+      {SECTION_KEYS.map(k => (
+        <div key={k} className="space-y-1">
+          <label className="text-xs font-medium capitalize">{k}</label>
+          <textarea
+            className={field}
+            rows={k === "resultats" ? 5 : 2}
+            value={sections[k]}
+            disabled={isSigned}
+            onChange={e => setSections(s => ({ ...s, [k]: e.target.value }))}
+          />
+        </div>
+      ))}
+
+      {aiAssisted && !isSigned && (
+        <p className="text-[10px] text-amber-500">
+          Brouillon assisté par IA — à valider et corriger avant signature.
+        </p>
+      )}
+      {!isSigned && analyzedSeriesId != null && (
+        <p className="text-[10px] text-muted-foreground">
+          Analyse basée sur :{" "}
+          <span className="font-medium text-foreground">
+            {seriesList?.find(s => s.id === analyzedSeriesId)
+              ?.seriesDescription || `Série ${analyzedSeriesId}`}
+          </span>
+          {(() => {
+            const n = seriesList?.find(
+              s => s.id === analyzedSeriesId
+            )?.numberOfInstances;
+            return n ? ` (${n} coupes)` : "";
+          })()}
+        </p>
+      )}
+      {!isSigned && aiAbnormal !== null && (
+        <p
+          className={`text-[11px] font-medium ${
+            aiAbnormal ? "text-destructive" : "text-green-500"
+          }`}
+        >
+          {aiAbnormal
+            ? `⚠ Anomalie possible repérée par l'IA${
+                aiKeySlice
+                  ? ` — coupe n° ${aiKeySlice} (ajoutée aux images clés)`
+                  : ""
+              }. À confirmer par le médecin.`
+            : "Aucune anomalie manifeste repérée par l'IA (à confirmer)."}
+        </p>
+      )}
+      {(preanalyze.isError || aiGenerate.isError) && !isSigned && (
+        <p className="text-[10px] text-destructive">
+          IA indisponible, rédigez manuellement.
+        </p>
+      )}
+
+      {/* --- Actions brouillon -------------------------------------------- */}
+      {!isSigned && (
+        <div className="flex gap-2 flex-wrap">
+          <Button
+            size="sm"
+            disabled={aiGenerate.isPending}
+            onClick={async () => {
+              const r = await aiGenerate.mutateAsync({
+                studyId,
+                seriesId: analyzedSeriesId ?? seriesId,
+                indication: sections.indication || undefined,
+                antecedents: antecedents || undefined,
+                keyImages: keyImages.map(k => ({
+                  pngBase64: k.pngBase64,
+                  sliceIndex: k.sliceIndex,
+                })),
+              });
+              // Ne pré-remplit QUE les champs vides.
+              setSections(s => ({
+                indication: s.indication || r.sections.indication,
+                technique: s.technique || r.sections.technique,
+                resultats: s.resultats || r.sections.resultats,
+                conclusion: s.conclusion || r.sections.conclusion,
+              }));
+              if (
+                r.keyImage &&
+                onAddKeyImage &&
+                !keyImages.some(k => k.sliceIndex === r.keyImage!.sliceIndex)
+              ) {
+                onAddKeyImage({
+                  pngBase64: r.keyImage.pngBase64,
+                  sliceIndex: r.keyImage.sliceIndex,
+                });
+              }
+            }}
+          >
+            {aiGenerate.isPending ? "Analyse…" : "Générer (IA)"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={upsertDraft.isPending}
+            onClick={async () => {
+              await upsertDraft.mutateAsync({
+                studyId,
+                sections,
+                aiGenerated: aiGenerate.data != null,
+                aiModel: aiGenerate.data?.aiModel,
+              });
+              reportQuery.refetch();
+            }}
+          >
+            Enregistrer brouillon
+          </Button>
+          <Button
+            size="sm"
+            disabled={!sections.conclusion.trim() || signReport.isPending}
+            onClick={async () => {
+              const up = await upsertDraft.mutateAsync({ studyId, sections });
+              await signReport.mutateAsync({ reportId: up.id });
+              reportQuery.refetch();
+            }}
+          >
+            Signer
+          </Button>
+        </div>
+      )}
+
+      {/* --- Boutons pré-analyse enrichie (anomalie / fractures) ---------- */}
+      {!isSigned && (
+        <div className="flex items-center gap-1 flex-wrap">
           <button
             type="button"
             onClick={() =>
@@ -215,61 +371,63 @@ export default function ReportPanel({
             {preanalyze.isPending ? "Analyse en cours…" : "Pré-analyse IA"}
           </button>
         </div>
-      </div>
-      {aiAssisted && (
-        <p className="text-[10px] text-amber-500">
-          Brouillon généré par IA — à valider et corriger avant signature.
-        </p>
       )}
-      {aiAssisted && analyzedSeriesId != null && (
-        <p className="text-[10px] text-muted-foreground">
-          Analyse basée sur :{" "}
-          <span className="font-medium text-foreground">
-            {seriesList?.find(s => s.id === analyzedSeriesId)
-              ?.seriesDescription || `Série ${analyzedSeriesId}`}
-          </span>
-          {(() => {
-            const n = seriesList?.find(
-              s => s.id === analyzedSeriesId
-            )?.numberOfInstances;
-            return n ? ` (${n} coupes)` : "";
-          })()}
-        </p>
+
+      {/* --- Vue signée : addenda + PDF ----------------------------------- */}
+      {isSigned && report && (
+        <div className="space-y-2">
+          <div className="text-xs text-green-500">
+            Signé
+            {report.signedAt
+              ? ` le ${new Date(report.signedAt).toLocaleString("fr-CH")}`
+              : ""}
+            .
+          </div>
+          {(reportQuery.data?.addenda ?? []).map((a: any) => (
+            <div key={a.id} className="text-xs border-l-2 border-border pl-2">
+              <div className="text-muted-foreground">
+                Addendum — {new Date(a.createdAt).toLocaleString("fr-CH")}
+              </div>
+              <div>{a.text}</div>
+            </div>
+          ))}
+          <textarea
+            className={field}
+            rows={2}
+            placeholder="Ajouter un addendum…"
+            value={addendumText}
+            onChange={e => setAddendumText(e.target.value)}
+          />
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              disabled={!addendumText.trim() || addAddendum.isPending}
+              onClick={async () => {
+                await addAddendum.mutateAsync({
+                  reportId: report.id,
+                  text: addendumText,
+                });
+                setAddendumText("");
+                reportQuery.refetch();
+              }}
+            >
+              Ajouter l'addendum
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={async () => {
+                const r = await trpcUtils.reports.pdfUrl.fetch({
+                  reportId: report.id,
+                });
+                if (r?.url) window.open(r.url, "_blank");
+              }}
+            >
+              Télécharger PDF
+            </Button>
+          </div>
+        </div>
       )}
-      {aiAssisted && aiAbnormal !== null && (
-        <p
-          className={`text-[11px] font-medium ${
-            aiAbnormal ? "text-destructive" : "text-green-500"
-          }`}
-        >
-          {aiAbnormal
-            ? `⚠ Anomalie possible repérée par l'IA${
-                aiKeySlice
-                  ? ` — coupe n° ${aiKeySlice} (ajoutée aux images clés)`
-                  : ""
-              }. À confirmer par le médecin.`
-            : "Aucune anomalie manifeste repérée par l'IA (à confirmer)."}
-        </p>
-      )}
-      {preanalyze.isError && (
-        <p className="text-[10px] text-destructive">
-          IA indisponible, rédigez manuellement.
-        </p>
-      )}
-      <textarea
-        className={field}
-        rows={5}
-        placeholder="Résultats"
-        value={resultats}
-        onChange={e => setResultats(e.target.value)}
-      />
-      <textarea
-        className={field}
-        rows={2}
-        placeholder="Conclusion"
-        value={conclusion}
-        onChange={e => setConclusion(e.target.value)}
-      />
 
       <div>
         <div className="text-xs font-medium mb-1">

@@ -50,6 +50,13 @@
       "when": 1780577348143,
       "tag": "0006_cheerful_night_nurse",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1781220566799,
+      "tag": "0007_oval_mad_thinker",
+      "breakpoints": true
     }
   ]
 }

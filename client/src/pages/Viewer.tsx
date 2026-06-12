@@ -103,6 +103,7 @@ import { extractRoiStats } from "@/lib/annotationMapping";
 import { stackVolume } from "@/lib/roiVolume";
 import { toggleKeyImage, nextKeyImage, prevKeyImage } from "@/lib/keyImages";
 import { findPriors } from "@/lib/priorStudies";
+import { pickPriorSeries } from "@/lib/compareSync";
 import { Palette, Star } from "lucide-react";
 import {
   CINE_FPS_OPTIONS,
@@ -513,6 +514,20 @@ export default function Viewer() {
     return findPriors(study as any, all) as any[];
   }, [study, allStudiesData]);
   const [priorsOpen, setPriorsOpen] = useState(false);
+  // ── Mode comparatif d'antériorités (1×2 : courant + antérieure) ───────────
+  // null = mode inactif. La synchro (défilement + W/L) est ON par défaut ;
+  // quand elle est OFF, le viewer de droite garde son propre état local.
+  const [comparePriorStudyId, setComparePriorStudyId] = useState<number | null>(
+    null
+  );
+  const [comparePriorSeriesId, setComparePriorSeriesId] = useState<
+    number | null
+  >(null);
+  const [compareSyncOn, setCompareSyncOn] = useState(true);
+  // État LOCAL du viewer droit (utilisé seulement quand la synchro est OFF).
+  const [priorSlice, setPriorSlice] = useState(0);
+  const [priorWindowWidth, setPriorWindowWidth] = useState(400);
+  const [priorWindowCenter, setPriorWindowCenter] = useState(40);
   // ROI Manager (« ROI Manager » de Horos) : liste des ROI enregistrées + saut.
   const [roiManagerOpen, setRoiManagerOpen] = useState(false);
   // Épaisseur de coupe (mm) pour le calcul de volume (« Compute Volume »).
@@ -640,6 +655,52 @@ export default function Viewer() {
         storageUrl: inst.storageUrl,
       })),
     [sortedInstances]
+  );
+
+  // ── Données de l'étude ANTÉRIEURE comparée (mode comparatif) ──────────────
+  const { data: priorSeriesList } = trpc.series.listByStudy.useQuery(
+    { studyId: comparePriorStudyId! },
+    { enabled: !!comparePriorStudyId }
+  );
+  // Auto-sélection : même modalité que la courante si possible, sinon 1re série.
+  useEffect(() => {
+    if (!comparePriorStudyId) {
+      setComparePriorSeriesId(null);
+      return;
+    }
+    if (comparePriorSeriesId != null) return; // déjà choisie (sélecteur)
+    const picked = pickPriorSeries(
+      (priorSeriesList ?? []) as any[],
+      study?.modality
+    );
+    if (picked != null) setComparePriorSeriesId(picked);
+  }, [
+    comparePriorStudyId,
+    priorSeriesList,
+    comparePriorSeriesId,
+    study?.modality,
+  ]);
+
+  const { data: priorInstancesList } = trpc.instances.listBySeries.useQuery(
+    { seriesId: comparePriorSeriesId! },
+    { enabled: !!comparePriorSeriesId }
+  );
+  const priorImageUrls = useMemo(
+    () => (priorInstancesList ?? []).map((inst: any) => inst.storageUrl || ""),
+    [priorInstancesList]
+  );
+  const priorInstances = useMemo(
+    () =>
+      (priorInstancesList ?? []).map((inst: any) => ({
+        id: inst.id,
+        storageUrl: inst.storageUrl,
+      })),
+    [priorInstancesList]
+  );
+  // Métadonnées de l'antériorité pour l'en-tête du viewport droit.
+  const comparedPrior = useMemo(
+    () => priors.find((p: any) => p.id === comparePriorStudyId) ?? null,
+    [priors, comparePriorStudyId]
   );
 
   // Étiquettes d'orientation (A/P/L/R) : lues depuis ImageOrientationPatient de
@@ -2481,6 +2542,18 @@ export default function Viewer() {
                   }}
                 >
                   Ouvrir
+                </Button>
+                <Button
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    setComparePriorSeriesId(null); // re-sélection auto de série
+                    setComparePriorStudyId(p.id);
+                    setViewMode("2d"); // le comparatif est 2D uniquement
+                    setPriorsOpen(false);
+                  }}
+                >
+                  Comparer
                 </Button>
               </div>
             ))}

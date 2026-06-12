@@ -103,6 +103,7 @@ import { extractRoiStats } from "@/lib/annotationMapping";
 import { stackVolume } from "@/lib/roiVolume";
 import { toggleKeyImage, nextKeyImage, prevKeyImage } from "@/lib/keyImages";
 import { findPriors } from "@/lib/priorStudies";
+import { clampPriorSlice, pickPriorSeries } from "@/lib/compareSync";
 import { Palette, Star } from "lucide-react";
 import {
   CINE_FPS_OPTIONS,
@@ -513,6 +514,20 @@ export default function Viewer() {
     return findPriors(study as any, all) as any[];
   }, [study, allStudiesData]);
   const [priorsOpen, setPriorsOpen] = useState(false);
+  // ── Mode comparatif d'antériorités (1×2 : courant + antérieure) ───────────
+  // null = mode inactif. La synchro (défilement + W/L) est ON par défaut ;
+  // quand elle est OFF, le viewer de droite garde son propre état local.
+  const [comparePriorStudyId, setComparePriorStudyId] = useState<number | null>(
+    null
+  );
+  const [comparePriorSeriesId, setComparePriorSeriesId] = useState<
+    number | null
+  >(null);
+  const [compareSyncOn, setCompareSyncOn] = useState(true);
+  // État LOCAL du viewer droit (utilisé seulement quand la synchro est OFF).
+  const [priorSlice, setPriorSlice] = useState(0);
+  const [priorWindowWidth, setPriorWindowWidth] = useState(400);
+  const [priorWindowCenter, setPriorWindowCenter] = useState(40);
   // ROI Manager (« ROI Manager » de Horos) : liste des ROI enregistrées + saut.
   const [roiManagerOpen, setRoiManagerOpen] = useState(false);
   // Épaisseur de coupe (mm) pour le calcul de volume (« Compute Volume »).
@@ -640,6 +655,52 @@ export default function Viewer() {
         storageUrl: inst.storageUrl,
       })),
     [sortedInstances]
+  );
+
+  // ── Données de l'étude ANTÉRIEURE comparée (mode comparatif) ──────────────
+  const { data: priorSeriesList } = trpc.series.listByStudy.useQuery(
+    { studyId: comparePriorStudyId! },
+    { enabled: !!comparePriorStudyId }
+  );
+  // Auto-sélection : même modalité que la courante si possible, sinon 1re série.
+  useEffect(() => {
+    if (!comparePriorStudyId) {
+      setComparePriorSeriesId(null);
+      return;
+    }
+    if (comparePriorSeriesId != null) return; // déjà choisie (sélecteur)
+    const picked = pickPriorSeries(
+      (priorSeriesList ?? []) as any[],
+      study?.modality
+    );
+    if (picked != null) setComparePriorSeriesId(picked);
+  }, [
+    comparePriorStudyId,
+    priorSeriesList,
+    comparePriorSeriesId,
+    study?.modality,
+  ]);
+
+  const { data: priorInstancesList } = trpc.instances.listBySeries.useQuery(
+    { seriesId: comparePriorSeriesId! },
+    { enabled: !!comparePriorSeriesId }
+  );
+  const priorImageUrls = useMemo(
+    () => (priorInstancesList ?? []).map((inst: any) => inst.storageUrl || ""),
+    [priorInstancesList]
+  );
+  const priorInstances = useMemo(
+    () =>
+      (priorInstancesList ?? []).map((inst: any) => ({
+        id: inst.id,
+        storageUrl: inst.storageUrl,
+      })),
+    [priorInstancesList]
+  );
+  // Métadonnées de l'antériorité pour l'en-tête du viewport droit.
+  const comparedPrior = useMemo(
+    () => priors.find((p: any) => p.id === comparePriorStudyId) ?? null,
+    [priors, comparePriorStudyId]
   );
 
   // Étiquettes d'orientation (A/P/L/R) : lues depuis ImageOrientationPatient de
@@ -1856,6 +1917,37 @@ export default function Viewer() {
                 <span className="text-[9px]">Antér. ({priors.length})</span>
               </button>
             )}
+            {comparePriorStudyId != null && (
+              <>
+                <button
+                  className={`toolbar-btn ${compareSyncOn ? "active" : ""}`}
+                  title="Lier / délier le défilement et le W/L des deux vues"
+                  onClick={() => setCompareSyncOn(v => !v)}
+                >
+                  <Layers className="w-4 h-4" />
+                  <span className="text-[9px]">
+                    {compareSyncOn ? "Lié" : "Délié"}
+                  </span>
+                </button>
+                <button
+                  className="toolbar-btn"
+                  title="Fermer le mode comparatif"
+                  onClick={() => {
+                    setComparePriorStudyId(null);
+                    setComparePriorSeriesId(null);
+                    // Reset complet : le prochain comparatif démarre lié,
+                    // sans hériter du slice/W-L de la session précédente.
+                    setCompareSyncOn(true);
+                    setPriorSlice(0);
+                    setPriorWindowWidth(400);
+                    setPriorWindowCenter(40);
+                  }}
+                >
+                  <Square className="w-4 h-4" />
+                  <span className="text-[9px]">Fermer comp.</span>
+                </button>
+              </>
+            )}
             <button
               className="toolbar-btn"
               title="ROI Manager — liste des mesures de la série"
@@ -2482,6 +2574,18 @@ export default function Viewer() {
                 >
                   Ouvrir
                 </Button>
+                <Button
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    setComparePriorSeriesId(null); // re-sélection auto de série
+                    setComparePriorStudyId(p.id);
+                    setViewMode("2d"); // le comparatif est 2D uniquement
+                    setPriorsOpen(false);
+                  }}
+                >
+                  Comparer
+                </Button>
               </div>
             ))}
           </div>
@@ -2670,7 +2774,104 @@ export default function Viewer() {
                   </div>
                 </div>
               ) : viewMode === "2d" ? (
-                viewportLayout === "1x1" ? (
+                comparePriorStudyId != null ? (
+                  // ── Mode comparatif : courant (gauche) + antériorité (droite).
+                  // Synchro ON → les 2 viewers partagent currentSlice + W/L (le
+                  // viewer droit est borné à son propre total de coupes).
+                  // Synchro OFF → le viewer droit a son état local prior*.
+                  <div className="absolute inset-0 grid grid-cols-2 gap-0.5 bg-border">
+                    <div
+                      id="cornerstone-viewport"
+                      className="relative bg-black overflow-hidden ring-1 ring-border"
+                    >
+                      <CornerstoneViewer
+                        ref={activeViewerRef}
+                        imageUrls={cellImageUrls}
+                        currentSlice={currentSlice}
+                        onSliceChange={setCurrentSlice}
+                        activeTool={activeTool}
+                        windowWidth={windowWidth}
+                        windowCenter={windowCenter}
+                        onWindowLevelChange={(ww, wc) => {
+                          setWindowWidth(ww);
+                          setWindowCenter(wc);
+                        }}
+                        onZoomChange={setZoomPercent}
+                        instances={cellInstances}
+                        savedAnnotations={savedAnnotations}
+                        onSaveAnnotation={handleSaveAnnotation}
+                        onRoiStats={setHuStats}
+                      />
+                    </div>
+                    <div className="relative bg-black overflow-hidden ring-1 ring-border">
+                      {priorImageUrls.length > 0 ? (
+                        <CornerstoneViewer
+                          instanceKey="priorCompare"
+                          imageUrls={priorImageUrls}
+                          currentSlice={
+                            compareSyncOn
+                              ? clampPriorSlice(
+                                  currentSlice,
+                                  priorImageUrls.length
+                                )
+                              : clampPriorSlice(
+                                  priorSlice,
+                                  priorImageUrls.length
+                                )
+                          }
+                          onSliceChange={
+                            compareSyncOn ? setCurrentSlice : setPriorSlice
+                          }
+                          activeTool={activeTool}
+                          windowWidth={
+                            compareSyncOn ? windowWidth : priorWindowWidth
+                          }
+                          windowCenter={
+                            compareSyncOn ? windowCenter : priorWindowCenter
+                          }
+                          onWindowLevelChange={(ww, wc) => {
+                            if (compareSyncOn) {
+                              setWindowWidth(ww);
+                              setWindowCenter(wc);
+                            } else {
+                              setPriorWindowWidth(ww);
+                              setPriorWindowCenter(wc);
+                            }
+                          }}
+                          instances={priorInstances}
+                        />
+                      ) : (
+                        <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
+                          Aucune image dans cette antériorité
+                        </div>
+                      )}
+                      {/* En-tête : quel examen antérieur on regarde + sélecteur de série */}
+                      <div className="absolute top-2 left-2 right-2 flex items-center gap-2 text-[10px] font-mono text-amber-300/90 pointer-events-none">
+                        <span className="bg-black/60 px-1.5 py-0.5 rounded">
+                          ANTÉRIEUR · {comparedPrior?.modality || "?"} ·{" "}
+                          {comparedPrior?.studyDate || "date ?"}
+                        </span>
+                        {(priorSeriesList ?? []).length > 1 && (
+                          <select
+                            className="pointer-events-auto bg-black/70 border border-border rounded px-1 py-0.5 text-[10px] text-foreground"
+                            value={comparePriorSeriesId ?? ""}
+                            onChange={e =>
+                              setComparePriorSeriesId(Number(e.target.value))
+                            }
+                          >
+                            {(priorSeriesList ?? []).map((s: any) => (
+                              <option key={s.id} value={s.id}>
+                                {s.seriesDescription ||
+                                  s.modality ||
+                                  `Série ${s.id}`}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : viewportLayout === "1x1" ? (
                   // 1x1 : rendu STRICTEMENT identique à l'historique — un seul
                   // CornerstoneViewer, sans instanceKey (ids historiques),
                   // remplissant le conteneur #cornerstone-viewport.

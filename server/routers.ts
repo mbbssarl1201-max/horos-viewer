@@ -1363,19 +1363,23 @@ export const appRouter = router({
     // rendered key-image PNGs, plus an optional ciné MP4 rebuilt server-side
     // from the series' DICOM frames. Never relays client-supplied binaries
     // verbatim. Rate-limited per user; every send is access-logged (PHI egress).
-    sendStudyReport: medicalProcedure
+    sendStudyReport: adminProcedure
       .input(
         z.object({
           to: z.string().email(),
           studyId: z.number(),
           seriesId: z.number(),
-          report: z.object({
-            indication: z.string().max(5000),
-            technique: z.string().max(5000),
-            resultats: z.string().max(20000),
-            conclusion: z.string().max(5000),
-          }),
-          signature: z.string().min(1).max(120),
+          // Conservés pour la compat de l'input mais IGNORÉS : le contenu et la
+          // signature sont serveur-autoritatifs (CR signé en DB). Cf. audit I1.
+          report: z
+            .object({
+              indication: z.string().max(5000),
+              technique: z.string().max(5000),
+              resultats: z.string().max(20000),
+              conclusion: z.string().max(5000),
+            })
+            .optional(),
+          signature: z.string().min(1).max(120).optional(),
           windowCenter: z.number().finite(),
           windowWidth: z.number().finite(),
           keyImages: z

@@ -64,7 +64,6 @@ export default function ReportPanel({
   onClose,
 }: ReportPanelProps) {
   const [to, setTo] = useState("");
-  const [signature, setSignature] = useState("");
   const [antecedents, setAntecedents] = useState("");
   // Les 4 sections du compte-rendu, hydratées depuis le brouillon persisté.
   const [sections, setSections] = useState<Sections>({
@@ -196,18 +195,18 @@ export default function ReportPanel({
   const aiAssisted = aiAbnormal !== null || aiGenerate.data != null;
 
   const submit = async () => {
+    // Contenu et signature serveur-autoritatifs : le serveur rebâtit le PDF
+    // depuis le compte-rendu SIGNÉ en DB. On n'envoie plus de sections ni de
+    // signature manuelle depuis le client. Cf. audit I1.
     await send.mutateAsync({
       to,
       studyId,
       seriesId,
-      report: sections,
-      signature,
       windowWidth,
       windowCenter,
       keyImages,
       includeVideo,
       message: message || undefined,
-      aiAssisted,
       antecedents: antecedents || undefined,
     });
   };
@@ -508,12 +507,6 @@ export default function ReportPanel({
         Inclure le ciné MP4 de toute la série
       </label>
 
-      <input
-        className={field}
-        placeholder="Signature (nom du médecin)"
-        value={signature}
-        onChange={e => setSignature(e.target.value)}
-      />
       <textarea
         className={field}
         rows={2}
@@ -522,13 +515,19 @@ export default function ReportPanel({
         onChange={e => setMessage(e.target.value)}
       />
 
-      <button
-        onClick={submit}
-        disabled={send.isPending || !to || !signature}
-        className="w-full rounded bg-primary text-primary-foreground py-2 text-sm font-medium disabled:opacity-50"
-      >
-        {send.isPending ? "Génération et envoi…" : "Envoyer au confrère"}
-      </button>
+      {isSigned ? (
+        <button
+          onClick={submit}
+          disabled={send.isPending || !to}
+          className="w-full rounded bg-primary text-primary-foreground py-2 text-sm font-medium disabled:opacity-50"
+        >
+          {send.isPending ? "Génération et envoi…" : "Envoyer au confrère"}
+        </button>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Signez le compte-rendu pour pouvoir l'envoyer.
+        </p>
+      )}
       {send.isError && (
         <p className="text-xs text-destructive">{send.error.message}</p>
       )}

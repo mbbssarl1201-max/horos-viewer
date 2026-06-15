@@ -12,6 +12,8 @@ const mocks = {
   buildCineMp4: vi.fn(),
   ffmpegAvailable: vi.fn(),
   buildReportPdf: vi.fn(),
+  getReportByStudy: vi.fn(),
+  getUserById: vi.fn(),
 };
 
 vi.mock("./db", () => ({
@@ -20,6 +22,8 @@ vi.mock("./db", () => ({
   listInstancesBySeries: (...a: any) => mocks.listInstancesBySeries(...a),
   countRecentAccess: (...a: any) => mocks.countRecentAccess(...a),
   recordAccess: (...a: any) => mocks.recordAccess(...a),
+  getReportByStudy: (...a: any) => mocks.getReportByStudy(...a),
+  getUserById: (...a: any) => mocks.getUserById(...a),
 }));
 vi.mock("./storage", () => ({
   storageGetBuffer: (...a: any) => mocks.storageGetBuffer(...a),
@@ -65,6 +69,18 @@ beforeEach(() => {
   ]);
   mocks.buildReportPdf.mockReturnValue(Buffer.from("%PDF-1"));
   mocks.sendEmail.mockResolvedValue({ success: true });
+  // Par défaut : un compte-rendu SIGNÉ existe (le verrou I1 laisse passer).
+  mocks.getReportByStudy.mockResolvedValue({
+    status: "signed",
+    indication: "i",
+    technique: "t",
+    resultats: "r",
+    conclusion: "c",
+    aiGenerated: false,
+    signedBy: 3,
+    signedAt: new Date("2026-06-15T10:00:00Z"),
+  });
+  mocks.getUserById.mockResolvedValue({ id: 3, name: "Dr Test", email: null });
 });
 
 describe("sendStudyReportImpl", () => {

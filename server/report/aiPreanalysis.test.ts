@@ -244,4 +244,103 @@ describe("generatePreanalysis", () => {
     expect(out.conclusion).toMatch(/Normal/);
     expect(out.model).toBe("claude-opus-4-8");
   });
+
+  it("parseEvolution : extrait le verdict et nettoie la ligne", async () => {
+    const { parseEvolution } = await import("./aiPreanalysis");
+    const out = parseEvolution(
+      "Conclusion:\nLésion stable.\n\nÉvolution:\nstable"
+    );
+    expect(out.evolution).toBe("stable");
+    expect(out.cleaned).not.toMatch(/Évolution/i);
+  });
+
+  it("parseEvolution : tolère casse/accents et les 3 verdicts", async () => {
+    const { parseEvolution } = await import("./aiPreanalysis");
+    expect(parseEvolution("evolution: PROGRESSION").evolution).toBe(
+      "progression"
+    );
+    expect(parseEvolution("Évolution : régression").evolution).toBe(
+      "regression"
+    );
+    expect(parseEvolution("Evolution: Regression").evolution).toBe(
+      "regression"
+    );
+  });
+
+  it("parseEvolution : ligne absente -> null, texte inchangé", async () => {
+    const { parseEvolution } = await import("./aiPreanalysis");
+    const out = parseEvolution("Conclusion:\nExamen normal.");
+    expect(out.evolution).toBeNull();
+    expect(out.cleaned).toBe("Conclusion:\nExamen normal.");
+  });
+
+  it("mode comparatif : envoie les 2 jeux d'images + blocs étiquetés + parse Évolution", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        message: {
+          content:
+            "Technique:\nCT.\n\nRésultats:\nComparaison à l'examen du 20240101 : lésion inchangée.\n\nConclusion:\nStabilité.\n\nAnomalie:\noui\n\nCoupe-clé:\n5\n\nÉvolution:\nstable",
+        },
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { generatePreanalysis } = await import("./aiPreanalysis");
+    const out = await generatePreanalysis(
+      [{ pngBase64: "CUR0", sliceIndex: 1 }],
+      {
+        modality: "CT",
+        prior: {
+          images: [{ pngBase64: "OLD0", sliceIndex: 2 }],
+          date: "20240101",
+        },
+      }
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    const userMsg = body.messages.find((m: any) => m.role === "user");
+    expect(userMsg.images).toContain("CUR0");
+    expect(userMsg.images).toContain("OLD0");
+    expect(userMsg.content).toMatch(/EXAMEN ACTUEL/);
+    expect(userMsg.content).toMatch(/EXAMEN ANTÉRIEUR du 20240101/);
+    expect(body.messages[0].content).toMatch(/Évolution/);
+    expect(out.evolution).toBe("stable");
+    expect(out.conclusion).toBe("Stabilité.");
+  });
+
+  it("parseSections : la ligne Évolution ne pollue pas la Conclusion (sans Anomalie/Coupe-clé)", async () => {
+    const { parseSections } = await import("./aiPreanalysis");
+    const out = parseSections(
+      "Technique:\nCT.\n\nRésultats:\nStable.\n\nConclusion:\nPas de changement.\n\nÉvolution:\nstable"
+    );
+    expect(out.conclusion).toBe("Pas de changement.");
+    expect(out.conclusion).not.toMatch(/Évolution/i);
+  });
+
+  it("assertSamePatientStudies : rejette des patients différents", async () => {
+    const { assertSamePatientStudies } = await import("./aiPreanalysis");
+    expect(() =>
+      assertSamePatientStudies({ patientId: "A" }, { patientId: "B" })
+    ).toThrow();
+    expect(() =>
+      assertSamePatientStudies({ patientId: "A" }, { patientId: "" })
+    ).toThrow();
+    expect(() =>
+      assertSamePatientStudies({ patientId: "A" }, { patientId: " A " })
+    ).not.toThrow();
+  });
+
+  it("pickPriorSeriesId : même modalité prioritaire, repli 1re, vide -> null", async () => {
+    const { pickPriorSeriesId } = await import("./aiPreanalysis");
+    expect(
+      pickPriorSeriesId(
+        [
+          { id: 1, modality: "MR" },
+          { id: 2, modality: "CT" },
+        ],
+        "ct"
+      )
+    ).toBe(2);
+    expect(pickPriorSeriesId([{ id: 9, modality: "MR" }], "CT")).toBe(9);
+    expect(pickPriorSeriesId([], "CT")).toBeNull();
+  });
 });

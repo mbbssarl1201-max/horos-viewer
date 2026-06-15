@@ -24,6 +24,8 @@ interface ReportPanelProps {
   seriesList?: SeriesInfo[];
   onRemoveKeyImage: (index: number) => void;
   onAddKeyImage?: (img: ReportKeyImage) => void;
+  comparePriorStudyId?: number | null;
+  comparePriorSeriesId?: number | null;
   onClose: () => void;
 }
 
@@ -41,6 +43,13 @@ const SECTION_KEYS = [
   "conclusion",
 ] as const;
 
+// Formate une date DICOM DA brute (`YYYYMMDD`) en `JJ.MM.AAAA` pour l'affichage.
+// Toute entrée non conforme est renvoyée telle quelle (best-effort).
+function formatDicomDate(da: string): string {
+  const m = /^(\d{4})(\d{2})(\d{2})$/.exec(da.trim());
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : da;
+}
+
 export default function ReportPanel({
   studyId,
   seriesId,
@@ -50,6 +59,8 @@ export default function ReportPanel({
   seriesList,
   onRemoveKeyImage,
   onAddKeyImage,
+  comparePriorStudyId,
+  comparePriorSeriesId,
   onClose,
 }: ReportPanelProps) {
   const [to, setTo] = useState("");
@@ -103,6 +114,12 @@ export default function ReportPanel({
   // Série réellement analysée (peut différer de la série ouverte, ex. bouton
   // « Analyser les fractures » qui force la série osseuse).
   const [analyzedSeriesId, setAnalyzedSeriesId] = useState<number | null>(null);
+  const [evolution, setEvolution] = useState<
+    "stable" | "progression" | "regression" | null
+  >(null);
+  const [comparedPriorDate, setComparedPriorDate] = useState<string | null>(
+    null
+  );
 
   const runPreanalysis = async (
     antecedentsArg = antecedents,
@@ -292,6 +309,8 @@ export default function ReportPanel({
                   pngBase64: k.pngBase64,
                   sliceIndex: k.sliceIndex,
                 })),
+                priorStudyId: comparePriorStudyId ?? undefined,
+                priorSeriesId: comparePriorSeriesId ?? undefined,
               });
               // Ne pré-remplit QUE les champs vides.
               setSections(s => ({
@@ -300,6 +319,8 @@ export default function ReportPanel({
                 resultats: s.resultats || r.sections.resultats,
                 conclusion: s.conclusion || r.sections.conclusion,
               }));
+              setEvolution(r.evolution ?? null);
+              setComparedPriorDate(r.comparedPriorDate ?? null);
               if (
                 r.keyImage &&
                 onAddKeyImage &&
@@ -341,6 +362,28 @@ export default function ReportPanel({
           >
             Signer
           </Button>
+        </div>
+      )}
+
+      {!isSigned && evolution && (
+        <div
+          className={
+            "mt-2 inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium " +
+            (evolution === "stable"
+              ? "bg-green-500/15 text-green-400"
+              : evolution === "progression"
+                ? "bg-red-500/15 text-red-400"
+                : "bg-blue-500/15 text-blue-400")
+          }
+        >
+          {evolution === "stable"
+            ? "🟢 Stable"
+            : evolution === "progression"
+              ? "🔴 Progression"
+              : "🔵 Régression"}
+          {comparedPriorDate
+            ? ` · vs examen du ${formatDicomDate(comparedPriorDate)}`
+            : ""}
         </div>
       )}
 

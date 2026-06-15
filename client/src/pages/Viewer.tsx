@@ -3169,6 +3169,8 @@ export default function Viewer() {
                   setReportKeyImages(p => p.filter((_, idx) => idx !== i))
                 }
                 onAddKeyImage={img => setReportKeyImages(p => [...p, img])}
+                comparePriorStudyId={comparePriorStudyId}
+                comparePriorSeriesId={comparePriorSeriesId}
                 onClose={() => setReportOpen(false)}
               />
             )}

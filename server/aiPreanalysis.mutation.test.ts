@@ -71,6 +71,8 @@ describe("runAiPreanalysis", () => {
       model: "qwen2.5-vl:3b",
       // pas de seriesId → pas d'échantillonnage ni de coupe-clé rendue
       keyImage: null,
+      // pas de priorStudyId → pas de comparaison d'antériorité
+      comparedPriorDate: null,
     });
     expect(mocks.recordAccess).toHaveBeenCalledWith(
       expect.objectContaining({ action: "study.ai.preanalysis", studyId: 1 })

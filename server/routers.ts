@@ -1626,9 +1626,20 @@ export const appRouter = router({
           keyImages: z
             .array(z.object({ pngBase64: z.string(), sliceIndex: z.number() }))
             .default([]),
+          priorStudyId: z.number().int().optional(),
+          priorSeriesId: z.number().int().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
+        // Antériorité explicite (mode comparatif du viewer) sinon la plus
+        // récente du même patient (helper DB existant). Fail-soft : aucune
+        // antériorité → génération simple inchangée.
+        let priorStudyId = input.priorStudyId;
+        if (!priorStudyId) {
+          const { listPriorStudiesForStudy } = await import("./db");
+          const priors = await listPriorStudiesForStudy(input.studyId);
+          priorStudyId = priors[0]?.id;
+        }
         // runAiPreanalysis renvoie déjà des sections structurées
         // (technique/resultats/conclusion) — pas de re-parsing de texte brut.
         const result = await runAiPreanalysis(
@@ -1638,6 +1649,8 @@ export const appRouter = router({
             indication: input.indication,
             antecedents: input.antecedents,
             keyImages: input.keyImages,
+            priorStudyId,
+            priorSeriesId: input.priorSeriesId,
           },
           { user: { id: ctx.user.id }, req: { ip: ctx.req?.ip } }
         );
@@ -1651,13 +1664,17 @@ export const appRouter = router({
           userId: ctx.user.id,
           action: "report.generate",
           studyId: input.studyId,
-          detail: result.model,
+          detail: result.comparedPriorDate
+            ? `${result.model} compared:${priorStudyId}`
+            : result.model,
           ipAddress: ctx.req?.ip ?? null,
         });
         return {
           sections,
           aiModel: result.model,
           keyImage: result.keyImage ?? null,
+          evolution: result.evolution ?? null,
+          comparedPriorDate: result.comparedPriorDate ?? null,
         };
       }),
 

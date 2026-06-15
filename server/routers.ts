@@ -757,8 +757,11 @@ export const appRouter = router({
           bitsAllocated: z.number().optional(),
           windowCenter: z.string().optional(),
           windowWidth: z.string().optional(),
-          fileData: z.string(), // base64 encoded DICOM file
-          fileSize: z.number(),
+          // base64 d'un fichier DICOM. Borne explicite (audit) : défense en
+          // profondeur contre un DoS mémoire (buffer décodé par requête),
+          // alignée sur la limite du body-parser (~50 Mo). 60M chars base64 ≈ 45 Mo binaire.
+          fileData: z.string().min(1).max(60_000_000),
+          fileSize: z.number().int().min(0).max(60_000_000),
         })
       )
       .mutation(async ({ input, ctx }) => {

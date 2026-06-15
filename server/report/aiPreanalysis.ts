@@ -305,6 +305,9 @@ export interface RunAiPreanalysisInput {
   windowCenter?: number;
   windowWidth?: number;
   sampleCount?: number;
+  // Antériorité à comparer (mesure d'évolution) ; absente → pas de comparaison.
+  priorStudyId?: number;
+  priorSeriesId?: number;
 }
 
 export interface RunAiPreanalysisResult extends PreanalysisResult {
@@ -361,7 +364,7 @@ export async function runAiPreanalysis(
       const sampled = await sampleSeriesPngs(input.seriesId, {
         windowCenter: wc,
         windowWidth: ww,
-        count: input.sampleCount ?? 16,
+        count: input.sampleCount ?? (input.priorStudyId ? 8 : 16),
       });
       images = sampled.images.map(s => ({
         pngBase64: s.pngBase64,
@@ -378,12 +381,60 @@ export async function runAiPreanalysis(
     totalSlices = images.length;
   }
 
+  // --- Antériorité (mesure d'évolution) : fail-soft de bout en bout. ---------
+  let prior:
+    | { images: PreanalysisKeyImage[]; date?: string; totalSlices?: number }
+    | undefined;
+  let comparedPriorDate: string | null = null;
+  if (input.priorStudyId) {
+    try {
+      const priorStudy = await getStudyById(input.priorStudyId);
+      if (priorStudy) {
+        // Anti-IDOR : l'antériorité DOIT être du même patient (lève FORBIDDEN).
+        assertSamePatientStudies(study as any, priorStudy as any);
+        const priorSeriesList = await listSeriesByStudy(input.priorStudyId);
+        const priorSeriesId =
+          input.priorSeriesId &&
+          priorSeriesList.some((s: any) => s.id === input.priorSeriesId)
+            ? input.priorSeriesId
+            : pickPriorSeriesId(
+                priorSeriesList as any,
+                (study as any).modality ?? null
+              );
+        if (priorSeriesId) {
+          const { sampleSeriesPngs } = await import("./aiSampling");
+          const sampledPrior = await sampleSeriesPngs(priorSeriesId, {
+            windowCenter: wc,
+            windowWidth: ww,
+            count: 8,
+          });
+          if (sampledPrior.images.length > 0) {
+            prior = {
+              images: sampledPrior.images.map(s => ({
+                pngBase64: s.pngBase64,
+                sliceIndex: s.sliceNumber,
+              })),
+              date: (priorStudy as any).studyDate ?? undefined,
+              totalSlices: sampledPrior.totalSlices,
+            };
+            comparedPriorDate = (priorStudy as any).studyDate ?? null;
+          }
+        }
+      }
+    } catch (e) {
+      // FORBIDDEN (patient différent) doit remonter ; le reste est fail-soft.
+      if (e instanceof TRPCError && e.code === "FORBIDDEN") throw e;
+      console.warn("[aiPreanalysis] comparaison antériorité échouée:", e);
+    }
+  }
+
   const result = await _internal.generatePreanalysis(images, {
     indication: input.indication,
     antecedents: input.antecedents,
     modality: (study as any).modality ?? undefined,
     studyDescription: (study as any).studyDescription ?? undefined,
     totalSlices,
+    prior,
   });
 
   // Rendu de la coupe désignée par l'IA → image clé du compte rendu.
@@ -409,7 +460,7 @@ export async function runAiPreanalysis(
     detail: result.model,
     ipAddress: ctx.req?.ip ?? null,
   });
-  return { ...result, keyImage };
+  return { ...result, keyImage, comparedPriorDate };
 }
 
 // Extrait l'anomalie (oui/non) et le numéro de coupe-clé renvoyés par l'IA.

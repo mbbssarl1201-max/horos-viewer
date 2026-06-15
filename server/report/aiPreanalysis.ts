@@ -92,6 +92,17 @@ const SYSTEM_PROMPT = [
   "<le NUMÉRO de la coupe fournie qui montre le mieux l'anomalie ; ou « aucune » s'il n'y a pas d'anomalie>",
 ].join("\n");
 
+const COMPARATIVE_ADDENDUM = [
+  "",
+  "COMPARAISON D'ANTÉRIORITÉ :",
+  "On te fournit DEUX examens du MÊME patient : l'EXAMEN ACTUEL et un EXAMEN ANTÉRIEUR (daté). Chaque coupe fournie est étiquetée par l'examen auquel elle appartient.",
+  "- Compare les deux examens et décris l'ÉVOLUTION (apparition, disparition, stabilité, augmentation ou diminution d'une anomalie). Reste prudent et purement visuel : n'invente AUCUNE mesure chiffrée.",
+  "- Dans la section Résultats, ajoute un paragraphe commençant par « Comparaison à l'examen du <date> : … » résumant l'évolution.",
+  "- APRÈS la ligne Coupe-clé, ajoute une DERNIÈRE ligne supplémentaire, exactement à ce format :",
+  "Évolution:",
+  "<stable | progression | régression — l'anomalie est-elle globalement stable, en progression (aggravation/augmentation) ou en régression (amélioration/diminution) ?>",
+].join("\n");
+
 export async function generatePreanalysis(
   keyImages: PreanalysisKeyImage[],
   opts: {
@@ -100,22 +111,49 @@ export async function generatePreanalysis(
     studyDescription?: string;
     antecedents?: string;
     totalSlices?: number;
+    prior?: {
+      images: PreanalysisKeyImage[];
+      date?: string;
+      totalSlices?: number;
+    };
   }
 ): Promise<PreanalysisResult> {
   const useClaude = ENV.aiBackend === "claude" && ENV.anthropicApiKey;
-  // Claude encaisse plus d'images (analyse de tout le volume échantillonné) ;
-  // Ollama local est plafonné plus bas (RAM/latence). Les images sont réduites
-  // avant l'envoi (sur CPU, une image vision coûte des milliers de tokens).
+  const comparing = !!opts.prior && opts.prior.images.length > 0;
+  // Claude encaisse plus d'images ; Ollama local est plafonné (RAM/latence).
+  // En mode comparatif, le budget est partagé entre les deux examens.
   const maxImages = useClaude ? 16 : 6;
-  const chosen = keyImages.slice(0, maxImages);
-  const images = chosen.map(k => downscalePngBase64(k.pngBase64, 768));
-  // Numéro de coupe associé à CHAQUE image (dans l'ordre), pour que l'IA puisse
-  // désigner la coupe-clé par son numéro.
-  const sliceNumbers = chosen.map(k => k.sliceIndex);
+  const perStudy = comparing
+    ? Math.max(1, Math.floor(maxImages / 2))
+    : maxImages;
+
+  const chosen = keyImages.slice(0, perStudy);
+  const curImages = chosen.map(k => downscalePngBase64(k.pngBase64, 768));
+  const curSlices = chosen.map(k => k.sliceIndex);
+
+  const priorChosen = comparing ? opts.prior!.images.slice(0, perStudy) : [];
+  const priorImages = priorChosen.map(k =>
+    downscalePngBase64(k.pngBase64, 768)
+  );
+  const priorSlices = priorChosen.map(k => k.sliceIndex);
+  const priorDate = opts.prior?.date;
+
+  const images = [...curImages, ...priorImages];
   const numCtx = Math.min(16384, 4096 + 4500 * Math.max(1, images.length));
 
-  // Contexte de l'étude injecté pour ancrer le modèle (sinon il sur-interprète
-  // une image sans savoir la modalité ni la région).
+  // Étiquette de CHAQUE image (parallèle à `images`), utilisée par le backend
+  // Claude (bloc texte avant chaque image) pour distinguer actuel / antérieur.
+  const labels = [
+    ...curSlices.map(n =>
+      comparing ? `EXAMEN ACTUEL — Coupe n° ${n} :` : `Coupe n° ${n} :`
+    ),
+    ...priorSlices.map(
+      n =>
+        `EXAMEN ANTÉRIEUR${priorDate ? ` du ${priorDate}` : ""} — Coupe n° ${n} :`
+    ),
+  ];
+
+  // Contexte de l'étude injecté pour ancrer le modèle.
   const ctxLines: string[] = [];
   if (opts.modality) ctxLines.push(`Modalité : ${opts.modality}`);
   if (opts.studyDescription) ctxLines.push(`Examen : ${opts.studyDescription}`);
@@ -123,27 +161,43 @@ export async function generatePreanalysis(
     ctxLines.push(`Indication clinique : ${opts.indication}`);
   if (opts.antecedents)
     ctxLines.push(`Antécédents médicaux du patient : ${opts.antecedents}`);
-  const total = opts.totalSlices ?? images.length;
-  ctxLines.push(
-    `Échantillon de ${images.length} coupe(s) réparties sur les ${total} coupes du volume. Dans l'ordre, ces images correspondent aux coupes n° : ${sliceNumbers.join(", ")}.`
-  );
-  ctxLines.push(
-    "Analyse l'ensemble de ces coupes selon la méthode, rédige Technique / Résultats / Conclusion, puis indique Anomalie (oui/non) et le numéro de la Coupe-clé."
-  );
-  const userText = ctxLines.join("\n");
-
-  // Aiguillage du backend : Claude (cloud, meilleure qualité d'analyse) si
-  // configuré et clé présente, sinon Ollama local (PHI-safe).
-  if (useClaude) {
-    return generateViaClaude(images, userText, sliceNumbers);
+  if (comparing) {
+    const curTotal = opts.totalSlices ?? curImages.length;
+    const priorTotal = opts.prior?.totalSlices ?? priorImages.length;
+    ctxLines.push(
+      `EXAMEN ACTUEL : ${curImages.length} coupe(s) (sur ${curTotal}), coupes n° ${curSlices.join(", ")}.`
+    );
+    ctxLines.push(
+      `EXAMEN ANTÉRIEUR${priorDate ? ` du ${priorDate}` : ""} : ${priorImages.length} coupe(s) (sur ${priorTotal}), coupes n° ${priorSlices.join(", ")}.`
+    );
+    ctxLines.push(
+      `Compare les deux examens, rédige Technique / Résultats (avec un paragraphe « Comparaison à l'examen du ${priorDate ?? "précédent"} : … ») / Conclusion, puis Anomalie (oui/non), Coupe-clé, et enfin Évolution (stable/progression/régression).`
+    );
+  } else {
+    const total = opts.totalSlices ?? images.length;
+    ctxLines.push(
+      `Échantillon de ${images.length} coupe(s) réparties sur les ${total} coupes du volume. Dans l'ordre, ces images correspondent aux coupes n° : ${curSlices.join(", ")}.`
+    );
+    ctxLines.push(
+      "Analyse l'ensemble de ces coupes selon la méthode, rédige Technique / Résultats / Conclusion, puis indique Anomalie (oui/non) et le numéro de la Coupe-clé."
+    );
   }
-  return generateViaOllama(images, userText, numCtx);
+  const userText = ctxLines.join("\n");
+  const system = comparing
+    ? `${SYSTEM_PROMPT}\n${COMPARATIVE_ADDENDUM}`
+    : SYSTEM_PROMPT;
+
+  if (useClaude) {
+    return generateViaClaude(images, userText, labels, system);
+  }
+  return generateViaOllama(images, userText, numCtx, system);
 }
 
 async function generateViaOllama(
   images: string[],
   userText: string,
-  numCtx: number
+  numCtx: number,
+  system: string
 ): Promise<PreanalysisResult> {
   const model = ENV.ollamaVisionModel;
   const controller = new AbortController();
@@ -160,7 +214,7 @@ async function generateViaOllama(
         keep_alive: "30s",
         options: { num_ctx: numCtx },
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: system },
           {
             role: "user",
             content: userText,
@@ -181,6 +235,7 @@ async function generateViaOllama(
   return {
     ...parseSections(content),
     ...parseKeySlice(content),
+    evolution: parseEvolution(content).evolution,
     model: ENV.ollamaVisionModel,
   };
 }
@@ -188,17 +243,18 @@ async function generateViaOllama(
 async function generateViaClaude(
   images: string[],
   userText: string,
-  sliceNumbers: number[]
+  labels: string[],
+  system: string
 ): Promise<PreanalysisResult> {
   const Anthropic = (await import("@anthropic-ai/sdk")).default;
   const client = new Anthropic({ apiKey: ENV.anthropicApiKey });
-  // On étiquette CHAQUE image avec son numéro de coupe (bloc texte juste avant
-  // l'image) pour que le modèle puisse désigner la coupe-clé sans ambiguïté.
+  // On étiquette CHAQUE image (bloc texte juste avant l'image) pour que le
+  // modèle puisse désigner la coupe-clé et l'examen d'appartenance sans ambiguïté.
   const content: any[] = [];
   images.forEach((b64, i) => {
     content.push({
       type: "text",
-      text: `Coupe n° ${sliceNumbers[i] ?? i + 1} :`,
+      text: labels[i] ?? `Coupe n° ${i + 1} :`,
     });
     content.push({
       type: "image",
@@ -210,7 +266,7 @@ async function generateViaClaude(
     model: ENV.anthropicModel,
     max_tokens: 2000,
     thinking: { type: "adaptive" },
-    system: SYSTEM_PROMPT,
+    system,
     messages: [{ role: "user", content }],
   });
   const text = (resp.content as any[])
@@ -220,6 +276,7 @@ async function generateViaClaude(
   return {
     ...parseSections(text),
     ...parseKeySlice(text),
+    evolution: parseEvolution(text).evolution,
     model: ENV.anthropicModel,
   };
 }

@@ -273,4 +273,37 @@ describe("generatePreanalysis", () => {
     expect(out.evolution).toBeNull();
     expect(out.cleaned).toBe("Conclusion:\nExamen normal.");
   });
+
+  it("mode comparatif : envoie les 2 jeux d'images + blocs étiquetés + parse Évolution", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        message: {
+          content:
+            "Technique:\nCT.\n\nRésultats:\nComparaison à l'examen du 20240101 : lésion inchangée.\n\nConclusion:\nStabilité.\n\nAnomalie:\noui\n\nCoupe-clé:\n5\n\nÉvolution:\nstable",
+        },
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { generatePreanalysis } = await import("./aiPreanalysis");
+    const out = await generatePreanalysis(
+      [{ pngBase64: "CUR0", sliceIndex: 1 }],
+      {
+        modality: "CT",
+        prior: {
+          images: [{ pngBase64: "OLD0", sliceIndex: 2 }],
+          date: "20240101",
+        },
+      }
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    const userMsg = body.messages.find((m: any) => m.role === "user");
+    expect(userMsg.images).toContain("CUR0");
+    expect(userMsg.images).toContain("OLD0");
+    expect(userMsg.content).toMatch(/EXAMEN ACTUEL/);
+    expect(userMsg.content).toMatch(/EXAMEN ANTÉRIEUR du 20240101/);
+    expect(body.messages[0].content).toMatch(/Évolution/);
+    expect(out.evolution).toBe("stable");
+    expect(out.conclusion).toBe("Stabilité.");
+  });
 });

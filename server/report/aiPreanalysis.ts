@@ -505,21 +505,33 @@ export function parseEvolution(text: string): {
 }
 
 // Garde anti-IDOR : une antériorité ne peut être comparée que si elle appartient
-// au MÊME patient que l'étude courante (sinon fuite PHI inter-patients). Compare
-// les PatientID (identifiant technique) après trim ; un id vide ne rapproche
-// personne. Lève FORBIDDEN sinon.
+// au MÊME patient que l'étude courante (sinon fuite PHI inter-patients). Lève
+// FORBIDDEN sinon.
+//
+// Comparaison PRIMAIRE = `patientFk` (FK interne `patients.id`, vérité de la
+// base) : immunisée contre les collisions de PatientID DICOM inter-sources (deux
+// patients distincts pouvant partager un même PatientID si importés de sources
+// hétérogènes). Repli = PatientID DICOM (trim) quand la FK n'est pas disponible
+// (ex. appel avec des objets partiels) ; un id vide ne rapproche personne.
 export function assertSamePatientStudies(
-  current: { patientId?: string | null },
-  prior: { patientId?: string | null }
+  current: { patientFk?: number | null; patientId?: string | null },
+  prior: { patientFk?: number | null; patientId?: string | null }
 ): void {
-  const a = (current.patientId ?? "").trim();
-  const b = (prior.patientId ?? "").trim();
-  if (a === "" || b === "" || a !== b) {
+  const forbidden = () => {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "L'antériorité doit appartenir au même patient.",
     });
+  };
+  // Vérité DB : si les deux FK internes sont connues, elles font foi.
+  if (current.patientFk != null && prior.patientFk != null) {
+    if (current.patientFk !== prior.patientFk) forbidden();
+    return;
   }
+  // Repli : PatientID DICOM.
+  const a = (current.patientId ?? "").trim();
+  const b = (prior.patientId ?? "").trim();
+  if (a === "" || b === "" || a !== b) forbidden();
 }
 
 // Série de l'antériorité à comparer : 1re série de MÊME modalité que la

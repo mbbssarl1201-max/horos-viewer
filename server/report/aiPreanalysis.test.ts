@@ -316,6 +316,24 @@ describe("generatePreanalysis", () => {
     expect(out.conclusion).not.toMatch(/Évolution/i);
   });
 
+  it("assertSamePatientStudies : la FK interne prime sur le PatientID DICOM", async () => {
+    const { assertSamePatientStudies } = await import("./aiPreanalysis");
+    // FK différentes → rejet, même si le PatientID DICOM coïncide (collision).
+    expect(() =>
+      assertSamePatientStudies(
+        { patientFk: 1, patientId: "DUP" },
+        { patientFk: 2, patientId: "DUP" }
+      )
+    ).toThrow();
+    // FK identiques → accepté, même si le PatientID DICOM diffère.
+    expect(() =>
+      assertSamePatientStudies(
+        { patientFk: 7, patientId: "A" },
+        { patientFk: 7, patientId: "B" }
+      )
+    ).not.toThrow();
+  });
+
   it("assertSamePatientStudies : rejette des patients différents", async () => {
     const { assertSamePatientStudies } = await import("./aiPreanalysis");
     expect(() =>

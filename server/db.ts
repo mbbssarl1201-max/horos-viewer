@@ -104,6 +104,17 @@ export async function getUserByEmail(email: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+export async function getUserById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select({ id: users.id, name: users.name, email: users.email })
+    .from(users)
+    .where(eq(users.id, id))
+    .limit(1);
+  return rows[0] || undefined;
+}
+
 export async function countUsers(): Promise<number> {
   const db = await getDb();
   if (!db) return 0;

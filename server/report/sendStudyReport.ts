@@ -5,6 +5,8 @@ import {
   listInstancesBySeries,
   countRecentAccess,
   recordAccess,
+  getReportByStudy,
+  getUserById,
 } from "../db";
 import { storageGetBuffer } from "../storage";
 import { sendEmail } from "../email";
@@ -21,13 +23,16 @@ export interface SendStudyReportInput {
   to: string;
   studyId: number;
   seriesId: number;
-  report: {
+  // Ces champs sont conservés pour la compat de l'input mais IGNORÉS côté
+  // serveur : le contenu et la signature sont désormais serveur-autoritatifs
+  // (lus depuis le compte-rendu signé en DB). Cf. audit I1.
+  report?: {
     indication: string;
     technique: string;
     resultats: string;
     conclusion: string;
   };
-  signature: string;
+  signature?: string;
   windowCenter: number;
   windowWidth: number;
   keyImages: Array<{
@@ -37,6 +42,7 @@ export interface SendStudyReportInput {
   }>;
   includeVideo: boolean;
   message?: string;
+  // Ignoré côté serveur : aiAssisted est lu depuis report.aiGenerated. Cf. I1.
   aiAssisted?: boolean;
   antecedents?: string;
 }
@@ -82,14 +88,39 @@ export async function sendStudyReportImpl(
       message: "Série inconnue pour cette étude",
     });
 
+  // Verrou médico-légal (audit I1) : on ne peut emailer un CR que s'il existe
+  // un compte-rendu SIGNÉ pour l'étude. Le contenu et la signature sont
+  // serveur-autoritatifs (lus en DB), jamais issus de l'input client.
+  const report = await getReportByStudy(input.studyId);
+  if (!report || report.status !== "signed")
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Le compte-rendu doit être signé avant l'envoi.",
+    });
+
   input.keyImages.forEach(k => assertPng(k.pngBase64));
+
+  const signer = report.signedBy
+    ? await getUserById(report.signedBy)
+    : undefined;
+  const signedAtStr = report.signedAt
+    ? new Date(report.signedAt).toLocaleString("fr-CH")
+    : "";
+  const signature = `Signé par ${signer?.name ?? signer?.email ?? "Dr"}${
+    signedAtStr ? ` le ${signedAtStr}` : ""
+  }`;
 
   const pdf = buildReportPdf({
     study,
-    report: input.report,
-    signature: input.signature,
+    report: {
+      indication: report.indication ?? "",
+      technique: report.technique ?? "",
+      resultats: report.resultats ?? "",
+      conclusion: report.conclusion ?? "",
+    },
+    signature,
     keyImages: input.keyImages,
-    aiAssisted: input.aiAssisted,
+    aiAssisted: report.aiGenerated,
     antecedents: input.antecedents,
   });
   const attachments: Array<{

@@ -4,6 +4,7 @@ import CornerstoneViewer, {
 } from "@/components/CornerstoneViewer";
 import VolumeViewer, { PRESETS_3D } from "@/components/VolumeViewer";
 import { SLAB_MODES, type SlabMode } from "@/lib/slabBlend";
+import { shouldReselectSeries } from "@/lib/seriesSelection";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -743,10 +744,26 @@ export default function Viewer() {
     setKeyImageSlices([]);
   }, [selectedSeries]);
 
-  // Auto-select first series
+  // Anti-fuite PHI (audit C1) : le composant Viewer reste monté en navigation
+  // viewer→viewer (route /viewer/:studyId), donc on purge explicitement les
+  // états rattachés à l'étude quand studyId change, pour ne jamais mélanger les
+  // données de deux patients.
   useEffect(() => {
-    if (seriesList && seriesList.length > 0 && !selectedSeries) {
-      setSelectedSeries(seriesList[0].id);
+    setSelectedSeries(null);
+    setReportKeyImages([]);
+    setRedactionsByImage({});
+    setReportOpen(false);
+    setCurrentSlice(0);
+    setComparePriorStudyId(null);
+    setComparePriorSeriesId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studyId]);
+
+  // Auto-select first series — re-sélectionne aussi si la série courante
+  // n'appartient pas à l'étude affichée (anti-fuite inter-patients, cf. audit C1).
+  useEffect(() => {
+    if (shouldReselectSeries(selectedSeries, seriesList)) {
+      setSelectedSeries(seriesList![0].id);
     }
   }, [seriesList, selectedSeries]);
 
@@ -3159,6 +3176,7 @@ export default function Viewer() {
             {/* Report panel — overlays the right side of the viewport */}
             {reportOpen && study && (
               <ReportPanel
+                key={study.id}
                 studyId={study.id}
                 seriesId={selectedSeries!}
                 windowWidth={windowWidth}

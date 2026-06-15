@@ -56,6 +56,8 @@ export interface PreanalysisResult {
   keySliceNumber?: number | null;
   // L'IA a-t-elle repéré une anomalie ? (null si non précisé)
   abnormal?: boolean | null;
+  // Verdict d'évolution comparative (mode antériorité) ; null hors comparaison.
+  evolution?: "stable" | "progression" | "regression" | null;
 }
 
 const SYSTEM_PROMPT = [
@@ -252,6 +254,8 @@ export interface RunAiPreanalysisResult extends PreanalysisResult {
   // Image de la coupe désignée par l'IA, rendue côté serveur, à retenir comme
   // image clé du compte rendu (null si pas d'anomalie / rendu impossible).
   keyImage?: { pngBase64: string; sliceIndex: number } | null;
+  // Date (DICOM DA, brute) de l'antériorité réellement comparée, ou null.
+  comparedPriorDate?: string | null;
 }
 
 export async function runAiPreanalysis(
@@ -362,6 +366,28 @@ export function parseKeySlice(text: string): {
     abnormal: abn ? /oui|yes/i.test(abn[1]) : null,
     keySliceNumber: ks && /^\d+$/.test(ks[1]) ? parseInt(ks[1], 10) : null,
   };
+}
+
+// Extrait le verdict d'évolution comparative (ligne « Évolution: stable |
+// progression | régression »). Tolérant à la casse et aux accents. Renvoie le
+// texte NETTOYÉ de cette ligne (elle ne doit pas polluer la Conclusion) ;
+// verdict null si la ligne est absente.
+export function parseEvolution(text: string): {
+  evolution: "stable" | "progression" | "regression" | null;
+  cleaned: string;
+} {
+  const m = text.match(
+    /\n?\s*[EÉeé]volution\s*:?\s*(stable|progression|régression|regression)\b/i
+  );
+  if (!m) return { evolution: null, cleaned: text };
+  const raw = m[1].toLowerCase();
+  const evolution =
+    raw === "stable"
+      ? "stable"
+      : raw === "progression"
+        ? "progression"
+        : "regression";
+  return { evolution, cleaned: text.replace(m[0], "").trimEnd() };
 }
 
 export function parseSections(text: string): {

@@ -244,4 +244,33 @@ describe("generatePreanalysis", () => {
     expect(out.conclusion).toMatch(/Normal/);
     expect(out.model).toBe("claude-opus-4-8");
   });
+
+  it("parseEvolution : extrait le verdict et nettoie la ligne", async () => {
+    const { parseEvolution } = await import("./aiPreanalysis");
+    const out = parseEvolution(
+      "Conclusion:\nLésion stable.\n\nÉvolution:\nstable"
+    );
+    expect(out.evolution).toBe("stable");
+    expect(out.cleaned).not.toMatch(/Évolution/i);
+  });
+
+  it("parseEvolution : tolère casse/accents et les 3 verdicts", async () => {
+    const { parseEvolution } = await import("./aiPreanalysis");
+    expect(parseEvolution("evolution: PROGRESSION").evolution).toBe(
+      "progression"
+    );
+    expect(parseEvolution("Évolution : régression").evolution).toBe(
+      "regression"
+    );
+    expect(parseEvolution("Evolution: Regression").evolution).toBe(
+      "regression"
+    );
+  });
+
+  it("parseEvolution : ligne absente -> null, texte inchangé", async () => {
+    const { parseEvolution } = await import("./aiPreanalysis");
+    const out = parseEvolution("Conclusion:\nExamen normal.");
+    expect(out.evolution).toBeNull();
+    expect(out.cleaned).toBe("Conclusion:\nExamen normal.");
+  });
 });

@@ -447,6 +447,44 @@ export function parseEvolution(text: string): {
   return { evolution, cleaned: text.replace(m[0], "").trimEnd() };
 }
 
+// Garde anti-IDOR : une antériorité ne peut être comparée que si elle appartient
+// au MÊME patient que l'étude courante (sinon fuite PHI inter-patients). Compare
+// les PatientID (identifiant technique) après trim ; un id vide ne rapproche
+// personne. Lève FORBIDDEN sinon.
+export function assertSamePatientStudies(
+  current: { patientId?: string | null },
+  prior: { patientId?: string | null }
+): void {
+  const a = (current.patientId ?? "").trim();
+  const b = (prior.patientId ?? "").trim();
+  if (a === "" || b === "" || a !== b) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "L'antériorité doit appartenir au même patient.",
+    });
+  }
+}
+
+// Série de l'antériorité à comparer : 1re série de MÊME modalité que la
+// courante si elle existe, sinon la 1re série, sinon null. Fonction pure.
+export function pickPriorSeriesId(
+  series:
+    | readonly { id: number; modality?: string | null }[]
+    | null
+    | undefined,
+  currentModality?: string | null
+): number | null {
+  if (!series || series.length === 0) return null;
+  const wanted = (currentModality ?? "").trim().toUpperCase();
+  if (wanted) {
+    const m = series.find(
+      s => (s.modality ?? "").trim().toUpperCase() === wanted
+    );
+    if (m) return m.id;
+  }
+  return series[0].id;
+}
+
 export function parseSections(text: string): {
   technique: string;
   resultats: string;

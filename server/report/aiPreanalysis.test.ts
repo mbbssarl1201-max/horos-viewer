@@ -306,4 +306,32 @@ describe("generatePreanalysis", () => {
     expect(out.evolution).toBe("stable");
     expect(out.conclusion).toBe("Stabilité.");
   });
+
+  it("assertSamePatientStudies : rejette des patients différents", async () => {
+    const { assertSamePatientStudies } = await import("./aiPreanalysis");
+    expect(() =>
+      assertSamePatientStudies({ patientId: "A" }, { patientId: "B" })
+    ).toThrow();
+    expect(() =>
+      assertSamePatientStudies({ patientId: "A" }, { patientId: "" })
+    ).toThrow();
+    expect(() =>
+      assertSamePatientStudies({ patientId: "A" }, { patientId: " A " })
+    ).not.toThrow();
+  });
+
+  it("pickPriorSeriesId : même modalité prioritaire, repli 1re, vide -> null", async () => {
+    const { pickPriorSeriesId } = await import("./aiPreanalysis");
+    expect(
+      pickPriorSeriesId(
+        [
+          { id: 1, modality: "MR" },
+          { id: 2, modality: "CT" },
+        ],
+        "ct"
+      )
+    ).toBe(2);
+    expect(pickPriorSeriesId([{ id: 9, modality: "MR" }], "CT")).toBe(9);
+    expect(pickPriorSeriesId([], "CT")).toBeNull();
+  });
 });

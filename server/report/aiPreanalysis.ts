@@ -543,7 +543,9 @@ export function parseSections(text: string): {
 } {
   // On retire d'abord les lignes méta finales (Anomalie / Coupe-clé) pour
   // qu'elles ne soient pas absorbées dans la Conclusion.
-  const cut = text.search(/\n\s*(Anomalie|Coupe[-\s]?cl[ée])\s*:/i);
+  const cut = text.search(
+    /\n\s*(Anomalie|Coupe[-\s]?cl[ée]|[EÉeé]volution)\s*:/i
+  );
   if (cut >= 0) text = text.slice(0, cut);
   // Format attendu : Technique / Résultats / Conclusion.
   const m3 = text.match(

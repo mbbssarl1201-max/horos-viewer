@@ -43,6 +43,13 @@ const SECTION_KEYS = [
   "conclusion",
 ] as const;
 
+// Formate une date DICOM DA brute (`YYYYMMDD`) en `JJ.MM.AAAA` pour l'affichage.
+// Toute entrée non conforme est renvoyée telle quelle (best-effort).
+function formatDicomDate(da: string): string {
+  const m = /^(\d{4})(\d{2})(\d{2})$/.exec(da.trim());
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : da;
+}
+
 export default function ReportPanel({
   studyId,
   seriesId,
@@ -374,7 +381,9 @@ export default function ReportPanel({
             : evolution === "progression"
               ? "🔴 Progression"
               : "🔵 Régression"}
-          {comparedPriorDate ? ` · vs examen du ${comparedPriorDate}` : ""}
+          {comparedPriorDate
+            ? ` · vs examen du ${formatDicomDate(comparedPriorDate)}`
+            : ""}
         </div>
       )}
 

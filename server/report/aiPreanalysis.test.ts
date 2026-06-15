@@ -307,6 +307,15 @@ describe("generatePreanalysis", () => {
     expect(out.conclusion).toBe("Stabilité.");
   });
 
+  it("parseSections : la ligne Évolution ne pollue pas la Conclusion (sans Anomalie/Coupe-clé)", async () => {
+    const { parseSections } = await import("./aiPreanalysis");
+    const out = parseSections(
+      "Technique:\nCT.\n\nRésultats:\nStable.\n\nConclusion:\nPas de changement.\n\nÉvolution:\nstable"
+    );
+    expect(out.conclusion).toBe("Pas de changement.");
+    expect(out.conclusion).not.toMatch(/Évolution/i);
+  });
+
   it("assertSamePatientStudies : rejette des patients différents", async () => {
     const { assertSamePatientStudies } = await import("./aiPreanalysis");
     expect(() =>

@@ -37,7 +37,17 @@ export const ENV = {
   smtpFrom: process.env.SMTP_FROM ?? "noreply@horos-viewer.com",
   // Allow a self-hosted relay without a public TLS cert (e.g. Mailu notls on
   // the same host). Only safe when the SMTP hop stays on a trusted network.
-  smtpInsecure: (process.env.SMTP_INSECURE ?? "false") === "true",
+  // Fail-safe : en production, on IGNORE SMTP_INSECURE et on force TLS — le PHI
+  // ne doit jamais transiter sur un canal SMTP non chiffré en prod.
+  smtpInsecure:
+    process.env.NODE_ENV !== "production" &&
+    (process.env.SMTP_INSECURE ?? "false") === "true",
+  // Allow-list OPTIONNELLE de domaines destinataires pour les envois PHI
+  // (compte-rendu). Vide = AUCUNE restriction. Séparateur : virgule.
+  reportEmailAllowedDomains: (process.env.REPORT_EMAIL_ALLOWED_DOMAINS ?? "")
+    .split(",")
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean),
   // Boîte du RIS (système d'information de radiologie) à notifier sur les
   // transitions de statut/priorité d'une étude. OPT-IN : si vide, AUCUNE
   // notification automatique n'est envoyée (la fonctionnalité est un no-op).
@@ -47,3 +57,12 @@ export const ENV = {
   // ajoutée). Pour activer : `npm i @sentry/node` puis définir SENTRY_DSN.
   sentryDsn: process.env.SENTRY_DSN ?? "",
 };
+
+// Garde fail-safe : signaler quand SMTP_INSECURE est posé en production mais
+// délibérément ignoré (TLS forcé).
+if (
+  process.env.NODE_ENV === "production" &&
+  process.env.SMTP_INSECURE === "true"
+) {
+  console.warn("[env] SMTP_INSECURE ignoré en production (TLS forcé)");
+}

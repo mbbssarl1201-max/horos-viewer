@@ -15,6 +15,8 @@ import { buildCineMp4, ffmpegAvailable } from "./cineVideo";
 import { logger } from "../_core/logger";
 import { captureException } from "../_core/sentry";
 import { buildReportPdf } from "./reportPdf";
+import { ENV } from "../_core/env";
+import { isAllowedRecipient } from "../_core/emailAllowList";
 
 const MAX_VIDEO_FRAMES = 400;
 const CINE_FPS = 12;
@@ -80,6 +82,15 @@ export async function sendStudyReportImpl(
   const study = await getStudyById(input.studyId);
   if (!study)
     throw new TRPCError({ code: "NOT_FOUND", message: "Étude introuvable" });
+
+  // Allow-list OPTIONNELLE de domaines destinataires (egress PHI). Si
+  // REPORT_EMAIL_ALLOWED_DOMAINS est vide, aucune restriction. Sinon, le
+  // domaine du destinataire doit être whitelisté. Cf. I-email.
+  if (!isAllowedRecipient(input.to, ENV.reportEmailAllowedDomains))
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Destinataire non autorisé (domaine non whitelisté).",
+    });
 
   const series = await listSeriesByStudy(input.studyId);
   if (!series.some((s: any) => s.id === input.seriesId))
@@ -166,7 +177,6 @@ export async function sendStudyReportImpl(
     }
   }
 
-  const subjectName = study.patientName ? ` — ${study.patientName}` : "";
   const safeMsg = (input.message ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -184,7 +194,8 @@ export async function sendStudyReportImpl(
 
   const result = await sendEmail({
     to: input.to,
-    subject: `Compte rendu d'imagerie${subjectName}`,
+    // Sujet NON nominatif (le PDF joint reste nominatif). Cf. I-email.
+    subject: `Compte rendu d'imagerie — étude #${study.id}`,
     html:
       `<div style="font-family:sans-serif;max-width:600px">` +
       `<p>Bonjour,</p>` +

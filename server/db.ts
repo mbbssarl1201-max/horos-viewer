@@ -258,6 +258,9 @@ export async function getStudyById(studyId: number) {
       patientName: patients.patientName,
       birthDate: patients.birthDate,
       patientId: patients.patientId,
+      // FK interne patients.id : vérité de comparaison patient pour la garde
+      // anti-IDOR antériorité (assertSamePatientStudies).
+      patientFk: studies.patientId,
       studyInstanceUid: studies.studyInstanceUid,
       studyDate: studies.studyDate,
       studyDescription: studies.studyDescription,

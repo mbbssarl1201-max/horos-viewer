@@ -63,16 +63,27 @@ function createTransporter() {
 /**
  * Send an email notification
  */
-export async function sendEmail(options: EmailOptions): Promise<{ success: boolean; error?: string }> {
+export async function sendEmail(
+  options: EmailOptions
+): Promise<{ success: boolean; error?: string }> {
   const transporter = createTransporter();
 
   if (!transporter) {
-    console.warn("[Email] SMTP not configured - email not sent:", options.subject);
-    return { success: false, error: "SMTP not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD environment variables." };
+    console.warn(
+      "[Email] SMTP not configured - email not sent:",
+      options.subject
+    );
+    return {
+      success: false,
+      error:
+        "SMTP not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD environment variables.",
+    };
   }
 
   try {
-    const recipients = Array.isArray(options.to) ? options.to.join(", ") : options.to;
+    const recipients = Array.isArray(options.to)
+      ? options.to.join(", ")
+      : options.to;
 
     await transporter.sendMail({
       from: ENV.smtpFrom,
@@ -104,7 +115,9 @@ export async function notifyNewStudy(params: {
 }): Promise<{ success: boolean; error?: string }> {
   return sendEmail({
     to: params.recipientEmail,
-    subject: `[MediView] New Study Received - ${params.patientName} (${params.modality})`,
+    // Sujet NON nominatif : le nom patient (PHI) reste dans le corps, pas dans
+    // la ligne d'objet qui transite en clair dans les logs SMTP. Cf. I-email.
+    subject: `[MediView] Nouvel examen reçu — ${params.modality}`,
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background: #1a1a2e; color: #e0e0e0; padding: 20px; border-radius: 8px;">
@@ -136,7 +149,8 @@ export async function notifyStatUrgent(params: {
 }): Promise<{ success: boolean; error?: string }> {
   return sendEmail({
     to: params.recipientEmail,
-    subject: `🚨 [STAT/URGENT] ${params.patientName} - ${params.modality} - Immediate Attention Required`,
+    // Sujet NON nominatif (PHI dans le corps). Cf. I-email.
+    subject: `🚨 [STAT/URGENT] ${params.modality} — attention immédiate requise`,
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background: #1a1a2e; color: #e0e0e0; padding: 20px; border-radius: 8px; border-left: 4px solid #f44336;">
@@ -169,7 +183,8 @@ export async function notifyReportFinalized(params: {
 }): Promise<{ success: boolean; error?: string }> {
   return sendEmail({
     to: params.recipientEmail,
-    subject: `[MediView] Report Finalized - ${params.patientName} (${params.modality})`,
+    // Sujet NON nominatif (PHI dans le corps). Cf. I-email.
+    subject: `[MediView] Compte-rendu finalisé — ${params.modality}`,
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background: #1a1a2e; color: #e0e0e0; padding: 20px; border-radius: 8px; border-left: 4px solid #4caf50;">
@@ -191,7 +206,11 @@ export async function notifyReportFinalized(params: {
 /**
  * Check SMTP configuration status
  */
-export function getSmtpStatus(): { configured: boolean; host?: string; port?: number } {
+export function getSmtpStatus(): {
+  configured: boolean;
+  host?: string;
+  port?: number;
+} {
   if (!ENV.smtpHost) {
     return { configured: false };
   }

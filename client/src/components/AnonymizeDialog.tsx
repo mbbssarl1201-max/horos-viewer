@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Shield, AlertTriangle, Loader2 } from "lucide-react";
@@ -14,35 +20,73 @@ interface AnonymizeDialogProps {
 }
 
 const ANONYMIZE_FIELDS = [
-  { id: "patientName", label: "Patient Name", tag: "(0010,0010)", critical: true },
+  {
+    id: "patientName",
+    label: "Patient Name",
+    tag: "(0010,0010)",
+    critical: true,
+  },
   { id: "patientId", label: "Patient ID", tag: "(0010,0020)", critical: true },
-  { id: "birthDate", label: "Date of Birth", tag: "(0010,0030)", critical: true },
-  { id: "address", label: "Patient Address", tag: "(0010,1040)", critical: true },
+  {
+    id: "birthDate",
+    label: "Date of Birth",
+    tag: "(0010,0030)",
+    critical: true,
+  },
+  {
+    id: "address",
+    label: "Patient Address",
+    tag: "(0010,1040)",
+    critical: true,
+  },
   { id: "phone", label: "Phone Number", tag: "(0010,2154)", critical: true },
-  { id: "referringPhysician", label: "Referring Physician", tag: "(0008,0090)", critical: false },
-  { id: "institution", label: "Institution Name", tag: "(0008,0080)", critical: false },
-  { id: "accessionNumber", label: "Accession Number", tag: "(0008,0050)", critical: false },
+  {
+    id: "referringPhysician",
+    label: "Referring Physician",
+    tag: "(0008,0090)",
+    critical: false,
+  },
+  {
+    id: "institution",
+    label: "Institution Name",
+    tag: "(0008,0080)",
+    critical: false,
+  },
+  {
+    id: "accessionNumber",
+    label: "Accession Number",
+    tag: "(0008,0050)",
+    critical: false,
+  },
   { id: "studyId", label: "Study ID", tag: "(0020,0010)", critical: false },
 ];
 
-export default function AnonymizeDialog({ open, onOpenChange, studyId }: AnonymizeDialogProps) {
+export default function AnonymizeDialog({
+  open,
+  onOpenChange,
+  studyId,
+}: AnonymizeDialogProps) {
   const [selectedFields, setSelectedFields] = useState<string[]>(
-    ANONYMIZE_FIELDS.filter((f) => f.critical).map((f) => f.id)
+    ANONYMIZE_FIELDS.filter(f => f.critical).map(f => f.id)
   );
   const [processing, setProcessing] = useState(false);
 
   const toggleField = (fieldId: string) => {
-    setSelectedFields((prev) =>
-      prev.includes(fieldId) ? prev.filter((f) => f !== fieldId) : [...prev, fieldId]
+    setSelectedFields(prev =>
+      prev.includes(fieldId)
+        ? prev.filter(f => f !== fieldId)
+        : [...prev, fieldId]
     );
   };
 
   const anonymizeMutation = trpc.studies.anonymize.useMutation({
-    onSuccess: (data) => {
-      toast.success(`Study anonymized: ${data.fieldsAnonymized} field(s) cleared`);
+    onSuccess: data => {
+      toast.success(
+        `Study anonymized: ${data.fieldsAnonymized} field(s) cleared`
+      );
       onOpenChange(false);
     },
-    onError: (err) => {
+    onError: err => {
       toast.error(err.message || "Anonymization failed");
     },
   });
@@ -54,7 +98,10 @@ export default function AnonymizeDialog({ open, onOpenChange, studyId }: Anonymi
     }
     setProcessing(true);
     try {
-      await anonymizeMutation.mutateAsync({ id: studyId, fields: selectedFields });
+      await anonymizeMutation.mutateAsync({
+        id: studyId,
+        fields: selectedFields,
+      });
     } finally {
       setProcessing(false);
     }
@@ -69,7 +116,8 @@ export default function AnonymizeDialog({ open, onOpenChange, studyId }: Anonymi
             Anonymize DICOM Data
           </DialogTitle>
           <DialogDescription>
-            Remove patient-identifying information from DICOM metadata before sharing or exporting.
+            Remove patient-identifying information from DICOM metadata before
+            sharing or exporting.
           </DialogDescription>
         </DialogHeader>
 
@@ -77,13 +125,23 @@ export default function AnonymizeDialog({ open, onOpenChange, studyId }: Anonymi
           <div className="flex items-start gap-2 p-2 rounded bg-destructive/10 border border-destructive/20">
             <AlertTriangle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
             <p className="text-[11px] text-destructive">
-              This action will permanently remove selected metadata from stored DICOM files.
-              This cannot be undone.
+              This action will permanently remove selected metadata from stored
+              DICOM files. This cannot be undone.
+            </p>
+          </div>
+
+          <div className="flex items-start gap-2 p-2 rounded bg-amber-500/10 border border-amber-500/20">
+            <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+            <p className="text-[11px] text-amber-600 dark:text-amber-400">
+              Métadonnées uniquement : les informations « brûlées » dans les
+              pixels (annotations incrustées, captures d'écran — fréquentes en
+              échographie/SC) ne sont PAS retirées. Vérifiez visuellement les
+              images avant tout partage externe.
             </p>
           </div>
 
           <div className="space-y-2">
-            {ANONYMIZE_FIELDS.map((field) => (
+            {ANONYMIZE_FIELDS.map(field => (
               <div
                 key={field.id}
                 className="flex items-center gap-3 p-2 rounded hover:bg-accent/50"

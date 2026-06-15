@@ -262,13 +262,19 @@ async function generateViaClaude(
     });
   });
   content.push({ type: "text", text: userText });
-  const resp = await client.messages.create({
-    model: ENV.anthropicModel,
-    max_tokens: 2000,
-    thinking: { type: "adaptive" },
-    system,
-    messages: [{ role: "user", content }],
-  });
+  // Timeout explicite (audit I-claude-timeout) : sans borne, une requête Claude
+  // (thinking adaptatif + jusqu'à 16 images) peut pendre et bloquer la requête
+  // tRPC. Aligné sur le timeout de 180 s de la branche Ollama.
+  const resp = await client.messages.create(
+    {
+      model: ENV.anthropicModel,
+      max_tokens: 2000,
+      thinking: { type: "adaptive" },
+      system,
+      messages: [{ role: "user", content }],
+    },
+    { timeout: 180_000 }
+  );
   const text = (resp.content as any[])
     .filter(b => b.type === "text")
     .map(b => b.text)

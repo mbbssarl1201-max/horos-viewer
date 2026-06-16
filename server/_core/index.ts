@@ -66,14 +66,44 @@ async function startServer() {
     legacyHeaders: false,
     message: { error: "Too many export requests, please try again later." },
   });
+  // Anti-brute-force dédié sur la connexion (audit H3) : le limiteur global
+  // (RL_MAX, 6000/fenêtre) est bien trop large pour protéger `auth.login`. Comme
+  // le client tRPC BATCHE les appels (httpBatchLink), on ne peut pas cibler un
+  // chemin fixe ; on monte le limiteur sur tout `/api/trpc` mais on ne COMPTE
+  // que les requêtes dont l'URL référence `auth.login` (robuste au batching,
+  // même si l'attaquant combine login + autre procédure). Clé = IP.
+  const RL_LOGIN_MAX = parseInt(process.env.RATE_LIMIT_LOGIN_MAX ?? "10");
+  const loginLimiter = rateLimit({
+    windowMs: RL_WINDOW_MS,
+    limit: RL_LOGIN_MAX,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    skip: req => !req.originalUrl.includes("auth.login"),
+    message: { error: "Too many login attempts, please try again later." },
+  });
   app.use("/api", apiLimiter);
   app.use("/api/export", exportLimiter);
+  app.use("/api/trpc", loginLimiter);
 
   // CSRF mitigation for the PHI export GET routes: a cross-site context (e.g. a
   // malicious page triggering a navigation/download) is rejected. Same-origin
   // app requests ("same-origin"/"same-site") and direct user navigations
   // ("none", e.g. typing the URL) are allowed.
   app.use("/api/export", (req, res, next) => {
+    if (req.headers["sec-fetch-site"] === "cross-site") {
+      res.status(403).json({ error: "Cross-site request blocked" });
+      return;
+    }
+    next();
+  });
+
+  // CSRF mitigation for the tRPC API (audit H2): tRPC mutations are
+  // state-changing and PHI-bearing, and are only ever called same-origin by the
+  // SPA. A cross-site context is rejected. As with the export guard, an absent
+  // header (older browsers, non-browser clients) and same-origin/same-site/none
+  // are allowed — the Bearer-authenticated public API lives under /api/v1, not
+  // /api/trpc, so it is unaffected.
+  app.use("/api/trpc", (req, res, next) => {
     if (req.headers["sec-fetch-site"] === "cross-site") {
       res.status(403).json({ error: "Cross-site request blocked" });
       return;

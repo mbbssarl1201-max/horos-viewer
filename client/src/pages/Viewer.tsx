@@ -347,6 +347,7 @@ export default function Viewer() {
   const [realistic3d, setRealistic3d] = useState<boolean>(true);
   // Rendu surfacique 3D (iso-surface) — « 3D Surface Rendering » de Horos.
   const [surface3d, setSurface3d] = useState<boolean>(false);
+  const [turntableNonce, setTurntableNonce] = useState(0);
   // Fly-thru / endoscopie : un compteur incrémenté déclenche l'animation caméra.
   const [flyThruNonce, setFlyThruNonce] = useState(0);
   // Scissor : fraction de découpe du volume 3D (0 = aucune).
@@ -2218,6 +2219,16 @@ export default function Viewer() {
               Surface
             </label>
             <Separator orientation="vertical" className="h-7 mx-1" />
+            {/* Export d'une vidéo de rotation (turntable) du volume 3D */}
+            <button
+              type="button"
+              className="toolbar-btn"
+              title="Exporter une vidéo de rotation (WebM) du volume 3D"
+              onClick={() => setTurntableNonce(n => n + 1)}
+            >
+              <span className="text-[9px]">Exporter rotation</span>
+            </button>
+            <Separator orientation="vertical" className="h-7 mx-1" />
             {/* Fly-thru / endoscopie virtuelle (3D Endoscopy de Horos) */}
             <button
               className="toolbar-btn"
@@ -2982,6 +2993,7 @@ export default function Viewer() {
                   preset3d={preset3d}
                   realistic3d={realistic3d}
                   surface3d={surface3d}
+                  turntableNonce={turntableNonce}
                   surfaceIso={suggestIsoForModality(study?.modality)}
                   flyThruNonce={flyThruNonce}
                   cropFraction={cropFraction}

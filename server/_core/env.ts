@@ -24,6 +24,9 @@ export const ENV = {
   // IA locale (Ollama auto-hébergé) — pré-analyse vision des images clés.
   ollamaUrl: process.env.OLLAMA_URL ?? "http://ollama-hermes:11434",
   ollamaVisionModel: process.env.OLLAMA_VISION_MODEL ?? "qwen2.5vl:3b",
+  // Modèle de texte Ollama pour le chat Hermès (instruction-following). Présent
+  // sur ollama-hermes. PHI-safe (local).
+  ollamaTextModel: process.env.OLLAMA_TEXT_MODEL ?? "qwen2.5:3b",
   // Backend IA pour l'analyse d'images : "claude" (Anthropic cloud, meilleure
   // qualité) ou "ollama" (local, PHI-safe). Défaut "ollama".
   aiBackend: process.env.AI_BACKEND ?? "ollama",

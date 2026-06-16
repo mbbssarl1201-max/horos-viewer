@@ -6,6 +6,9 @@ import {
   countRecentAccess,
   recordAccess,
 } from "../db";
+import { embedText } from "../knowledge/embeddings";
+import { searchSimilar } from "../knowledge/store";
+import { selectRelevant, buildKnowledgeBlock } from "../knowledge/retrieve";
 
 export interface HermesMessage {
   role: "user" | "assistant";
@@ -139,10 +142,29 @@ export interface RunHermesChatInput {
   messages: HermesMessage[];
 }
 
-export async function runHermesChat(
+export interface HermesSource {
+  source: string;
+  heading: string | null;
+  score: number;
+}
+
+export interface PreparedHermesChat {
+  messages: { role: string; content: string }[];
+  sources: HermesSource[];
+  model: string;
+  useClaude: boolean;
+  study: { id: number };
+}
+
+/**
+ * Préparation commune au chat Hermès (streaming ET non-streaming) :
+ * rate-limit, anti-IDOR (studyId résolu serveur), contexte étude+CR, RAG
+ * (embed dernier message → searchSimilar → selectRelevant). RAG fail-open.
+ */
+export async function prepareHermesChat(
   input: RunHermesChatInput,
-  ctx: { user: { id: number }; req?: { ip?: string } }
-): Promise<{ reply: string; model: string }> {
+  ctx: { user: { id: number } }
+): Promise<PreparedHermesChat> {
   const recent = await countRecentAccess(ctx.user.id, "ai.hermes.chat", 60);
   if (recent >= 60) {
     throw new TRPCError({
@@ -155,22 +177,62 @@ export async function runHermesChat(
     throw new TRPCError({ code: "NOT_FOUND", message: "Étude introuvable" });
   const report = await getReportByStudy(input.studyId);
   const context = buildHermesContext(study as any, report as any);
-  const messages = assembleMessages(context, input.messages);
 
+  // RAG (fail-open) : embedde le dernier message utilisateur.
+  let sources: HermesSource[] = [];
+  let knowledgeBlock = "";
+  const lastUser = [...input.messages].reverse().find(m => m.role === "user");
+  if (lastUser) {
+    try {
+      const emb = await embedText(lastUser.content);
+      const hits = await searchSimilar(emb, 8);
+      const selected = selectRelevant(hits);
+      knowledgeBlock = buildKnowledgeBlock(selected);
+      sources = selected.map(s => ({
+        source: s.source,
+        heading: s.heading,
+        score: s.score,
+      }));
+    } catch {
+      // base vide / Ollama embeddings KO → on répond sans sources
+      sources = [];
+      knowledgeBlock = "";
+    }
+  }
+
+  const messages = assembleMessages(
+    context,
+    input.messages,
+    12,
+    knowledgeBlock
+  );
   const useClaude =
     ENV.aiBackend === "claude" &&
     !!ENV.anthropicApiKey &&
     ENV.cloudAiPhiConsent;
-  const reply = useClaude
-    ? await chatViaClaude(messages)
-    : await chatViaOllama(messages);
+  return {
+    messages,
+    sources,
+    model: useClaude ? ENV.anthropicModel : ENV.ollamaTextModel,
+    useClaude,
+    study: { id: (study as any).id },
+  };
+}
 
+export async function runHermesChat(
+  input: RunHermesChatInput,
+  ctx: { user: { id: number }; req?: { ip?: string } }
+): Promise<{ reply: string; model: string; sources: HermesSource[] }> {
+  const prep = await prepareHermesChat(input, { user: ctx.user });
+  const reply = prep.useClaude
+    ? await chatViaClaude(prep.messages)
+    : await chatViaOllama(prep.messages);
   await recordAccess({
     userId: ctx.user.id,
     action: "ai.hermes.chat",
-    studyId: (study as any).id,
-    detail: useClaude ? ENV.anthropicModel : ENV.ollamaTextModel,
+    studyId: prep.study.id,
+    detail: prep.model,
     ipAddress: ctx.req?.ip ?? null,
   });
-  return { reply, model: useClaude ? ENV.anthropicModel : ENV.ollamaTextModel };
+  return { reply, model: prep.model, sources: prep.sources };
 }

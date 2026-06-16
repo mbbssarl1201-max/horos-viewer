@@ -3,7 +3,11 @@ import {
   HERMES_SYSTEM_PROMPT,
   buildHermesContext,
   assembleMessages,
+  prepareHermesChat,
 } from "./hermesChat";
+import * as embeddings from "../knowledge/embeddings";
+import * as store from "../knowledge/store";
+import * as db from "../db";
 
 describe("buildHermesContext", () => {
   it("inclut modalité/examen/indication + sections du CR", () => {
@@ -98,5 +102,58 @@ describe("chatViaOllama", () => {
     expect(body.model).toBe("qwen2.5:3b");
     expect(body.stream).toBe(false);
     expect(body.messages[0]).toEqual({ role: "system", content: "S" });
+  });
+});
+
+describe("prepareHermesChat", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(db, "countRecentAccess").mockResolvedValue(0);
+    vi.spyOn(db, "getStudyById").mockResolvedValue({
+      id: 7,
+      modality: "MR",
+      studyDescription: "IRM cérébrale",
+    } as any);
+    vi.spyOn(db, "getReportByStudy").mockResolvedValue(null as any);
+    vi.spyOn(embeddings, "embedText").mockResolvedValue([1, 0, 0]);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renvoie des sources quand un chunk dépasse le seuil", async () => {
+    vi.spyOn(store, "searchSimilar").mockResolvedValue([
+      { source: "proto.md", heading: "T1", content: "ref", score: 0.9 },
+      { source: "x.md", heading: "Z", content: "bruit", score: 0.2 },
+    ]);
+    const out = await prepareHermesChat(
+      { studyId: 7, messages: [{ role: "user", content: "rehaussement ?" }] },
+      { user: { id: 1 } }
+    );
+    expect(out.sources.map(s => s.source)).toEqual(["proto.md"]);
+    expect(out.messages.some(m => m.content.includes("ref"))).toBe(true);
+  });
+
+  it("aucune source pertinente → sources vide, pas de bloc", async () => {
+    vi.spyOn(store, "searchSimilar").mockResolvedValue([
+      { source: "x.md", heading: "Z", content: "bruit", score: 0.2 },
+    ]);
+    const out = await prepareHermesChat(
+      { studyId: 7, messages: [{ role: "user", content: "?" }] },
+      { user: { id: 1 } }
+    );
+    expect(out.sources).toEqual([]);
+    expect(out.messages.some(m => m.content.includes("bruit"))).toBe(false);
+  });
+
+  it("RAG fail-open : embedText jette → sources vide, pas d'erreur", async () => {
+    vi.spyOn(embeddings, "embedText").mockRejectedValue(
+      new Error("ollama down")
+    );
+    const out = await prepareHermesChat(
+      { studyId: 7, messages: [{ role: "user", content: "?" }] },
+      { user: { id: 1 } }
+    );
+    expect(out.sources).toEqual([]);
   });
 });

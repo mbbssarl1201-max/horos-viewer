@@ -27,6 +27,8 @@ export const ENV = {
   // Modèle de texte Ollama pour le chat Hermès (instruction-following). Présent
   // sur ollama-hermes. PHI-safe (local).
   ollamaTextModel: process.env.OLLAMA_TEXT_MODEL ?? "qwen2.5:3b",
+  // Modèle d'embeddings Ollama (RAG Hermès). Local, PHI-safe. `ollama pull nomic-embed-text`.
+  ollamaEmbedModel: process.env.OLLAMA_EMBED_MODEL ?? "nomic-embed-text",
   // Backend IA pour l'analyse d'images : "claude" (Anthropic cloud, meilleure
   // qualité) ou "ollama" (local, PHI-safe). Défaut "ollama".
   aiBackend: process.env.AI_BACKEND ?? "ollama",

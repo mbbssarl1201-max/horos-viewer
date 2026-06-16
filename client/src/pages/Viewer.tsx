@@ -4,6 +4,7 @@ import CornerstoneViewer, {
 } from "@/components/CornerstoneViewer";
 import VolumeViewer, { PRESETS_3D } from "@/components/VolumeViewer";
 import { SLAB_MODES, type SlabMode } from "@/lib/slabBlend";
+import type { ClipPlaneConfig, ClipAxis } from "@/lib/clipPlanes";
 import { shouldReselectSeries } from "@/lib/seriesSelection";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -348,6 +349,20 @@ export default function Viewer() {
   // Rendu surfacique 3D (iso-surface) — « 3D Surface Rendering » de Horos.
   const [surface3d, setSurface3d] = useState<boolean>(false);
   const [turntableNonce, setTurntableNonce] = useState(0);
+  const [clipPlanes, setClipPlanes] = useState<ClipPlaneConfig[]>([
+    { axis: "x", enabled: false, position: 0.5, invert: false },
+    { axis: "y", enabled: false, position: 0.5, invert: false },
+    { axis: "z", enabled: false, position: 0.5, invert: false },
+  ]);
+  const updateClip = (axis: ClipAxis, patch: Partial<ClipPlaneConfig>) =>
+    setClipPlanes(prev =>
+      prev.map(c => (c.axis === axis ? { ...c, ...patch } : c))
+    );
+  const CLIP_LABELS: Record<ClipAxis, string> = {
+    x: "Sagittal",
+    y: "Coronal",
+    z: "Axial",
+  };
   // Fly-thru / endoscopie : un compteur incrémenté déclenche l'animation caméra.
   const [flyThruNonce, setFlyThruNonce] = useState(0);
   // Scissor : fraction de découpe du volume 3D (0 = aucune).
@@ -2229,6 +2244,49 @@ export default function Viewer() {
               <span className="text-[9px]">Exporter rotation</span>
             </button>
             <Separator orientation="vertical" className="h-7 mx-1" />
+            {/* Plans de coupe (clipping) interactifs par axe */}
+            <div className="flex flex-col gap-1 border-l border-border pl-2 ml-1">
+              {clipPlanes.map(c => (
+                <div key={c.axis} className="flex items-center gap-1">
+                  <label className="flex items-center gap-1 text-[10px] w-16">
+                    <input
+                      type="checkbox"
+                      checked={c.enabled}
+                      onChange={e =>
+                        updateClip(c.axis, { enabled: e.target.checked })
+                      }
+                      className="accent-primary"
+                    />
+                    {CLIP_LABELS[c.axis]}
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={c.position}
+                    disabled={!c.enabled}
+                    onChange={e =>
+                      updateClip(c.axis, { position: Number(e.target.value) })
+                    }
+                    title="Position du plan de coupe"
+                  />
+                  <label className="flex items-center gap-0.5 text-[9px]">
+                    <input
+                      type="checkbox"
+                      checked={c.invert}
+                      disabled={!c.enabled}
+                      onChange={e =>
+                        updateClip(c.axis, { invert: e.target.checked })
+                      }
+                      className="accent-primary"
+                    />
+                    inv.
+                  </label>
+                </div>
+              ))}
+            </div>
+            <Separator orientation="vertical" className="h-7 mx-1" />
             {/* Fly-thru / endoscopie virtuelle (3D Endoscopy de Horos) */}
             <button
               className="toolbar-btn"
@@ -2994,6 +3052,7 @@ export default function Viewer() {
                   realistic3d={realistic3d}
                   surface3d={surface3d}
                   turntableNonce={turntableNonce}
+                  clipPlanes={clipPlanes}
                   surfaceIso={suggestIsoForModality(study?.modality)}
                   flyThruNonce={flyThruNonce}
                   cropFraction={cropFraction}

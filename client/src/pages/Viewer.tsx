@@ -60,6 +60,7 @@ import {
   Film,
   Box,
   SquareDashedBottom,
+  MessageSquare,
 } from "lucide-react";
 import {
   type RedactionRect,
@@ -83,6 +84,7 @@ import {
   computeVertexNormals,
 } from "@/lib/meshSmooth";
 import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
+import HermesChatPanel from "@/components/HermesChatPanel";
 import CurvedMprPanel from "@/components/CurvedMprPanel";
 import SeriesThumbnail from "@/components/SeriesThumbnail";
 import {
@@ -408,6 +410,7 @@ export default function Viewer() {
   // Panneau Curved MPR (bêta) — overlay autonome, ne touche pas aux viewports.
   const [curvedMprOpen, setCurvedMprOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [hermesOpen, setHermesOpen] = useState(false);
   const [reportKeyImages, setReportKeyImages] = useState<ReportKeyImage[]>([]);
 
   // Caviardage (PHI brûlé) : rectangles de masquage stockés PAR IMAGE
@@ -2483,6 +2486,14 @@ export default function Viewer() {
         </button>
         <button
           className="toolbar-btn"
+          title="Assistant Hermès radiologue"
+          onClick={() => setHermesOpen(v => !v)}
+        >
+          <MessageSquare className="w-4 h-4" />
+          <span className="text-[9px]">Hermès</span>
+        </button>
+        <button
+          className="toolbar-btn"
           title="Exporter les mesures en DICOM SR (compte rendu structuré)"
           onClick={handleExportSr}
           disabled={exportSrMutation.isPending || !selectedSeries}
@@ -3272,6 +3283,14 @@ export default function Viewer() {
                 comparePriorStudyId={comparePriorStudyId}
                 comparePriorSeriesId={comparePriorSeriesId}
                 onClose={() => setReportOpen(false)}
+              />
+            )}
+
+            {/* Chat Hermès radiologue — overlay autonome côté droit */}
+            {hermesOpen && study && (
+              <HermesChatPanel
+                studyId={study.id}
+                onClose={() => setHermesOpen(false)}
               />
             )}
 

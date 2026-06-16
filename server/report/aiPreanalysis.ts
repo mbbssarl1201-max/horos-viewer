@@ -118,7 +118,16 @@ export async function generatePreanalysis(
     };
   }
 ): Promise<PreanalysisResult> {
-  const useClaude = ENV.aiBackend === "claude" && ENV.anthropicApiKey;
+  const claudeConfigured = ENV.aiBackend === "claude" && !!ENV.anthropicApiKey;
+  // Garde nLPD (audit H4) : pas d'envoi de pixels (PHI potentiellement brûlé)
+  // vers Claude (cloud US) sans consentement documenté (DPA). Sinon → repli
+  // Ollama local (PHI-safe), pour ne JAMAIS exfiltrer par défaut.
+  const useClaude = claudeConfigured && ENV.cloudAiPhiConsent;
+  if (claudeConfigured && !ENV.cloudAiPhiConsent) {
+    console.warn(
+      "[aiPreanalysis] AI_BACKEND=claude ignoré : MEDIVIEW_CLOUD_AI_PHI_CONSENT non activé (nLPD/DPA) → repli sur Ollama local."
+    );
+  }
   const comparing = !!opts.prior && opts.prior.images.length > 0;
   // Claude encaisse plus d'images ; Ollama local est plafonné (RAM/latence).
   // En mode comparatif, le budget est partagé entre les deux examens.

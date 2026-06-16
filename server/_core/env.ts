@@ -29,6 +29,11 @@ export const ENV = {
   aiBackend: process.env.AI_BACKEND ?? "ollama",
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
   anthropicModel: process.env.ANTHROPIC_MODEL ?? "claude-opus-4-8",
+  // nLPD (audit H4) : envoyer des pixels d'imagerie (PHI potentiellement brûlé)
+  // vers Claude (cloud US) exige un consentement documenté (DPA). Sans ce flag,
+  // même si AI_BACKEND=claude, on retombe sur Ollama local (PHI-safe).
+  cloudAiPhiConsent:
+    (process.env.MEDIVIEW_CLOUD_AI_PHI_CONSENT ?? "false") === "true",
   // SMTP Email
   smtpHost: process.env.SMTP_HOST ?? "",
   smtpPort: parseInt(process.env.SMTP_PORT ?? "587"),

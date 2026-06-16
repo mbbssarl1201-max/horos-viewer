@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { slabModeToBlend, type SlabMode } from "@/lib/slabBlend";
 import { PRESETS_3D, presetParId } from "@/lib/volumePresets3d";
 import { catmullRomSpline } from "@/lib/flyThruPath";
+import { turntableAngles, orbitAroundFocalPoint } from "@/lib/turntable";
 import {
   clampFusionOpacity,
   petColormapVtkName,
@@ -54,6 +55,8 @@ interface VolumeViewerProps {
   surfaceIso?: number;
   /** Compteur : chaque incrément déclenche une animation fly-thru (endoscopie). */
   flyThruNonce?: number;
+  /** Mode "3d" : à chaque incrément, exporte une vidéo de rotation (turntable). */
+  turntableNonce?: number;
   /** Scissor : fraction [0..0.9] retirée de chaque côté du volume (0 = aucune découpe). */
   cropFraction?: number;
   /**
@@ -252,6 +255,7 @@ export default function VolumeViewer({
   surface3d = false,
   surfaceIso = 300,
   flyThruNonce = 0,
+  turntableNonce = 0,
   cropFraction = 0,
   petImageUrls,
   petVolumeId,
@@ -833,6 +837,84 @@ export default function VolumeViewer({
       if (raf) cancelAnimationFrame(raf);
     };
   }, [flyThruNonce, mode]);
+
+  // Export turntable (« vidéo de rotation » du rendu 3D) : à chaque incrément de
+  // turntableNonce, on fait orbiter la caméra du viewport VR_3D sur un tour
+  // complet en capturant son canvas via MediaRecorder, puis on télécharge le
+  // WebM en local. 100 % client : aucun pixel ne quitte le navigateur.
+  useEffect(() => {
+    if (mode !== "3d" || !turntableNonce) return;
+    const vp = engineRef.current?.getViewport?.("VR_3D") as any;
+    if (!vp?.getCamera || !vp?.setCamera) return;
+    const canvas: HTMLCanvasElement | null =
+      vp.getCanvas?.() ?? vr3dRef.current?.querySelector("canvas") ?? null;
+    if (
+      !canvas ||
+      typeof (canvas as any).captureStream !== "function" ||
+      typeof MediaRecorder === "undefined"
+    ) {
+      setError("Export rotation indisponible sur ce navigateur.");
+      return;
+    }
+    let cancelled = false;
+    let raf = 0;
+    try {
+      const cam0 = vp.getCamera();
+      const pos0 = cam0.position as number[];
+      const fp = cam0.focalPoint as number[];
+      const up = cam0.viewUp as number[];
+      const FRAMES = 90;
+      const FPS = 30;
+      const angles = turntableAngles(FRAMES);
+      const stream = (canvas as any).captureStream(FPS);
+      const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+        ? "video/webm;codecs=vp9"
+        : "video/webm";
+      const recorder = new MediaRecorder(stream, { mimeType: mime });
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = e => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      recorder.onstop = () => {
+        try {
+          const blob = new Blob(chunks, { type: "video/webm" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = `rotation-3d-${Date.now()}.webm`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+        } catch {}
+      };
+      recorder.start();
+      let i = 0;
+      const step = () => {
+        if (cancelled || i >= angles.length) {
+          try {
+            vp.setCamera(cam0);
+            vp.render();
+          } catch {}
+          try {
+            recorder.stop();
+          } catch {}
+          return;
+        }
+        try {
+          const position = orbitAroundFocalPoint(pos0, fp, up, angles[i]);
+          vp.setCamera({ position, focalPoint: fp, viewUp: up });
+          vp.render();
+        } catch {}
+        i++;
+        raf = requestAnimationFrame(step);
+      };
+      step();
+    } catch {
+      /* caméra/enregistrement indisponible — export ignoré */
+    }
+    return () => {
+      cancelled = true;
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [turntableNonce, mode]);
 
   // Scissor editing (« Scissor Editing » de Horos) : découpe du volume 3D par
   // des plans de coupe vtk recadrant sur la boîte centrale (fraction retirée de

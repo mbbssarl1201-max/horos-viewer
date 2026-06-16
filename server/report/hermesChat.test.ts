@@ -51,6 +51,25 @@ describe("assembleMessages", () => {
     expect(msgs).toHaveLength(7);
     expect(msgs[2]).toEqual({ role: "user", content: "m15" });
   });
+  it("avec bloc connaissances → message DONNÉES inséré après le contexte", () => {
+    const hist = [
+      { role: "user" as const, content: "Q1" },
+      { role: "assistant" as const, content: "R1" },
+    ];
+    const msgs = assembleMessages("CTX", hist, 12, "BLOC-CONNAISSANCES");
+    expect(msgs).toHaveLength(5);
+    expect(msgs[2].role).toBe("user");
+    expect(msgs[2].content).toContain("BLOC-CONNAISSANCES");
+    expect(msgs[3]).toEqual({ role: "user", content: "Q1" });
+  });
+  it("bloc connaissances vide → traité comme absent", () => {
+    const hist = [
+      { role: "user" as const, content: "Q1" },
+      { role: "assistant" as const, content: "R1" },
+    ];
+    const msgs = assembleMessages("CTX", hist, 12, "");
+    expect(msgs).toHaveLength(4);
+  });
 });
 
 describe("chatViaOllama", () => {

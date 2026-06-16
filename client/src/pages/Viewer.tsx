@@ -3,6 +3,8 @@ import CornerstoneViewer, {
   type CornerstoneViewerHandle,
 } from "@/components/CornerstoneViewer";
 import VolumeViewer, { PRESETS_3D } from "@/components/VolumeViewer";
+import TransferFunctionEditor from "@/components/TransferFunctionEditor";
+import { type OpacityPoint } from "@/lib/transferFunction";
 import { SLAB_MODES, type SlabMode } from "@/lib/slabBlend";
 import type { ClipPlaneConfig, ClipAxis } from "@/lib/clipPlanes";
 import { shouldReselectSeries } from "@/lib/seriesSelection";
@@ -354,6 +356,7 @@ export default function Viewer() {
     { axis: "y", enabled: false, position: 0.5, invert: false },
     { axis: "z", enabled: false, position: 0.5, invert: false },
   ]);
+  const [opacityPoints, setOpacityPoints] = useState<OpacityPoint[]>([]);
   const updateClip = (axis: ClipAxis, patch: Partial<ClipPlaneConfig>) =>
     setClipPlanes(prev =>
       prev.map(c => (c.axis === axis ? { ...c, ...patch } : c))
@@ -2286,6 +2289,13 @@ export default function Viewer() {
                 </div>
               ))}
             </div>
+            <div className="border-l border-border pl-2 ml-1">
+              <div className="text-[10px] mb-0.5">Opacité (fenêtrage 3D)</div>
+              <TransferFunctionEditor
+                points={opacityPoints}
+                onChange={setOpacityPoints}
+              />
+            </div>
             <Separator orientation="vertical" className="h-7 mx-1" />
             {/* Fly-thru / endoscopie virtuelle (3D Endoscopy de Horos) */}
             <button
@@ -3053,6 +3063,7 @@ export default function Viewer() {
                   surface3d={surface3d}
                   turntableNonce={turntableNonce}
                   clipPlanes={clipPlanes}
+                  opacityPoints={opacityPoints}
                   surfaceIso={suggestIsoForModality(study?.modality)}
                   flyThruNonce={flyThruNonce}
                   cropFraction={cropFraction}

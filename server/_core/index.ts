@@ -294,6 +294,93 @@ async function startServer() {
       }
     }
   });
+  // Rédaction assistée du CR en streaming (modèle LOCAL). SSE. Auth = éditeur de
+  // CR (admin|radiologist), comme adminProcedure. RAG + anti-invention côté serveur.
+  app.post("/api/hermes/report-assist/stream", async (req, res) => {
+    if (req.headers["sec-fetch-site"] === "cross-site") {
+      res.status(403).json({ error: "Cross-site request blocked" });
+      return;
+    }
+    const { sdk } = await import("./sdk");
+    let user;
+    try {
+      user = await sdk.authenticateRequest(req as any);
+    } catch {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (user.role !== "admin" && user.role !== "radiologist") {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    const { ASSIST_ACTIONS } = await import("../report/reportAssist");
+    const body = req.body ?? {};
+    const studyId = Number(body.studyId);
+    const action = body.action;
+    const currentText =
+      typeof body.currentText === "string" ? body.currentText : "";
+    if (!Number.isInteger(studyId) || !ASSIST_ACTIONS.includes(action)) {
+      res.status(400).json({ error: "Bad request" });
+      return;
+    }
+
+    const { prepareReportAssist } = await import("../report/reportAssist");
+    const { streamOllamaChat } = await import("../knowledge/stream");
+    let prep;
+    try {
+      prep = await prepareReportAssist(
+        { studyId, action, currentText },
+        { user: { id: user.id } }
+      );
+    } catch (err: any) {
+      const code =
+        err?.code === "TOO_MANY_REQUESTS"
+          ? 429
+          : err?.code === "NOT_FOUND"
+            ? 404
+            : 500;
+      res.status(code).json({ error: err?.message ?? "Erreur" });
+      return;
+    }
+    if (prep.useClaude) {
+      res.status(409).json({ error: "streaming indisponible (backend cloud)" });
+      return;
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    const send = (obj: unknown) =>
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    const abortCtrl = new AbortController();
+    req.on("close", () => abortCtrl.abort());
+
+    try {
+      await streamOllamaChat(
+        prep.messages,
+        delta => send({ t: delta }),
+        abortCtrl.signal
+      );
+      const { recordAccess } = await import("../db");
+      await recordAccess({
+        userId: user.id,
+        action: "ai.hermes.assist",
+        studyId: prep.study.id,
+        detail: `${action}:${prep.model}`,
+        ipAddress: req.ip ?? null,
+      });
+      send({ done: true, model: prep.model });
+      res.end();
+    } catch (err: any) {
+      logger.error("hermes.assist_stream_failed", { error: String(err) });
+      if (!res.headersSent) res.status(500).json({ error: "stream failed" });
+      else {
+        send({ error: "stream interrompu" });
+        res.end();
+      }
+    }
+  });
   // Export routes (ZIP DICOM + PDF) - must be before tRPC
   app.get("/api/export/dicom-zip/:studyId", async (req, res) => {
     try {

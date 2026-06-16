@@ -9,6 +9,10 @@ import {
   petColormapVtkName,
   DEFAULT_PET_COLORMAP_ID,
 } from "@/lib/petFusion";
+import {
+  normalizeOpacityPoints,
+  type OpacityPoint,
+} from "@/lib/transferFunction";
 
 // Ré-export pour compat (Viewer.tsx importe PRESETS_3D depuis ce module).
 export { PRESETS_3D } from "@/lib/volumePresets3d";
@@ -54,6 +58,8 @@ interface VolumeViewerProps {
   surface3d?: boolean;
   /** Seuil iso (unités scalaires/HU) pour le rendu surfacique. Défaut ~300 (os CT). */
   surfaceIso?: number;
+  /** Mode "3d" : surcharge la courbe d'opacité (fenêtrage 3D). Vide = preset. */
+  opacityPoints?: OpacityPoint[];
   /** Compteur : chaque incrément déclenche une animation fly-thru (endoscopie). */
   flyThruNonce?: number;
   /** Mode "3d" : à chaque incrément, exporte une vidéo de rotation (turntable). */
@@ -257,6 +263,7 @@ export default function VolumeViewer({
   realistic3d = true,
   surface3d = false,
   surfaceIso = 300,
+  opacityPoints,
   flyThruNonce = 0,
   turntableNonce = 0,
   cropFraction = 0,
@@ -992,6 +999,42 @@ export default function VolumeViewer({
       cancelled = true;
     };
   }, [cropFraction, mode, preset3d, surface3d, clipSig]);
+
+  // Surcharge de la courbe d'opacité (éditeur de fonction de transfert) : après
+  // l'application du preset, on réécrit la scalar opacity de l'acteur volume à
+  // partir des points fournis. Vide → on laisse le preset. Best-effort.
+  const opacitySig = (opacityPoints ?? [])
+    .map(p => `${p.value}:${p.opacity}`)
+    .join("|");
+  useEffect(() => {
+    if (mode !== "3d") return;
+    const pts = normalizeOpacityPoints(opacityPoints ?? []);
+    if (pts.length < 2) return;
+    let raf = 0;
+    const apply = () => {
+      try {
+        const vp = engineRef.current?.getViewport?.("VR_3D") as any;
+        const actors = vp?.getActors?.();
+        const actor =
+          actors?.[0]?.actor ?? actors?.[0]?.volumeActor ?? actors?.[0];
+        const property = actor?.getProperty?.();
+        const ofun = property?.getScalarOpacity?.(0);
+        if (!ofun?.addPoint) return;
+        ofun.removeAllPoints?.();
+        for (const p of pts) ofun.addPoint(p.value, p.opacity);
+        vp.render?.();
+      } catch {
+        /* acteur pas prêt / API indispo — ignoré */
+      }
+    };
+    // Laisse le preset s'appliquer d'abord (potentiellement asynchrone), puis surcharge.
+    raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(apply);
+    });
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [mode, preset3d, opacitySig]);
 
   // Changement d'opacité / colormap de la fusion PET : ré-appliquer SANS
   // reconstruire le moteur (rapide, glissement de curseur fluide). N'agit que si

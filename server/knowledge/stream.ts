@@ -25,10 +25,17 @@ type ChatMsg = { role: string; content: string };
  */
 export async function streamOllamaChat(
   messages: ChatMsg[],
-  onToken: (delta: string) => void
+  onToken: (delta: string) => void,
+  externalSignal?: AbortSignal
 ): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000);
+  // Si le client se déconnecte, on avorte le flux Ollama (pas de CPU gaspillé).
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", onExternalAbort);
+  }
   let full = "";
   try {
     const resp = await fetch(`${ENV.ollamaUrl}/api/chat`, {
@@ -71,5 +78,7 @@ export async function streamOllamaChat(
     return full;
   } finally {
     clearTimeout(timeout);
+    if (externalSignal)
+      externalSignal.removeEventListener("abort", onExternalAbort);
   }
 }

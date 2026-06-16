@@ -202,6 +202,12 @@ async function startServer() {
   // Chat Hermès en streaming (tokens token-par-token, modèle LOCAL). SSE.
   // Auth = medicalProcedure (clinique). Anti-IDOR + rate-limit dans prepareHermesChat.
   app.post("/api/hermes/chat/stream", async (req, res) => {
+    // CSRF (audit H2) : route PHI state-changing, appelée uniquement same-origin
+    // par la SPA. Un contexte cross-site est rejeté (même garde que /api/trpc).
+    if (req.headers["sec-fetch-site"] === "cross-site") {
+      res.status(403).json({ error: "Cross-site request blocked" });
+      return;
+    }
     const { sdk } = await import("./sdk");
     const { hasMedicalAccess } = await import("../rbac");
     let user;
@@ -257,8 +263,17 @@ async function startServer() {
     const send = (obj: unknown) =>
       res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
+    // Si le client ferme la connexion, on avorte le flux Ollama (pas de CPU
+    // gaspillé sur le VPS contendu).
+    const abortCtrl = new AbortController();
+    req.on("close", () => abortCtrl.abort());
+
     try {
-      await streamOllamaChat(prep.messages, delta => send({ t: delta }));
+      await streamOllamaChat(
+        prep.messages,
+        delta => send({ t: delta }),
+        abortCtrl.signal
+      );
       const { recordAccess } = await import("../db");
       await recordAccess({
         userId: user.id,

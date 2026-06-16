@@ -145,6 +145,7 @@ export interface RunHermesChatInput {
 export interface HermesSource {
   source: string;
   heading: string | null;
+  content: string;
   score: number;
 }
 
@@ -191,6 +192,7 @@ export async function prepareHermesChat(
       sources = selected.map(s => ({
         source: s.source,
         heading: s.heading,
+        content: s.content,
         score: s.score,
       }));
     } catch {

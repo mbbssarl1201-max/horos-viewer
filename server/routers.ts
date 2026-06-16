@@ -1999,7 +1999,9 @@ export const appRouter = router({
         }
         const emb = await embedText(input.query);
         const hits = await searchSimilar(emb, input.k);
-        const results = selectRelevant(hits);
+        // Recherche directe : on garde tous les résultats au-dessus du seuil
+        // (jusqu'à k), pas la borne d'injection LLM (top-4).
+        const results = selectRelevant(hits, { maxChunks: input.k });
         await recordAccess({
           userId: ctx.user.id,
           action: "knowledge.search",

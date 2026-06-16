@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 interface Source {
   source: string;
   heading: string | null;
+  content: string;
   score: number;
 }
 interface Msg {
@@ -71,25 +72,29 @@ export default function HermesChatPanel({ studyId, onClose }: Props) {
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split("\n\n");
-        buffer = parts.pop() ?? "";
-        for (const part of parts) {
-          const line = part.trim();
-          if (!line.startsWith("data:")) continue;
-          const json = line.slice(5).trim();
-          try {
-            const evt = JSON.parse(json);
-            if (typeof evt.t === "string") appendToLast(evt.t);
-            else if (evt.done) setLastSources(evt.sources ?? []);
-            else if (evt.error) appendToLast(`\n⚠️ ${evt.error}`);
-          } catch {
-            /* ignore */
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+          for (const part of parts) {
+            const line = part.trim();
+            if (!line.startsWith("data:")) continue;
+            const json = line.slice(5).trim();
+            try {
+              const evt = JSON.parse(json);
+              if (typeof evt.t === "string") appendToLast(evt.t);
+              else if (evt.done) setLastSources(evt.sources ?? []);
+              else if (evt.error) appendToLast(`\n⚠️ ${evt.error}`);
+            } catch {
+              /* ignore */
+            }
           }
         }
+      } finally {
+        reader.cancel().catch(() => {});
       }
     } catch {
       // Repli : mutation tRPC non-streaming.
@@ -149,10 +154,16 @@ export default function HermesChatPanel({ studyId, onClose }: Props) {
               <div className="mt-1 text-[10px] text-muted-foreground border-t border-border pt-1">
                 <div className="opacity-70">📚 Sources consultées</div>
                 {m.sources.map((s, j) => (
-                  <div key={j}>
-                    • {s.source}
-                    {s.heading ? ` › ${s.heading}` : ""} ({s.score.toFixed(2)})
-                  </div>
+                  <details key={j}>
+                    <summary className="cursor-pointer">
+                      • {s.source}
+                      {s.heading ? ` › ${s.heading}` : ""} ({s.score.toFixed(2)}
+                      )
+                    </summary>
+                    <div className="whitespace-pre-wrap mt-0.5 opacity-80">
+                      {s.content}
+                    </div>
+                  </details>
                 ))}
               </div>
             )}

@@ -1,12 +1,14 @@
 import type { Express } from "express";
-import { ENV } from "./env";
 import { sdk } from "./sdk";
 import { hasMedicalAccess } from "../rbac";
+import { isStorageConfigured, storageGetObject } from "../storage";
+import { logger } from "./logger";
+import { captureException } from "./sentry";
 
 export function registerStorageProxy(app: Express) {
   app.get("/manus-storage/*", async (req, res) => {
     // Stored objects are raw patient DICOM (PHI). Require an authenticated
-    // session with a clinical role before handing out a signed download URL.
+    // session with a clinical role before streaming any bytes.
     let user;
     try {
       user = await sdk.authenticateRequest(req as any);
@@ -25,38 +27,42 @@ export function registerStorageProxy(app: Express) {
       return;
     }
 
-    if (!ENV.forgeApiUrl || !ENV.forgeApiKey) {
+    if (!isStorageConfigured()) {
       res.status(500).send("Storage proxy not configured");
       return;
     }
 
     try {
-      const forgeUrl = new URL(
-        "v1/storage/presign/get",
-        ENV.forgeApiUrl.replace(/\/+$/, "") + "/",
-      );
-      forgeUrl.searchParams.set("path", key);
+      // Stream the object straight from S3/MinIO to the client. The bucket
+      // stays private (no presigned URL handed to the browser).
+      const { body } = await storageGetObject(key);
 
-      const forgeResp = await fetch(forgeUrl, {
-        headers: { Authorization: `Bearer ${ENV.forgeApiKey}` },
+      // Hardening: these bytes are served same-origin, so a malicious file
+      // (e.g. HTML masquerading as a DICOM) must never be rendered/executed in
+      // the app origin. Force an opaque, non-sniffable, download-only response
+      // and ignore the stored Content-Type. Cornerstone loads via fetch/XHR,
+      // so `attachment` doesn't affect viewing.
+      // Les objets DICOM sont IMMUABLES (clé de stockage = contenu) et volumineux
+      // (CT non compressé ~150 Mo/série). On autorise le cache PRIVÉ du navigateur
+      // (jamais un cache partagé/CDN) pour que la ré-ouverture, le scroll et les
+      // bascules 2D/MPR/3D ne re-téléchargent pas la série → chargement quasi
+      // instantané après le 1er affichage. `private` + l'auth same-origin gardent
+      // la PHI hors des caches partagés ; le cache disque reste sur la machine du
+      // clinicien (comportement standard d'un viewer PACS).
+      res.set("Cache-Control", "private, max-age=86400, immutable");
+      res.set("Content-Type", "application/octet-stream");
+      res.set("Content-Disposition", "attachment");
+      res.set("X-Content-Type-Options", "nosniff");
+      res.set("Content-Security-Policy", "default-src 'none'; sandbox");
+      body.on("error", err => {
+        console.error("[StorageProxy] stream error:", err);
+        if (!res.headersSent) res.status(502).send("Storage stream error");
+        else res.destroy(err);
       });
-
-      if (!forgeResp.ok) {
-        const body = await forgeResp.text().catch(() => "");
-        console.error(`[StorageProxy] forge error: ${forgeResp.status} ${body}`);
-        res.status(502).send("Storage backend error");
-        return;
-      }
-
-      const { url } = (await forgeResp.json()) as { url: string };
-      if (!url) {
-        res.status(502).send("Empty signed URL from backend");
-        return;
-      }
-
-      res.set("Cache-Control", "no-store");
-      res.redirect(307, url);
+      body.pipe(res);
     } catch (err) {
+      logger.error("storageProxy.failed", { error: String(err) });
+      captureException(err);
       console.error("[StorageProxy] failed:", err);
       res.status(502).send("Storage proxy error");
     }

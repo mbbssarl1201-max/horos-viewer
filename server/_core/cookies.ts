@@ -42,7 +42,11 @@ export function getSessionCookieOptions(
   return {
     httpOnly: true,
     path: "/",
-    sameSite: "none",
+    // L'app est désormais self-hosted same-origin (plus de flux cross-site
+    // hérité de Manus) : `lax` réduit la surface CSRF tout en laissant passer la
+    // navigation de premier niveau. (`none` exigeait `secure` et ouvrait le
+    // cookie aux requêtes cross-site.) Cf. audit 2026-06-15.
+    sameSite: "lax",
     secure: isSecureRequest(req),
   };
 }

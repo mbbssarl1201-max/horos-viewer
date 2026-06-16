@@ -1,20 +1,45 @@
-// Preconfigured storage helpers for Manus WebDev templates
-// Uploads via Forge Server presigned URL to S3 (PUT direct).
-// Downloads return /manus-storage/{key} paths served via 307 redirect.
+// Self-hosted object storage on an S3-compatible backend (MinIO).
+// Replaces the Manus "Forge" presigned-S3 service.
+//
+// Stored objects are raw patient DICOM (PHI). Downloads are served through the
+// authenticated `/manus-storage/{key}` proxy (see storageProxy.ts), which
+// streams bytes from S3 — the bucket is never exposed publicly.
 
+import { Readable } from "stream";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { ENV } from "./_core/env";
 
-function getForgeConfig() {
-  const forgeUrl = ENV.forgeApiUrl;
-  const forgeKey = ENV.forgeApiKey;
+let _s3: S3Client | null = null;
 
-  if (!forgeUrl || !forgeKey) {
+function getS3(): { client: S3Client; bucket: string } {
+  if (!ENV.s3Endpoint || !ENV.s3AccessKey || !ENV.s3SecretKey) {
     throw new Error(
-      "Storage config missing: set BUILT_IN_FORGE_API_URL and BUILT_IN_FORGE_API_KEY",
+      "Storage config missing: set S3_ENDPOINT, S3_ACCESS_KEY and S3_SECRET_KEY"
     );
   }
+  if (!_s3) {
+    _s3 = new S3Client({
+      endpoint: ENV.s3Endpoint,
+      region: ENV.s3Region,
+      forcePathStyle: ENV.s3ForcePathStyle,
+      credentials: {
+        accessKeyId: ENV.s3AccessKey,
+        secretAccessKey: ENV.s3SecretKey,
+      },
+    });
+  }
+  return { client: _s3, bucket: ENV.s3Bucket };
+}
 
-  return { forgeUrl: forgeUrl.replace(/\/+$/, ""), forgeKey };
+/** True when the storage backend is configured (used to gate the proxy). */
+export function isStorageConfigured(): boolean {
+  return Boolean(ENV.s3Endpoint && ENV.s3AccessKey && ENV.s3SecretKey);
 }
 
 function normalizeKey(relKey: string): string {
@@ -31,67 +56,85 @@ function appendHashSuffix(relKey: string): string {
 export async function storagePut(
   relKey: string,
   data: Buffer | Uint8Array | string,
-  contentType = "application/octet-stream",
+  contentType = "application/octet-stream"
 ): Promise<{ key: string; url: string }> {
-  const { forgeUrl, forgeKey } = getForgeConfig();
+  const { client, bucket } = getS3();
   const key = appendHashSuffix(normalizeKey(relKey));
 
-  // 1. Get presigned PUT URL from Forge
-  const presignUrl = new URL("v1/storage/presign/put", forgeUrl + "/");
-  presignUrl.searchParams.set("path", key);
+  const body = typeof data === "string" ? Buffer.from(data) : Buffer.from(data);
 
-  const presignResp = await fetch(presignUrl, {
-    headers: { Authorization: `Bearer ${forgeKey}` },
-  });
-
-  if (!presignResp.ok) {
-    const msg = await presignResp.text().catch(() => presignResp.statusText);
-    throw new Error(`Storage presign failed (${presignResp.status}): ${msg}`);
-  }
-
-  const { url: s3Url } = (await presignResp.json()) as { url: string };
-  if (!s3Url) throw new Error("Forge returned empty presign URL");
-
-  // 2. PUT file directly to S3
-  const blob =
-    typeof data === "string"
-      ? new Blob([data], { type: contentType })
-      : new Blob([data as any], { type: contentType });
-
-  const uploadResp = await fetch(s3Url, {
-    method: "PUT",
-    headers: { "Content-Type": contentType },
-    body: blob,
-  });
-
-  if (!uploadResp.ok) {
-    throw new Error(`Storage upload to S3 failed (${uploadResp.status})`);
-  }
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+    })
+  );
 
   return { key, url: `/manus-storage/${key}` };
 }
 
-export async function storageGet(relKey: string): Promise<{ key: string; url: string }> {
+export async function storageGet(
+  relKey: string
+): Promise<{ key: string; url: string }> {
   const key = normalizeKey(relKey);
   return { key, url: `/manus-storage/${key}` };
 }
 
+/**
+ * Presigned GET URL — for server-internal use (e.g. the export ZIP route fetches
+ * objects over the internal network). Not handed to browsers.
+ */
 export async function storageGetSignedUrl(relKey: string): Promise<string> {
-  const { forgeUrl, forgeKey } = getForgeConfig();
+  const { client, bucket } = getS3();
   const key = normalizeKey(relKey);
+  return getSignedUrl(
+    client,
+    new GetObjectCommand({ Bucket: bucket, Key: key }),
+    { expiresIn: 300 }
+  );
+}
 
-  const getUrl = new URL("v1/storage/presign/get", forgeUrl + "/");
-  getUrl.searchParams.set("path", key);
+/**
+ * Fetch an object's bytes as a stream for the authenticated download proxy to
+ * pipe to the client, keeping the bucket private.
+ */
+export async function storageGetObject(
+  relKey: string
+): Promise<{ body: Readable; contentType?: string }> {
+  const { client, bucket } = getS3();
+  const key = normalizeKey(relKey);
+  const out = await client.send(
+    new GetObjectCommand({ Bucket: bucket, Key: key })
+  );
+  return {
+    body: out.Body as Readable,
+    contentType: out.ContentType,
+  };
+}
 
-  const resp = await fetch(getUrl, {
-    headers: { Authorization: `Bearer ${forgeKey}` },
-  });
-
-  if (!resp.ok) {
-    const msg = await resp.text().catch(() => resp.statusText);
-    throw new Error(`Storage signed URL failed (${resp.status}): ${msg}`);
+/**
+ * Récupère un objet en Buffer complet (usage serveur interne : rastérisation
+ * DICOM pour le compte rendu). Lit le stream renvoyé par storageGetObject.
+ */
+export async function storageGetBuffer(relKey: string): Promise<Buffer> {
+  const { body } = await storageGetObject(relKey);
+  const chunks: Buffer[] = [];
+  for await (const chunk of body) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
+  return Buffer.concat(chunks);
+}
 
-  const { url } = (await resp.json()) as { url: string };
-  return url;
+/**
+ * Delete an object. Called when a study is removed so its DICOM files don't
+ * linger in the bucket as orphaned PHI (nLPD/GDPR right-to-erasure). Idempotent
+ * on S3 — deleting a missing key is a no-op. A falsy key is skipped entirely.
+ */
+export async function storageDelete(relKey: string): Promise<void> {
+  if (!relKey) return;
+  const { client, bucket } = getS3();
+  const key = normalizeKey(relKey);
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }

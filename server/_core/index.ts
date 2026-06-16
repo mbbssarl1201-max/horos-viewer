@@ -6,9 +6,12 @@ import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
+import { registerDicomwebProxy } from "../dicomwebProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { logger } from "./logger";
+import { initSentry } from "./sentry";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -40,24 +43,47 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-  // Rate limiting (DoS / abuse mitigation). General cap on the whole API,
-  // plus a tighter cap on the PHI export routes that stream patient data.
+  // Rate limiting (DoS / abuse mitigation). DICOM import is ONE request per
+  // instance, so a single study (often 100s–1000s of slices) bursts many
+  // requests — the cap must be high enough not to cut a legitimate import off
+  // mid-upload. Defaults are generous; tune via env without a rebuild.
+  const RL_WINDOW_MS = parseInt(
+    process.env.RATE_LIMIT_WINDOW_MS ?? `${15 * 60 * 1000}`
+  );
+  const RL_MAX = parseInt(process.env.RATE_LIMIT_MAX ?? "6000");
+  const RL_EXPORT_MAX = parseInt(process.env.RATE_LIMIT_EXPORT_MAX ?? "120");
   const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 300,
+    windowMs: RL_WINDOW_MS,
+    limit: RL_MAX,
     standardHeaders: "draft-7",
     legacyHeaders: false,
     message: { error: "Too many requests, please try again later." },
   });
   const exportLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 30,
+    windowMs: RL_WINDOW_MS,
+    limit: RL_EXPORT_MAX,
     standardHeaders: "draft-7",
     legacyHeaders: false,
     message: { error: "Too many export requests, please try again later." },
   });
+  // Anti-brute-force dédié sur la connexion (audit H3) : le limiteur global
+  // (RL_MAX, 6000/fenêtre) est bien trop large pour protéger `auth.login`. Comme
+  // le client tRPC BATCHE les appels (httpBatchLink), on ne peut pas cibler un
+  // chemin fixe ; on monte le limiteur sur tout `/api/trpc` mais on ne COMPTE
+  // que les requêtes dont l'URL référence `auth.login` (robuste au batching,
+  // même si l'attaquant combine login + autre procédure). Clé = IP.
+  const RL_LOGIN_MAX = parseInt(process.env.RATE_LIMIT_LOGIN_MAX ?? "10");
+  const loginLimiter = rateLimit({
+    windowMs: RL_WINDOW_MS,
+    limit: RL_LOGIN_MAX,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    skip: req => !req.originalUrl.includes("auth.login"),
+    message: { error: "Too many login attempts, please try again later." },
+  });
   app.use("/api", apiLimiter);
   app.use("/api/export", exportLimiter);
+  app.use("/api/trpc", loginLimiter);
 
   // CSRF mitigation for the PHI export GET routes: a cross-site context (e.g. a
   // malicious page triggering a navigation/download) is rejected. Same-origin
@@ -71,8 +97,108 @@ async function startServer() {
     next();
   });
 
+  // CSRF mitigation for the tRPC API (audit H2): tRPC mutations are
+  // state-changing and PHI-bearing, and are only ever called same-origin by the
+  // SPA. A cross-site context is rejected. As with the export guard, an absent
+  // header (older browsers, non-browser clients) and same-origin/same-site/none
+  // are allowed — the Bearer-authenticated public API lives under /api/v1, not
+  // /api/trpc, so it is unaffected.
+  app.use("/api/trpc", (req, res, next) => {
+    if (req.headers["sec-fetch-site"] === "cross-site") {
+      res.status(403).json({ error: "Cross-site request blocked" });
+      return;
+    }
+    next();
+  });
+
+  // Public health probe (no auth, no PHI). Returns 200 when DB + storage are
+  // reachable, 503 otherwise — suitable for Docker/Traefik healthchecks.
+  const startedAt = Date.now();
+  app.get("/healthz", async (_req, res) => {
+    let dbOk = false;
+    let storageOk = false;
+    try {
+      const { getDb } = await import("../db");
+      const db = await getDb();
+      if (db) {
+        const { sql } = await import("drizzle-orm");
+        await db.execute(sql`SELECT 1`);
+        dbOk = true;
+      }
+    } catch {
+      dbOk = false;
+    }
+    try {
+      const { isStorageConfigured } = await import("../storage");
+      // Light check: configured is enough here — a full S3 round-trip on every
+      // probe would add load and a network dependency to liveness.
+      storageOk = isStorageConfigured();
+    } catch {
+      storageOk = false;
+    }
+    const healthy = dbOk && storageOk;
+    res.status(healthy ? 200 : 503).json({
+      status: healthy ? "ok" : "degraded",
+      db: dbOk ? "up" : "down",
+      storage: storageOk ? "ok" : "unconfigured",
+      uptime: Math.floor((Date.now() - startedAt) / 1000),
+    });
+  });
+
   registerStorageProxy(app);
+  registerDicomwebProxy(app);
   registerOAuthRoutes(app);
+
+  // Authenticated CSV export of the audit trail (access_logs) — admin only.
+  // Mirrors the audit.export tRPC procedure but streams a downloadable CSV.
+  app.get("/api/audit/export.csv", async (req, res) => {
+    try {
+      const { sdk } = await import("./sdk");
+      const { isAdmin } = await import("../rbac");
+      let user;
+      try {
+        user = await sdk.authenticateRequest(req as any);
+      } catch {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      if (!isAdmin(user)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      const { queryAuditLogs, buildAuditCsv } = await import("../audit");
+      const { recordAccess } = await import("../db");
+      const parseDate = (v: unknown): Date | undefined => {
+        if (typeof v !== "string" || !v) return undefined;
+        const d = new Date(v);
+        return isNaN(d.getTime()) ? undefined : d;
+      };
+      const limitRaw = parseInt(String(req.query.limit ?? ""), 10);
+      const rows = await queryAuditLogs({
+        from: parseDate(req.query.from),
+        to: parseDate(req.query.to),
+        limit: Number.isNaN(limitRaw) ? undefined : limitRaw,
+      });
+      await recordAccess({
+        userId: user.id,
+        action: "audit.export.csv",
+        studyId: null,
+        detail: `rows=${rows.length}`,
+        ipAddress: req.ip ?? null,
+      });
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="audit-logs.csv"`
+      );
+      res.send(buildAuditCsv(rows));
+    } catch (err: any) {
+      logger.error("audit.export_csv_failed", { error: String(err) });
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Audit export failed" });
+      }
+    }
+  });
   // Export routes (ZIP DICOM + PDF) - must be before tRPC
   app.get("/api/export/dicom-zip/:studyId", async (req, res) => {
     try {
@@ -82,18 +208,33 @@ async function startServer() {
       try {
         user = await sdk.authenticateRequest(req as any);
       } catch {
-        res.status(401).json({ error: "Unauthorized" }); return;
+        res.status(401).json({ error: "Unauthorized" });
+        return;
       }
-      if (!hasMedicalAccess(user)) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!hasMedicalAccess(user)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
 
       const studyId = parseInt(req.params.studyId);
-      if (isNaN(studyId)) { res.status(400).json({ error: "Invalid study ID" }); return; }
+      if (isNaN(studyId)) {
+        res.status(400).json({ error: "Invalid study ID" });
+        return;
+      }
 
-      const { listSeriesByStudy, listInstancesBySeries, getStudyById, recordAccess } = await import("../db");
+      const {
+        listSeriesByStudy,
+        listInstancesBySeries,
+        getStudyById,
+        recordAccess,
+      } = await import("../db");
       const { storageGetSignedUrl } = await import("../storage");
 
       const study = await getStudyById(studyId);
-      if (!study) { res.status(404).json({ error: "Study not found" }); return; }
+      if (!study) {
+        res.status(404).json({ error: "Study not found" });
+        return;
+      }
 
       await recordAccess({
         userId: user.id,
@@ -103,31 +244,58 @@ async function startServer() {
       });
 
       const seriesList = await listSeriesByStudy(studyId);
-      if (seriesList.length === 0) { res.status(404).json({ error: "No series found" }); return; }
+      if (seriesList.length === 0) {
+        res.status(404).json({ error: "No series found" });
+        return;
+      }
 
       const archiver = (await import("archiver")).default;
       const archive = archiver("zip", { zlib: { level: 5 } });
 
       res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", `attachment; filename="study_${studyId}_dicom.zip"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="study_${studyId}_dicom.zip"`
+      );
       archive.pipe(res);
 
+      // Liste de toutes les instances à inclure, puis récupération depuis MinIO
+      // PAR LOTS PARALLÈLES (≈8x plus rapide que séquentiel sur les grandes
+      // séries — c'est de l'I/O réseau). On ajoute chaque fichier au ZIP au fur
+      // et à mesure (archiver streame vers la réponse).
+      const tasks: { key: string; name: string }[] = [];
       for (const s of seriesList) {
         const instanceList = await listInstancesBySeries(s.id);
         for (const inst of instanceList) {
           if (inst.storageKey) {
-            try {
-              const signedUrl = await storageGetSignedUrl(inst.storageKey);
-              const fileResp = await fetch(signedUrl);
-              if (fileResp.ok) {
-                const buffer = Buffer.from(await fileResp.arrayBuffer());
-                const filename = `series_${s.seriesNumber || s.id}/${inst.sopInstanceUid || inst.id}.dcm`;
-                archive.append(buffer, { name: filename });
-              }
-            } catch (e) {
-              console.warn(`[Export] Failed to fetch instance ${inst.id}:`, e);
-            }
+            tasks.push({
+              key: inst.storageKey,
+              name: `series_${s.seriesNumber || s.id}/${inst.sopInstanceUid || inst.id}.dcm`,
+            });
           }
+        }
+      }
+      const CONCURRENCY = 8;
+      for (let i = 0; i < tasks.length; i += CONCURRENCY) {
+        const batch = tasks.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(
+          batch.map(async t => {
+            try {
+              const signedUrl = await storageGetSignedUrl(t.key);
+              const fileResp = await fetch(signedUrl);
+              if (!fileResp.ok) return null;
+              return {
+                name: t.name,
+                buffer: Buffer.from(await fileResp.arrayBuffer()),
+              };
+            } catch (e) {
+              console.warn(`[Export] échec récupération ${t.key}:`, e);
+              return null;
+            }
+          })
+        );
+        for (const r of results) {
+          if (r) archive.append(r.buffer, { name: r.name });
         }
       }
 
@@ -147,16 +315,26 @@ async function startServer() {
       try {
         user = await sdk.authenticateRequest(req as any);
       } catch {
-        res.status(401).json({ error: "Unauthorized" }); return;
+        res.status(401).json({ error: "Unauthorized" });
+        return;
       }
-      if (!hasMedicalAccess(user)) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!hasMedicalAccess(user)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
 
       const studyId = parseInt(req.params.studyId);
-      if (isNaN(studyId)) { res.status(400).json({ error: "Invalid study ID" }); return; }
+      if (isNaN(studyId)) {
+        res.status(400).json({ error: "Invalid study ID" });
+        return;
+      }
 
       const { getStudyById, recordAccess } = await import("../db");
       const study = await getStudyById(studyId);
-      if (!study) { res.status(404).json({ error: "Study not found" }); return; }
+      if (!study) {
+        res.status(404).json({ error: "Study not found" });
+        return;
+      }
 
       await recordAccess({
         userId: user.id,
@@ -192,7 +370,11 @@ async function startServer() {
       doc.text(`Modality: ${study.modality || "N/A"}`, 25, 85);
       doc.text(`Description: ${study.studyDescription || "N/A"}`, 25, 92);
       doc.text(`Institution: ${study.institution || "N/A"}`, 25, 99);
-      doc.text(`Referring Physician: ${study.referringPhysician || "N/A"}`, 25, 106);
+      doc.text(
+        `Referring Physician: ${study.referringPhysician || "N/A"}`,
+        25,
+        106
+      );
       doc.text(`Number of Series: ${study.numberOfSeries || 0}`, 25, 113);
       doc.text(`Number of Images: ${study.numberOfInstances || 0}`, 25, 120);
 
@@ -200,11 +382,14 @@ async function startServer() {
       doc.setFontSize(8);
       doc.setTextColor(100, 100, 100);
       doc.text(`Generated: ${new Date().toISOString()}`, 20, 280);
-      doc.text("Horos Medical Imaging Viewer - For diagnostic purposes only", 20, 286);
+      doc.text("MediView - For diagnostic purposes only", 20, 286);
 
       const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="report_study_${studyId}.pdf"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="report_study_${studyId}.pdf"`
+      );
       res.send(pdfBuffer);
     } catch (err: any) {
       if (!res.headersSent) {
@@ -235,9 +420,17 @@ async function startServer() {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
+  // Observability opt-in: enables Sentry only if SENTRY_DSN is set AND
+  // @sentry/node is installed (no-op otherwise). Never throws.
+  await initSentry();
+
   server.listen(port, () => {
+    logger.info("server.started", { port, env: process.env.NODE_ENV });
     console.log(`Server running on http://localhost:${port}/`);
   });
 }
 
-startServer().catch(console.error);
+startServer().catch(err => {
+  logger.error("server.start_failed", { error: String(err) });
+  console.error(err);
+});

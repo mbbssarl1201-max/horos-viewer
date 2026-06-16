@@ -38,11 +38,14 @@ function getAuthHeader(): string {
   return "Basic " + Buffer.from(`${username}:${password}`).toString("base64");
 }
 
-async function orthancFetch(path: string, options: RequestInit = {}): Promise<Response> {
+export async function orthancFetch(
+  path: string,
+  options: RequestInit = {}
+): Promise<Response> {
   const config = getOrthancConfig();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    ...(options.headers as Record<string, string> || {}),
+    ...((options.headers as Record<string, string>) || {}),
   };
 
   const auth = getAuthHeader();
@@ -57,7 +60,11 @@ async function orthancFetch(path: string, options: RequestInit = {}): Promise<Re
 /**
  * Check if Orthanc server is reachable
  */
-export async function checkOrthancConnection(): Promise<{ connected: boolean; version?: string; error?: string }> {
+export async function checkOrthancConnection(): Promise<{
+  connected: boolean;
+  version?: string;
+  error?: string;
+}> {
   try {
     const res = await orthancFetch("/system");
     if (res.ok) {
@@ -85,11 +92,15 @@ export async function qidoSearchStudies(params: {
   if (params.patientId) queryParams.set("PatientID", params.patientId);
   if (params.studyDate) queryParams.set("StudyDate", params.studyDate);
   if (params.modality) queryParams.set("ModalitiesInStudy", params.modality);
-  if (params.accessionNumber) queryParams.set("AccessionNumber", params.accessionNumber);
+  if (params.accessionNumber)
+    queryParams.set("AccessionNumber", params.accessionNumber);
 
-  const res = await orthancFetch(`/dicom-web/studies?${queryParams.toString()}`, {
-    headers: { Accept: "application/dicom+json" },
-  });
+  const res = await orthancFetch(
+    `/dicom-web/studies?${queryParams.toString()}`,
+    {
+      headers: { Accept: "application/dicom+json" },
+    }
+  );
 
   if (!res.ok) {
     throw new Error(`QIDO-RS query failed: ${res.status} ${res.statusText}`);
@@ -101,10 +112,15 @@ export async function qidoSearchStudies(params: {
 /**
  * QIDO-RS: Query for series within a study
  */
-export async function qidoSearchSeries(studyInstanceUID: string): Promise<any[]> {
-  const res = await orthancFetch(`/dicom-web/studies/${studyInstanceUID}/series`, {
-    headers: { Accept: "application/dicom+json" },
-  });
+export async function qidoSearchSeries(
+  studyInstanceUID: string
+): Promise<any[]> {
+  const res = await orthancFetch(
+    `/dicom-web/studies/${studyInstanceUID}/series`,
+    {
+      headers: { Accept: "application/dicom+json" },
+    }
+  );
 
   if (!res.ok) {
     throw new Error(`QIDO-RS series query failed: ${res.status}`);
@@ -116,10 +132,15 @@ export async function qidoSearchSeries(studyInstanceUID: string): Promise<any[]>
 /**
  * WADO-RS: Retrieve study metadata
  */
-export async function wadoGetStudyMetadata(studyInstanceUID: string): Promise<any[]> {
-  const res = await orthancFetch(`/dicom-web/studies/${studyInstanceUID}/metadata`, {
-    headers: { Accept: "application/dicom+json" },
-  });
+export async function wadoGetStudyMetadata(
+  studyInstanceUID: string
+): Promise<any[]> {
+  const res = await orthancFetch(
+    `/dicom-web/studies/${studyInstanceUID}/metadata`,
+    {
+      headers: { Accept: "application/dicom+json" },
+    }
+  );
 
   if (!res.ok) {
     throw new Error(`WADO-RS metadata failed: ${res.status}`);
@@ -151,7 +172,10 @@ export async function wadoGetInstance(
 /**
  * STOW-RS: Store DICOM instances
  */
-export async function stowStore(studyInstanceUID: string, dicomBuffer: Buffer): Promise<any> {
+export async function stowStore(
+  studyInstanceUID: string,
+  dicomBuffer: Buffer
+): Promise<any> {
   const boundary = "----DicomBoundary" + Date.now();
   const body = Buffer.concat([
     Buffer.from(`--${boundary}\r\nContent-Type: application/dicom\r\n\r\n`),
@@ -183,13 +207,16 @@ export async function cFind(params: {
   query: Record<string, string>;
 }): Promise<any[]> {
   // Use Orthanc's REST API to perform C-FIND
-  const res = await orthancFetch(`/modalities/${safeAeTitle(params.aet)}/query`, {
-    method: "POST",
-    body: JSON.stringify({
-      Level: params.level,
-      Query: params.query,
-    }),
-  });
+  const res = await orthancFetch(
+    `/modalities/${safeAeTitle(params.aet)}/query`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        Level: params.level,
+        Query: params.query,
+      }),
+    }
+  );
 
   if (!res.ok) {
     throw new Error(`C-FIND failed: ${res.status} ${res.statusText}`);
@@ -208,7 +235,9 @@ export async function cFind(params: {
   const results: any[] = [];
 
   for (const answerId of answerIds) {
-    const answerRes = await orthancFetch(`/queries/${queryId}/answers/${answerId}/content`);
+    const answerRes = await orthancFetch(
+      `/queries/${queryId}/answers/${answerId}/content`
+    );
     if (answerRes.ok) {
       results.push(await answerRes.json());
     }
@@ -226,13 +255,16 @@ export async function cMove(params: {
   studyInstanceUID: string;
 }): Promise<{ success: boolean; message: string }> {
   // First query to find the study
-  const queryRes = await orthancFetch(`/modalities/${safeAeTitle(params.sourceAet)}/query`, {
-    method: "POST",
-    body: JSON.stringify({
-      Level: "Study",
-      Query: { StudyInstanceUID: params.studyInstanceUID },
-    }),
-  });
+  const queryRes = await orthancFetch(
+    `/modalities/${safeAeTitle(params.sourceAet)}/query`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        Level: "Study",
+        Query: { StudyInstanceUID: params.studyInstanceUID },
+      }),
+    }
+  );
 
   if (!queryRes.ok) {
     return { success: false, message: `Query failed: ${queryRes.status}` };
@@ -261,16 +293,119 @@ export async function cStore(params: {
   targetAet: string;
   orthancId: string;
 }): Promise<{ success: boolean; message: string }> {
-  const res = await orthancFetch(`/modalities/${safeAeTitle(params.targetAet)}/store`, {
-    method: "POST",
-    body: JSON.stringify({ Resources: [params.orthancId] }),
-  });
+  const res = await orthancFetch(
+    `/modalities/${safeAeTitle(params.targetAet)}/store`,
+    {
+      method: "POST",
+      body: JSON.stringify({ Resources: [params.orthancId] }),
+    }
+  );
 
   if (!res.ok) {
     return { success: false, message: `C-STORE failed: ${res.status}` };
   }
 
   return { success: true, message: "Instance stored successfully" };
+}
+
+/**
+ * Resolve a StudyInstanceUID to Orthanc's internal resource ID.
+ * Returns null when the study is unknown to Orthanc.
+ */
+export async function lookupStudyOrthancId(
+  studyInstanceUID: string
+): Promise<string | null> {
+  const res = await orthancFetch("/tools/lookup", {
+    method: "POST",
+    body: studyInstanceUID,
+  });
+  if (!res.ok) return null;
+  const results: Array<{ Type: string; ID: string }> = await res.json();
+  const study = results.find(r => r.Type === "Study");
+  return study?.ID ?? null;
+}
+
+/**
+ * C-STORE a whole study (by StudyInstanceUID) to a remote modality.
+ * Resolves the Orthanc resource ID first, then stores.
+ */
+export async function cStoreStudy(params: {
+  targetAet: string;
+  studyInstanceUID: string;
+}): Promise<{ success: boolean; message: string }> {
+  const orthancId = await lookupStudyOrthancId(params.studyInstanceUID);
+  if (!orthancId) {
+    return { success: false, message: "Study not found on Orthanc" };
+  }
+  return cStore({ targetAet: params.targetAet, orthancId });
+}
+
+/**
+ * Modality Worklist (MWL) query via Orthanc's REST API.
+ *
+ * Orthanc forwards a C-FIND to a remote MWL SCP through
+ * `POST /modalities/{id}/find-worklist` (available when the queried modality is
+ * configured and Orthanc supports worklist relaying). The body is an
+ * `{ Query: {...} }` of DICOM tags at the worklist level; the response is an
+ * array of DICOM-JSON answers.
+ *
+ * FAIL-SOFT by contract: a demo PACS often has NO worklist configured. Any
+ * non-OK status or transport error resolves to `{ available: false, ... }`
+ * rather than throwing, so the UI can show "Worklist indisponible" without the
+ * viewer breaking. Reuses safeAeTitle to block path traversal / SSRF.
+ */
+export async function findWorklist(params: {
+  aet: string;
+  query?: Record<string, string>;
+}): Promise<{
+  available: boolean;
+  answers: any[];
+  error?: string;
+}> {
+  // Scheduled Procedure Step Sequence (0040,0100) carries the per-step fields
+  // (modality, scheduled date/time, description). We send it as an empty SQ to
+  // request those tags back, alongside top-level patient/accession matchers.
+  const query: Record<string, unknown> = {
+    PatientName: "",
+    PatientID: "",
+    AccessionNumber: "",
+    "0040,0100": [
+      {
+        Modality: "",
+        ScheduledProcedureStepStartDate: "",
+        ScheduledProcedureStepStartTime: "",
+        ScheduledProcedureStepDescription: "",
+        ScheduledStationAETitle: "",
+      },
+    ],
+    ...(params.query ?? {}),
+  };
+
+  try {
+    const res = await orthancFetch(
+      `/modalities/${safeAeTitle(params.aet)}/find-worklist`,
+      {
+        method: "POST",
+        body: JSON.stringify({ Query: query, Short: false }),
+      }
+    );
+    if (!res.ok) {
+      // 404 typically means the worklist endpoint / modality isn't configured.
+      return {
+        available: false,
+        answers: [],
+        error: `HTTP ${res.status}`,
+      };
+    }
+    const answers = await res.json();
+    return { available: true, answers: Array.isArray(answers) ? answers : [] };
+  } catch (err: any) {
+    return {
+      available: false,
+      answers: [],
+      error: err?.message || "Worklist query failed",
+    };
+  }
 }
 
 /**

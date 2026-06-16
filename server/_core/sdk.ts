@@ -229,19 +229,19 @@ class SDKServer {
       });
       const { openId, appId, name, sv } = payload as Record<string, unknown>;
 
-      if (
-        !isNonEmptyString(openId) ||
-        !isNonEmptyString(appId) ||
-        !isNonEmptyString(name)
-      ) {
-        console.warn("[Auth] Session payload missing required fields");
+      // openId is the only field that identifies the session. appId and name
+      // are Manus-OAuth concepts that are empty for self-hosted local auth, so
+      // requiring them here would reject every local session — keep them
+      // optional.
+      if (!isNonEmptyString(openId)) {
+        console.warn("[Auth] Session payload missing openId");
         return null;
       }
 
       return {
         openId,
-        appId,
-        name,
+        appId: isNonEmptyString(appId) ? appId : "",
+        name: isNonEmptyString(name) ? name : "",
         sv: typeof sv === "number" ? sv : 0,
       };
     } catch (error) {
@@ -296,6 +296,12 @@ class SDKServer {
     const sessionUserId = session.openId;
     const signedInAt = new Date();
     let user = await db.getUserByOpenId(sessionUserId);
+
+    // In self-hosted local auth mode there is no upstream OAuth server to sync
+    // from: the user must already exist (created via auth.register).
+    if (!user && ENV.authMode === "local") {
+      throw ForbiddenError("User not found");
+    }
 
     // If user not in DB, sync from OAuth server automatically
     if (!user) {

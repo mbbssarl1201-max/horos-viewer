@@ -1,4 +1,4 @@
-import { COOKIE_NAME } from "@shared/const";
+import { COOKIE_NAME, SEVEN_DAYS_MS } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
@@ -19,12 +19,62 @@ import {
   markNotificationRead,
   createNotification,
   recordAccess,
+  getReportByStudy,
+  getReportAddenda,
 } from "./db";
-import { storagePut } from "./storage";
+import { storagePut, storageDelete, storageGetSignedUrl } from "./storage";
+import { runAiPreanalysis } from "./report/aiPreanalysis";
+import { buildReportPdf } from "./report/reportPdf";
+import {
+  canSignReport,
+  canAddAddendum,
+  validateReportSections,
+} from "../client/src/lib/reportLifecycle";
 import { hasMedicalAccess, isAdmin } from "./rbac";
-import { checkOrthancConnection, qidoSearchStudies, cFind, cMove, listModalities } from "./orthanc";
-import { sendEmail, notifyNewStudy, notifyStatUrgent, notifyReportFinalized, getSmtpStatus } from "./email";
+import {
+  checkOrthancConnection,
+  qidoSearchStudies,
+  cFind,
+  cMove,
+  cStoreStudy,
+  listModalities,
+  findWorklist,
+} from "./orthanc";
+import { parseWorklistAnswers } from "./worklistParse";
+import {
+  sendEmail,
+  notifyNewStudy,
+  notifyStatUrgent,
+  notifyReportFinalized,
+  getSmtpStatus,
+} from "./email";
+import { ENV } from "./_core/env";
+import { isAllowedRecipient } from "./_core/emailAllowList";
+import { shouldNotify, PRIORITY_TRIGGERS, STATUS_TRIGGERS } from "./risNotify";
+import { annotationDataSchema } from "./annotationSchema";
 import dcmjs from "dcmjs";
+
+// Garde commune aux endpoints `notifications.notify*` : ils sortent du PHI
+// (patientName) vers un destinataire LIBRE. On applique la même allow-list de
+// domaines que sendStudyReport et on trace l'egress dans l'audit trail, avant
+// tout envoi. Cf. audit C2.
+async function guardPhiNotify(
+  recipientEmail: string,
+  ctx: { user: { id: number }; req?: { ip?: string } }
+): Promise<void> {
+  if (!isAllowedRecipient(recipientEmail, ENV.reportEmailAllowedDomains))
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Destinataire non autorisé (domaine non whitelisté).",
+    });
+  await recordAccess({
+    userId: ctx.user.id,
+    action: "study.email.notify",
+    studyId: null,
+    detail: recipientEmail,
+    ipAddress: ctx.req?.ip ?? null,
+  });
+}
 
 // DICOM Application Entity Title: max 16 chars, no path separators or spaces.
 // Constrained here to block path traversal / SSRF when interpolated into the
@@ -108,7 +158,10 @@ export function anonymizeDicomBuffer(buffer: Buffer): Buffer {
 // "user" role: an account must be promoted to a clinical role first.
 const medicalProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (!hasMedicalAccess(ctx.user)) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Clinical role required" });
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Clinical role required",
+    });
   }
   return next({ ctx });
 });
@@ -116,7 +169,10 @@ const medicalProcedure = protectedProcedure.use(({ ctx, next }) => {
 // Reporting-level actions (admin or radiologist): status, priority, anonymize.
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin" && ctx.user.role !== "radiologist") {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Admin or radiologist access required" });
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Admin or radiologist access required",
+    });
   }
   return next({ ctx });
 });
@@ -124,16 +180,212 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
 // Destructive / system actions (delete, C-MOVE exfiltration) — admin only.
 const strictAdminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (!isAdmin(ctx.user)) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Administrator access required" });
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Administrator access required",
+    });
   }
   return next({ ctx });
 });
+
+/**
+ * Gather everything needed to build an SR/GSPS for a series, with anti-IDOR
+ * resolution through the join chain (series → study → patient). Returns null
+ * `ctx` (+ a French error) when the series doesn't resolve to a real study, so
+ * a forged/foreign seriesId can't produce an object referencing another study.
+ */
+async function buildSeriesExportContext(seriesId: number): Promise<{
+  ctx: import("./dicomDerived").ExportContext | null;
+  error?: string;
+}> {
+  const { getDb } = await import("./db");
+  const { series, studies, patients, instances, annotations } =
+    await import("../drizzle/schema");
+  const { eq } = await import("drizzle-orm");
+  const db = await getDb();
+  if (!db) return { ctx: null, error: "DB indisponible" };
+
+  // Resolve the series + its parent study + patient in one go.
+  const [row] = await db
+    .select({
+      studyInstanceUid: studies.studyInstanceUid,
+      seriesInstanceUid: series.seriesInstanceUid,
+      patientName: patients.patientName,
+      patientDicomId: patients.patientId,
+      birthDate: patients.birthDate,
+      sex: patients.sex,
+    })
+    .from(series)
+    .innerJoin(studies, eq(series.studyId, studies.id))
+    .leftJoin(patients, eq(studies.patientId, patients.id))
+    .where(eq(series.id, seriesId))
+    .limit(1);
+  if (!row) return { ctx: null, error: "Série introuvable" };
+
+  const seriesInstances = await db
+    .select({
+      id: instances.id,
+      sopInstanceUid: instances.sopInstanceUid,
+    })
+    .from(instances)
+    .where(eq(instances.seriesId, seriesId));
+
+  if (seriesInstances.length === 0) {
+    return { ctx: null, error: "Aucune image dans la série" };
+  }
+
+  const annRows = await db
+    .select({
+      instanceId: annotations.instanceId,
+      type: annotations.type,
+      data: annotations.data,
+    })
+    .from(annotations)
+    .innerJoin(instances, eq(annotations.instanceId, instances.id))
+    .where(eq(instances.seriesId, seriesId));
+
+  // Map each annotation's instanceId → its real SOP UID for the references.
+  const sopByInstanceId = new Map(
+    seriesInstances.map(i => [i.id, i.sopInstanceUid])
+  );
+
+  const exportAnnotations: import("./dicomDerived").ExportAnnotation[] = [];
+  for (const a of annRows) {
+    const sop = sopByInstanceId.get(a.instanceId);
+    if (!sop) continue;
+    exportAnnotations.push({
+      type: a.type,
+      data: a.data,
+      referencedSopInstanceUid: sop,
+    });
+  }
+
+  const ctx: import("./dicomDerived").ExportContext = {
+    studyInstanceUid: row.studyInstanceUid,
+    seriesInstanceUid: row.seriesInstanceUid,
+    patient: {
+      patientName: row.patientName,
+      patientId: row.patientDicomId,
+      birthDate: row.birthDate,
+      sex: row.sex,
+    },
+    instances: seriesInstances.map(i => ({ sopInstanceUid: i.sopInstanceUid })),
+    annotations: exportAnnotations,
+  };
+  return { ctx };
+}
 
 export const appRouter = router({
   system: systemRouter,
 
   auth: router({
-    me: publicProcedure.query((opts) => opts.ctx.user),
+    me: publicProcedure.query(opts => {
+      // Never expose the password hash to the client.
+      if (!opts.ctx.user) return null;
+      const { passwordHash, ...safeUser } = opts.ctx
+        .user as typeof opts.ctx.user & {
+        passwordHash?: string | null;
+      };
+      return safeUser;
+    }),
+
+    // Self-hosted email/password registration. The first account created
+    // becomes an admin; later accounts default to the unprivileged "user"
+    // role and must be promoted to a clinical role to see PHI.
+    register: publicProcedure
+      .input(
+        z.object({
+          email: z.string().email(),
+          password: z.string().min(8, "Password must be at least 8 characters"),
+          name: z.string().min(1).max(128).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { ENV } = await import("./_core/env");
+        if (ENV.authMode !== "local") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Registration disabled",
+          });
+        }
+        const { getUserByEmail, countUsers, createLocalUser } =
+          await import("./db");
+        const { hashPassword } = await import("./localAuth");
+        const { sdk } = await import("./_core/sdk");
+
+        const email = input.email.trim().toLowerCase();
+        if (await getUserByEmail(email)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Email already registered",
+          });
+        }
+
+        const isFirstUser = (await countUsers()) === 0;
+        const passwordHash = await hashPassword(input.password);
+        const openId = `local:${crypto.randomUUID()}`;
+        const user = await createLocalUser({
+          openId,
+          email,
+          name: input.name ?? null,
+          passwordHash,
+          role: isFirstUser ? "admin" : "user",
+        });
+        if (!user) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "User creation failed",
+          });
+        }
+
+        const token = await sdk.createSessionToken(openId, {
+          name: input.name || "",
+        });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, token, {
+          ...cookieOptions,
+          maxAge: SEVEN_DAYS_MS,
+        });
+        return { success: true, user: { id: user.id, email, role: user.role } };
+      }),
+
+    login: publicProcedure
+      .input(
+        z.object({
+          email: z.string().email(),
+          password: z.string().min(1),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { getUserByEmail } = await import("./db");
+        const { verifyPassword } = await import("./localAuth");
+        const { sdk } = await import("./_core/sdk");
+
+        const email = input.email.trim().toLowerCase();
+        const user = await getUserByEmail(email);
+        // Generic error either way to avoid leaking which emails exist.
+        if (
+          !user ||
+          !user.passwordHash ||
+          !(await verifyPassword(input.password, user.passwordHash))
+        ) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "Invalid email or password",
+          });
+        }
+
+        const token = await sdk.createSessionToken(user.openId, {
+          name: user.name || "",
+        });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, token, {
+          ...cookieOptions,
+          maxAge: SEVEN_DAYS_MS,
+        });
+        return { success: true, user: { id: user.id, email, role: user.role } };
+      }),
+
     logout: publicProcedure.mutation(async ({ ctx }) => {
       // Revoke all outstanding sessions for this user server-side, not just
       // clear the cookie on this device.
@@ -150,9 +402,19 @@ export const appRouter = router({
   // Studies router
   studies: router({
     list: medicalProcedure
-      .input(z.object({ modality: z.string().optional(), timeFilter: z.string().optional() }).optional())
+      .input(
+        z
+          .object({
+            modality: z.string().optional(),
+            timeFilter: z.string().optional(),
+          })
+          .optional()
+      )
       .query(async ({ input }) => {
-        return listStudies({ modality: input?.modality, timeFilter: input?.timeFilter });
+        return listStudies({
+          modality: input?.modality,
+          timeFilter: input?.timeFilter,
+        });
       }),
 
     get: medicalProcedure
@@ -168,19 +430,46 @@ export const appRouter = router({
         return study;
       }),
 
-    updateStatus: adminProcedure
-      .input(z.object({
-        id: z.number(),
-        status: z.enum(["new", "in_progress", "reported", "finalized"]),
-      }))
-      .mutation(async ({ input, ctx }) => {
-        const { getDb } = await import("./db");
-        const { studies } = await import("../drizzle/schema");
-        const { eq } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+    patientHistory: medicalProcedure
+      .input(z.object({ studyId: z.number() }))
+      .query(async ({ input }) => {
+        const { listPriorStudiesForStudy } = await import("./db");
+        const prior = await listPriorStudiesForStudy(input.studyId);
+        const lines = prior.map(
+          (s: any) =>
+            `- ${s.studyDate || "?"} : ${s.modality || "?"}${s.studyDescription ? " — " + s.studyDescription : ""}`
+        );
+        const antecedents = lines.length
+          ? "Antécédents d'imagerie (examens antérieurs du patient) :\n" +
+            lines.join("\n")
+          : "";
+        return { antecedents, count: prior.length };
+      }),
 
-        await db.update(studies).set({ status: input.status }).where(eq(studies.id, input.id));
+    updateStatus: adminProcedure
+      .input(
+        z.object({
+          id: z.number(),
+          status: z.enum(["new", "in_progress", "reported", "finalized"]),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { dbCtx } = await import("./_core/dbCtx");
+        const { db, schema, eq } = await dbCtx();
+        const { studies } = schema;
+        if (!db)
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "DB unavailable",
+          });
+
+        // Lire l'état AVANT mise à jour pour ne notifier que sur une transition.
+        const before = await getStudyById(input.id);
+
+        await db
+          .update(studies)
+          .set({ status: input.status })
+          .where(eq(studies.id, input.id));
 
         // Notify if report finalized
         if (input.status === "finalized") {
@@ -193,22 +482,59 @@ export const appRouter = router({
           });
         }
 
+        // Notification e-mail RIS sur transition vers "finalized" (opt-in).
+        // Fail-soft : une erreur d'envoi ne fait jamais échouer la mutation.
+        if (
+          shouldNotify(
+            before?.status,
+            input.status,
+            STATUS_TRIGGERS,
+            ENV.risNotifyEmail
+          )
+        ) {
+          try {
+            await notifyReportFinalized({
+              recipientEmail: ENV.risNotifyEmail,
+              patientName: before?.patientName || "—",
+              modality: before?.modality || "—",
+              studyDate: before?.studyDate || "—",
+              reportAuthor: ctx.user.email || ctx.user.openId || "—",
+            });
+          } catch (err: any) {
+            console.warn(
+              "[RIS] notifyReportFinalized échouée:",
+              err?.message ?? err
+            );
+          }
+        }
+
         return { success: true };
       }),
 
     updatePriority: adminProcedure
-      .input(z.object({
-        id: z.number(),
-        priority: z.enum(["routine", "stat", "urgent"]),
-      }))
+      .input(
+        z.object({
+          id: z.number(),
+          priority: z.enum(["routine", "stat", "urgent"]),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
-        const { getDb } = await import("./db");
-        const { studies } = await import("../drizzle/schema");
-        const { eq } = await import("drizzle-orm");
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        const { dbCtx } = await import("./_core/dbCtx");
+        const { db, schema, eq } = await dbCtx();
+        const { studies } = schema;
+        if (!db)
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "DB unavailable",
+          });
 
-        await db.update(studies).set({ priority: input.priority }).where(eq(studies.id, input.id));
+        // Lire l'état AVANT mise à jour pour ne notifier que sur une transition.
+        const before = await getStudyById(input.id);
+
+        await db
+          .update(studies)
+          .set({ priority: input.priority })
+          .where(eq(studies.id, input.id));
 
         // Notify if STAT
         if (input.priority === "stat") {
@@ -221,28 +547,69 @@ export const appRouter = router({
           });
         }
 
+        // Notification e-mail RIS sur transition vers "stat"/"urgent" (opt-in).
+        // Fail-soft : une erreur d'envoi ne fait jamais échouer la mutation.
+        if (
+          shouldNotify(
+            before?.priority,
+            input.priority,
+            PRIORITY_TRIGGERS,
+            ENV.risNotifyEmail
+          )
+        ) {
+          try {
+            await notifyStatUrgent({
+              recipientEmail: ENV.risNotifyEmail,
+              patientName: before?.patientName || "—",
+              modality: before?.modality || "—",
+              studyDate: before?.studyDate || "—",
+              studyDescription: before?.studyDescription || "—",
+              urgencyReason: `Priorité passée à « ${input.priority} »`,
+            });
+          } catch (err: any) {
+            console.warn(
+              "[RIS] notifyStatUrgent échouée:",
+              err?.message ?? err
+            );
+          }
+        }
+
         return { success: true };
       }),
 
     anonymize: adminProcedure
-      .input(z.object({
-        id: z.number(),
-        fields: z.array(z.string()),
-      }))
+      .input(
+        z.object({
+          id: z.number(),
+          fields: z.array(z.string()),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
         const { studies, patients } = await import("../drizzle/schema");
         const { eq } = await import("drizzle-orm");
         const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        if (!db)
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "DB unavailable",
+          });
 
         const PLACEHOLDER = "[ANONYMIZED]";
 
         // Patient-identity fields live on the `patients` table; only report
         // metadata lives on `studies`. studies.patientId is an int FK to
         // patients.id, NOT the DICOM identity — never overwrite it here.
-        const STUDY_FIELDS = new Set(["referringPhysician", "institution", "accessionNumber"]);
-        const PATIENT_FIELDS = new Set(["patientName", "patientId", "birthDate"]);
+        const STUDY_FIELDS = new Set([
+          "referringPhysician",
+          "institution",
+          "accessionNumber",
+        ]);
+        const PATIENT_FIELDS = new Set([
+          "patientName",
+          "patientId",
+          "birthDate",
+        ]);
 
         const studyUpdate: Partial<typeof studies.$inferInsert> = {};
         const patientUpdate: Partial<typeof patients.$inferInsert> = {};
@@ -261,7 +628,10 @@ export const appRouter = router({
         const patientCount = Object.keys(patientUpdate).length;
 
         if (studyCount > 0) {
-          await db.update(studies).set(studyUpdate).where(eq(studies.id, input.id));
+          await db
+            .update(studies)
+            .set(studyUpdate)
+            .where(eq(studies.id, input.id));
         }
 
         if (patientCount > 0) {
@@ -272,8 +642,15 @@ export const appRouter = router({
             .from(studies)
             .where(eq(studies.id, input.id))
             .limit(1);
-          if (!study) throw new TRPCError({ code: "NOT_FOUND", message: "Study not found" });
-          await db.update(patients).set(patientUpdate).where(eq(patients.id, study.patientId));
+          if (!study)
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Study not found",
+            });
+          await db
+            .update(patients)
+            .set(patientUpdate)
+            .where(eq(patients.id, study.patientId));
         }
 
         await recordAccess({
@@ -291,24 +668,81 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
-        const { studies, series, instances, annotations, notifications, albumStudies } = await import("../drizzle/schema");
+        const {
+          studies,
+          series,
+          instances,
+          annotations,
+          notifications,
+          albumStudies,
+          reports,
+          reportAddenda,
+        } = await import("../drizzle/schema");
         const { eq } = await import("drizzle-orm");
         const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+        if (!db)
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "DB unavailable",
+          });
 
         // Delete child rows (no DB-level cascade), then the study itself,
         // so no annotations / notifications / album links are left orphaned.
-        const studySeries = await db.select().from(series).where(eq(series.studyId, input.id));
+        const studySeries = await db
+          .select()
+          .from(series)
+          .where(eq(series.studyId, input.id));
         for (const s of studySeries) {
-          const seriesInstances = await db.select().from(instances).where(eq(instances.seriesId, s.id));
+          const seriesInstances = await db
+            .select()
+            .from(instances)
+            .where(eq(instances.seriesId, s.id));
           for (const inst of seriesInstances) {
-            await db.delete(annotations).where(eq(annotations.instanceId, inst.id));
+            // Remove the DICOM object from storage so deleted studies leave no
+            // orphaned PHI in the bucket. Best-effort: a storage hiccup must not
+            // block the DB erasure — the study still disappears from the app.
+            try {
+              await storageDelete(inst.storageKey);
+            } catch (err) {
+              console.warn(
+                `[studies.delete] could not remove object ${inst.storageKey}:`,
+                err
+              );
+            }
+            await db
+              .delete(annotations)
+              .where(eq(annotations.instanceId, inst.id));
           }
           await db.delete(instances).where(eq(instances.seriesId, s.id));
         }
         await db.delete(series).where(eq(series.studyId, input.id));
-        await db.delete(notifications).where(eq(notifications.studyId, input.id));
+        await db
+          .delete(notifications)
+          .where(eq(notifications.studyId, input.id));
         await db.delete(albumStudies).where(eq(albumStudies.studyId, input.id));
+
+        // Compte-rendu de l'étude : le report (PHI clinique) et ses addenda
+        // doivent disparaître eux aussi, et son PDF nominatif être purgé du
+        // bucket — sinon une « suppression » laisse du PHI résiduel (droit à
+        // l'effacement nLPD/RGPD). Cf. audit C1.
+        const report = await getReportByStudy(input.id);
+        if (report) {
+          if (report.pdfStorageKey) {
+            try {
+              await storageDelete(report.pdfStorageKey);
+            } catch (err) {
+              console.warn(
+                `[studies.delete] could not remove report PDF ${report.pdfStorageKey}:`,
+                err
+              );
+            }
+          }
+          await db
+            .delete(reportAddenda)
+            .where(eq(reportAddenda.reportId, report.id));
+          await db.delete(reports).where(eq(reports.studyId, input.id));
+        }
+
         await db.delete(studies).where(eq(studies.id, input.id));
 
         await recordAccess({
@@ -369,8 +803,11 @@ export const appRouter = router({
           bitsAllocated: z.number().optional(),
           windowCenter: z.string().optional(),
           windowWidth: z.string().optional(),
-          fileData: z.string(), // base64 encoded DICOM file
-          fileSize: z.number(),
+          // base64 d'un fichier DICOM. Borne explicite (audit) : défense en
+          // profondeur contre un DoS mémoire (buffer décodé par requête),
+          // alignée sur la limite du body-parser (~50 Mo). 60M chars base64 ≈ 45 Mo binaire.
+          fileData: z.string().min(1).max(60_000_000),
+          fileSize: z.number().int().min(0).max(60_000_000),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -457,11 +894,13 @@ export const appRouter = router({
   // Annotations router
   annotations: router({
     save: medicalProcedure
-      .input(z.object({
-        instanceId: z.number(),
-        type: z.enum(["length", "angle", "rect_roi", "ellipse_roi", "text"]),
-        data: z.any(),
-      }))
+      .input(
+        z.object({
+          instanceId: z.number(),
+          type: z.enum(["length", "angle", "rect_roi", "ellipse_roi", "text"]),
+          data: annotationDataSchema,
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
         const { annotations } = await import("../drizzle/schema");
@@ -478,6 +917,21 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    // Suppression d'une mesure (ROI Manager). Réservé au rôle médical
+    // (medicalProcedure) ; cohérent avec save (déploiement self-host mono-cabinet,
+    // le personnel médical partage le même périmètre de confiance).
+    delete: medicalProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const { getDb } = await import("./db");
+        const { annotations } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.delete(annotations).where(eq(annotations.id, input.id));
+        return { success: true };
+      }),
+
     listByInstance: medicalProcedure
       .input(z.object({ instanceId: z.number() }))
       .query(async ({ input }) => {
@@ -487,7 +941,74 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) return [];
 
-        return db.select().from(annotations).where(eq(annotations.instanceId, input.instanceId));
+        return db
+          .select()
+          .from(annotations)
+          .where(eq(annotations.instanceId, input.instanceId));
+      }),
+
+    // All saved annotations for every instance in a series. Used by the viewer
+    // to re-hydrate measurements when a series loads, in a single round-trip
+    // instead of one query per slice.
+    listBySeries: medicalProcedure
+      .input(z.object({ seriesId: z.number() }))
+      .query(async ({ input }) => {
+        const { getDb } = await import("./db");
+        const { annotations, instances } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) return [];
+
+        const rows = await db
+          .select({
+            id: annotations.id,
+            instanceId: annotations.instanceId,
+            userId: annotations.userId,
+            type: annotations.type,
+            data: annotations.data,
+            createdAt: annotations.createdAt,
+          })
+          .from(annotations)
+          .innerJoin(instances, eq(annotations.instanceId, instances.id))
+          .where(eq(instances.seriesId, input.seriesId));
+
+        return rows;
+      }),
+
+    // Export the saved annotations of a series as a DICOM SR (measurements) or
+    // GSPS (graphic presentation state), returned as base64 Part-10 bytes for
+    // download. Anti-IDOR: the series must resolve to a real study/patient via
+    // the join chain (series → study → patient); the medical role is already
+    // required. Built server-side with dcmjs. Fail-safe: never throws on an
+    // empty/incomplete annotation set — emits a valid (possibly empty) object.
+    exportSr: medicalProcedure
+      .input(z.object({ seriesId: z.number() }))
+      .mutation(async ({ input }) => {
+        const { ctx, error } = await buildSeriesExportContext(input.seriesId);
+        if (!ctx) return { success: false as const, error };
+        const { buildStructuredReport } = await import("./dicomDerived");
+        const { buffer, sopInstanceUid } = buildStructuredReport(ctx);
+        return {
+          success: true as const,
+          sopInstanceUid,
+          filename: `SR_${sopInstanceUid}.dcm`,
+          dicomBase64: buffer.toString("base64"),
+        };
+      }),
+
+    exportGsps: medicalProcedure
+      .input(z.object({ seriesId: z.number() }))
+      .mutation(async ({ input }) => {
+        const { ctx, error } = await buildSeriesExportContext(input.seriesId);
+        if (!ctx) return { success: false as const, error };
+        const { buildPresentationState } = await import("./dicomDerived");
+        const { buffer, sopInstanceUid } = buildPresentationState(ctx);
+        return {
+          success: true as const,
+          sopInstanceUid,
+          filename: `GSPS_${sopInstanceUid}.dcm`,
+          dicomBase64: buffer.toString("base64"),
+        };
       }),
   }),
 
@@ -503,10 +1024,16 @@ export const appRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
         // Get all instances for this study's series
-        const studySeries = await db.select().from(series).where(eq(series.studyId, input.studyId));
+        const studySeries = await db
+          .select()
+          .from(series)
+          .where(eq(series.studyId, input.studyId));
         const allInstances = [];
         for (const s of studySeries) {
-          const seriesInstances = await db.select().from(instances).where(eq(instances.seriesId, s.id));
+          const seriesInstances = await db
+            .select()
+            .from(instances)
+            .where(eq(instances.seriesId, s.id));
           allInstances.push(...seriesInstances);
         }
 
@@ -519,14 +1046,20 @@ export const appRouter = router({
       }),
 
     pdfReport: medicalProcedure
-      .input(z.object({
-        studyId: z.number(),
-        annotations: z.array(z.object({
-          type: z.string(),
-          label: z.string().optional(),
-          value: z.string().optional(),
-        })).optional(),
-      }))
+      .input(
+        z.object({
+          studyId: z.number(),
+          annotations: z
+            .array(
+              z.object({
+                type: z.string(),
+                label: z.string().optional(),
+                value: z.string().optional(),
+              })
+            )
+            .optional(),
+        })
+      )
       .query(async ({ input }) => {
         const study = await getStudyById(input.studyId);
         if (!study) throw new TRPCError({ code: "NOT_FOUND" });
@@ -578,14 +1111,44 @@ export const appRouter = router({
       return listModalities();
     }),
 
+    // Modality Worklist (MWL) query — read-only scheduled procedure steps.
+    // Fail-soft: returns { available:false } when no worklist is configured on
+    // the demo PACS, so the UI shows "Worklist indisponible" without breaking.
+    worklist: medicalProcedure
+      .input(
+        z.object({
+          aet: aeTitleSchema,
+          patientName: z.string().max(64).optional(),
+          patientId: z.string().max(64).optional(),
+          accessionNumber: z.string().max(64).optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const query: Record<string, string> = {};
+        if (input.patientName) query.PatientName = input.patientName;
+        if (input.patientId) query.PatientID = input.patientId;
+        if (input.accessionNumber)
+          query.AccessionNumber = input.accessionNumber;
+        const res = await findWorklist({ aet: input.aet, query });
+        if (!res.available) {
+          return { available: false, entries: [] as const };
+        }
+        return {
+          available: true,
+          entries: parseWorklistAnswers(res.answers),
+        };
+      }),
+
     queryStudies: medicalProcedure
-      .input(z.object({
-        patientName: z.string().optional(),
-        patientId: z.string().optional(),
-        studyDate: z.string().optional(),
-        modality: z.string().optional(),
-        accessionNumber: z.string().optional(),
-      }))
+      .input(
+        z.object({
+          patientName: z.string().optional(),
+          patientId: z.string().optional(),
+          studyDate: z.string().optional(),
+          modality: z.string().optional(),
+          accessionNumber: z.string().optional(),
+        })
+      )
       .mutation(async ({ input }) => {
         try {
           const results = await qidoSearchStudies(input);
@@ -596,11 +1159,13 @@ export const appRouter = router({
       }),
 
     cFind: medicalProcedure
-      .input(z.object({
-        aet: aeTitleSchema,
-        level: z.enum(["Study", "Series", "Instance"]),
-        query: z.record(z.string(), z.string()),
-      }))
+      .input(
+        z.object({
+          aet: aeTitleSchema,
+          level: z.enum(["Study", "Series", "Instance"]),
+          query: z.record(z.string(), z.string()),
+        })
+      )
       .mutation(async ({ input }) => {
         try {
           const results = await cFind(input);
@@ -608,43 +1173,72 @@ export const appRouter = router({
         } catch (err) {
           // Don't leak internal Orthanc/error details to the client.
           console.error("cFind failed:", err);
-          return { success: false, results: [], error: "C-FIND request failed" };
+          return {
+            success: false,
+            results: [],
+            error: "C-FIND request failed",
+          };
         }
       }),
 
     // C-MOVE can exfiltrate whole studies to an arbitrary AET — admin only.
     cMove: strictAdminProcedure
-      .input(z.object({
-        sourceAet: aeTitleSchema,
-        targetAet: aeTitleSchema,
-        studyInstanceUID: z.string(),
-      }))
+      .input(
+        z.object({
+          sourceAet: aeTitleSchema,
+          targetAet: aeTitleSchema,
+          studyInstanceUID: z.string(),
+        })
+      )
       .mutation(async ({ input }) => {
         return cMove(input);
+      }),
+
+    // C-STORE pushes a whole study (PHI) to an external modality — admin only.
+    cStore: strictAdminProcedure
+      .input(
+        z.object({
+          targetAet: aeTitleSchema,
+          studyInstanceUID: z.string().min(1),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const result = await cStoreStudy(input);
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "study.cstore",
+          studyId: null,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return result;
       }),
   }),
 
   // PACS Servers CRUD router
   pacsServers: router({
     list: medicalProcedure.query(async ({ ctx }) => {
-      const { getDb } = await import("./db");
-      const { pacsServers } = await import("../drizzle/schema");
-      const { eq } = await import("drizzle-orm");
-      const db = await getDb();
+      const { dbCtx } = await import("./_core/dbCtx");
+      const { db, schema, eq } = await dbCtx();
+      const { pacsServers } = schema;
       if (!db) return [];
-      return db.select().from(pacsServers).where(eq(pacsServers.userId, ctx.user.id));
+      return db
+        .select()
+        .from(pacsServers)
+        .where(eq(pacsServers.userId, ctx.user.id));
     }),
 
     // Configuring a PACS endpoint defines where studies can be C-MOVE'd —
     // admin/radiologist only, not every logged-in account.
     create: adminProcedure
-      .input(z.object({
-        name: z.string().min(1),
-        aeTitle: aeTitleSchema,
-        host: z.string().min(1),
-        port: z.number().min(1).max(65535),
-        orthancUrl: z.string().optional(),
-      }))
+      .input(
+        z.object({
+          name: z.string().min(1),
+          aeTitle: aeTitleSchema,
+          host: z.string().min(1),
+          port: z.number().min(1).max(65535),
+          orthancUrl: z.string().optional(),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
         const { pacsServers } = await import("../drizzle/schema");
@@ -669,7 +1263,14 @@ export const appRouter = router({
         const { eq, and } = await import("drizzle-orm");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        await db.delete(pacsServers).where(and(eq(pacsServers.id, input.id), eq(pacsServers.userId, ctx.user.id)));
+        await db
+          .delete(pacsServers)
+          .where(
+            and(
+              eq(pacsServers.id, input.id),
+              eq(pacsServers.userId, ctx.user.id)
+            )
+          );
         return { success: true };
       }),
   }),
@@ -685,48 +1286,597 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         return sendEmail({
           to: input.to,
-          subject: "[Horos Viewer] Test Email",
-          html: "<p>This is a test email from Horos Medical Imaging Viewer. SMTP is configured correctly.</p>",
+          subject: "[MediView] Test Email",
+          html: "<p>This is a test email from MediView. SMTP is configured correctly.</p>",
         });
       }),
 
+    // Email an imaging report to a recipient who can read it straight from
+    // their inbox. The PDF is ASSEMBLED SERVER-SIDE from the authoritative study
+    // record + the client-supplied rendered PNG (never a client-supplied PDF),
+    // so the document content is bounded and this can't be used to relay
+    // arbitrary attacker-chosen attachments / phishing. Rate-limited per user;
+    // every send is access-logged (PHI egress).
+    sendReport: medicalProcedure
+      .input(
+        z.object({
+          to: z.string().email(),
+          studyId: z.number(),
+          message: z.string().max(500).optional(),
+          imagePngBase64: z.string().min(1).max(10_000_000), // ~7.5 MB cap
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { countRecentAccess } = await import("./db");
+        // Rate limit: cap report emails per user per hour.
+        const recent = await countRecentAccess(
+          ctx.user.id,
+          "study.email.report",
+          60
+        );
+        if (recent >= 20) {
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: "Limite d'envois atteinte, réessayez plus tard.",
+          });
+        }
+
+        // Authorize against a real study the server loaded — never trust the
+        // client for the subject/audit/PDF content.
+        const study = await getStudyById(input.studyId);
+        if (!study) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Study not found",
+          });
+        }
+
+        // Validate the image is a real PNG and read its dimensions (IHDR).
+        const png = Buffer.from(input.imagePngBase64, "base64");
+        const PNG_SIG = Buffer.from([
+          0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        ]);
+        if (png.length < 24 || !png.subarray(0, 8).equals(PNG_SIG)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Image must be a PNG",
+          });
+        }
+        const imgW = png.readUInt32BE(16);
+        const imgH = png.readUInt32BE(20);
+
+        // Build the PDF server-side from trusted study data + the image.
+        const { jsPDF } = await import("jspdf");
+        const doc = new jsPDF();
+        doc.setFontSize(15);
+        doc.text("Compte rendu d'imagerie", 14, 16);
+        doc.setFontSize(10);
+        [
+          `Patient : ${study.patientName || "—"}`,
+          `Date d'étude : ${study.studyDate || "—"}`,
+          `Modalité : ${study.modality || "—"}`,
+          `Description : ${study.studyDescription || "—"}`,
+          `Institution : ${study.institution || "—"}`,
+        ].forEach((line, i) => doc.text(line, 14, 28 + i * 6));
+        const pageW = 180;
+        const drawH = imgW > 0 ? Math.min(210, (imgH / imgW) * pageW) : 120;
+        doc.addImage(
+          `data:image/png;base64,${input.imagePngBase64}`,
+          "PNG",
+          14,
+          62,
+          pageW,
+          drawH
+        );
+        const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+
+        const subjectName = study.patientName ? ` — ${study.patientName}` : "";
+        const result = await sendEmail({
+          to: input.to,
+          subject: `Compte rendu d'imagerie${subjectName}`,
+          html:
+            `<div style="font-family:sans-serif;max-width:600px">` +
+            `<p>Bonjour,</p>` +
+            `<p>Veuillez trouver ci-joint le compte rendu d'imagerie au format PDF.</p>` +
+            (input.message
+              ? `<p>${input.message.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`
+              : "") +
+            `<p style="color:#888;font-size:12px">Document médical confidentiel — destiné au seul destinataire.</p>` +
+            `</div>`,
+          attachments: [
+            {
+              filename: `compte-rendu-${study.id}.pdf`,
+              content: pdfBuffer,
+              contentType: "application/pdf",
+            },
+          ],
+        });
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "study.email.report",
+          studyId: study.id,
+          detail: input.to,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        if (!result.success) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: result.error || "Email send failed",
+          });
+        }
+        return { success: true };
+      }),
+
+    // Email a full structured imaging report (compte rendu) assembled
+    // SERVER-SIDE: PDF from the authoritative study record + client-supplied
+    // rendered key-image PNGs, plus an optional ciné MP4 rebuilt server-side
+    // from the series' DICOM frames. Never relays client-supplied binaries
+    // verbatim. Rate-limited per user; every send is access-logged (PHI egress).
+    sendStudyReport: adminProcedure
+      .input(
+        z.object({
+          to: z.string().email(),
+          studyId: z.number(),
+          seriesId: z.number(),
+          // Conservés pour la compat de l'input mais IGNORÉS : le contenu et la
+          // signature sont serveur-autoritatifs (CR signé en DB). Cf. audit I1.
+          report: z
+            .object({
+              indication: z.string().max(5000),
+              technique: z.string().max(5000),
+              resultats: z.string().max(20000),
+              conclusion: z.string().max(5000),
+            })
+            .optional(),
+          signature: z.string().min(1).max(120).optional(),
+          windowCenter: z.number().finite(),
+          windowWidth: z.number().finite(),
+          keyImages: z
+            .array(
+              z.object({
+                pngBase64: z.string().min(1).max(10_000_000),
+                sliceIndex: z.number().int().min(0),
+                measurements: z.string().max(500).optional(),
+              })
+            )
+            .max(20),
+          includeVideo: z.boolean(),
+          message: z.string().max(500).optional(),
+          aiAssisted: z.boolean().optional(),
+          antecedents: z.string().max(5000).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { sendStudyReportImpl } =
+          await import("./report/sendStudyReport");
+        return sendStudyReportImpl(input, ctx as any);
+      }),
+
+    aiPreanalysis: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number(),
+          keyImages: z
+            .array(
+              z.object({
+                pngBase64: z.string().min(1).max(10_000_000),
+                sliceIndex: z.number().int().min(0),
+              })
+            )
+            .min(1)
+            .max(20),
+          indication: z.string().max(5000).optional(),
+          antecedents: z.string().max(5000).optional(),
+          // Échantillonnage serveur du volume (analyse de toute la série).
+          seriesId: z.number().int().optional(),
+          windowCenter: z.number().optional(),
+          windowWidth: z.number().optional(),
+          sampleCount: z.number().int().min(1).max(24).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { runAiPreanalysis } = await import("./report/aiPreanalysis");
+        return runAiPreanalysis(input, ctx as any);
+      }),
+
     notifyNewStudy: medicalProcedure
-      .input(z.object({
-        recipientEmail: z.string().email(),
-        patientName: z.string(),
-        modality: z.string(),
-        studyDate: z.string(),
-        studyDescription: z.string(),
-        institution: z.string().optional(),
-      }))
-      .mutation(async ({ input }) => {
+      .input(
+        z.object({
+          recipientEmail: z.string().email(),
+          patientName: z.string(),
+          modality: z.string(),
+          studyDate: z.string(),
+          studyDescription: z.string(),
+          institution: z.string().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        await guardPhiNotify(input.recipientEmail, ctx);
         return notifyNewStudy(input);
       }),
 
     notifyStatUrgent: medicalProcedure
-      .input(z.object({
-        recipientEmail: z.string().email(),
-        patientName: z.string(),
-        modality: z.string(),
-        studyDate: z.string(),
-        studyDescription: z.string(),
-        urgencyReason: z.string().optional(),
-      }))
-      .mutation(async ({ input }) => {
+      .input(
+        z.object({
+          recipientEmail: z.string().email(),
+          patientName: z.string(),
+          modality: z.string(),
+          studyDate: z.string(),
+          studyDescription: z.string(),
+          urgencyReason: z.string().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        await guardPhiNotify(input.recipientEmail, ctx);
         return notifyStatUrgent(input);
       }),
 
     notifyReportFinalized: medicalProcedure
-      .input(z.object({
-        recipientEmail: z.string().email(),
-        patientName: z.string(),
-        modality: z.string(),
-        studyDate: z.string(),
-        reportAuthor: z.string(),
-        reportSummary: z.string().optional(),
-      }))
-      .mutation(async ({ input }) => {
+      .input(
+        z.object({
+          recipientEmail: z.string().email(),
+          patientName: z.string(),
+          modality: z.string(),
+          studyDate: z.string(),
+          reportAuthor: z.string(),
+          reportSummary: z.string().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        await guardPhiNotify(input.recipientEmail, ctx);
         return notifyReportFinalized(input);
+      }),
+  }),
+
+  // Journal d'audit (access_logs) : consultation/export et rétention.
+  // Réservé aux administrateurs (garde stricte). L'export est aussi exposé en
+  // CSV via la route Express GET /api/audit/export.csv (même garde).
+  audit: router({
+    // Renvoie les lignes du journal d'accès (cap AUDIT_EXPORT_MAX) pour que
+    // l'admin les télécharge / construise un CSV côté client.
+    export: strictAdminProcedure
+      .input(
+        z
+          .object({
+            from: z.coerce.date().optional(),
+            to: z.coerce.date().optional(),
+            limit: z.number().int().min(1).optional(),
+          })
+          .optional()
+      )
+      .query(async ({ input, ctx }) => {
+        const { queryAuditLogs, AUDIT_EXPORT_MAX } = await import("./audit");
+        const rows = await queryAuditLogs(input ?? {});
+        // Tracer l'export du journal lui-même (méta-audit, sans PHI).
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "audit.export",
+          studyId: null,
+          detail: `rows=${rows.length}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { rows, cap: AUDIT_EXPORT_MAX };
+      }),
+  }),
+
+  // Rétention : purge explicite (jamais automatique) des vieilles entrées
+  // d'audit. Action destructive → garde admin stricte + plancher de sécurité.
+  retention: router({
+    purge: strictAdminProcedure
+      .input(z.object({ olderThanDays: z.number().int().min(30) }))
+      .mutation(async ({ input, ctx }) => {
+        const { purgeAuditLogs } = await import("./audit");
+        const deleted = await purgeAuditLogs(input.olderThanDays);
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "audit.purge",
+          studyId: null,
+          detail: `olderThanDays=${input.olderThanDays};deleted=${deleted}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { deleted };
+      }),
+  }),
+
+  // Compte-rendu radiologique (assistance IA → relecture/correction → signature
+  // médecin → PDF). Lecture = medicalProcedure ; toute action d'écriture =
+  // adminProcedure (admin|radiologist). Immuabilité après signature : seules les
+  // corrections par addendum sont permises (verrou applicatif).
+  reports: router({
+    // Lecture du compte-rendu d'une étude (+ ses addenda).
+    getByStudy: medicalProcedure
+      .input(z.object({ studyId: z.number() }))
+      .query(async ({ input }) => {
+        const report = await getReportByStudy(input.studyId);
+        if (!report) return { report: null, addenda: [] as any[] };
+        const addenda = await getReportAddenda(report.id);
+        return { report, addenda };
+      }),
+
+    // Création / mise à jour du brouillon. Refuse toute modification d'un
+    // compte-rendu déjà signé (immuable → addendum).
+    upsertDraft: adminProcedure
+      .input(
+        z.object({
+          studyId: z.number(),
+          sections: z.object({
+            indication: z.string(),
+            technique: z.string(),
+            resultats: z.string(),
+            conclusion: z.string(),
+          }),
+          aiGenerated: z.boolean().optional(),
+          aiModel: z.string().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { getDb } = await import("./db");
+        const { reports } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const existing = await getReportByStudy(input.studyId);
+        if (existing && existing.status === "signed") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "Compte-rendu signé : non modifiable (ajoutez un addendum).",
+          });
+        }
+        const sections = validateReportSections(input.sections);
+        if (existing) {
+          await db
+            .update(reports)
+            .set({
+              ...sections,
+              aiGenerated: input.aiGenerated ?? existing.aiGenerated,
+              aiModel: input.aiModel ?? existing.aiModel,
+            })
+            .where(eq(reports.id, existing.id));
+          await recordAccess({
+            userId: ctx.user.id,
+            action: "report.draft",
+            studyId: input.studyId,
+            detail: "update",
+            ipAddress: ctx.req?.ip ?? null,
+          });
+          return { id: existing.id };
+        }
+        await db.insert(reports).values({
+          studyId: input.studyId,
+          status: "draft",
+          ...sections,
+          aiGenerated: input.aiGenerated ?? false,
+          aiModel: input.aiModel ?? null,
+          createdBy: ctx.user.id,
+        });
+        // studyId est unique sur `reports` : on relit le brouillon créé pour en
+        // récupérer l'id (le repo ne dépend pas de insertId du driver MySQL).
+        const created = await getReportByStudy(input.studyId);
+        if (!created) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Compte-rendu créé mais introuvable.",
+          });
+        }
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "report.draft",
+          studyId: input.studyId,
+          detail: "create",
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { id: created.id };
+      }),
+
+    // Pré-analyse IA → sections de brouillon proposées (non persistées ici ;
+    // c'est upsertDraft qui enregistre après relecture du médecin).
+    aiGenerate: adminProcedure
+      .input(
+        z.object({
+          studyId: z.number(),
+          seriesId: z.number().optional(),
+          indication: z.string().optional(),
+          antecedents: z.string().optional(),
+          keyImages: z
+            .array(z.object({ pngBase64: z.string(), sliceIndex: z.number() }))
+            .default([]),
+          priorStudyId: z.number().int().optional(),
+          priorSeriesId: z.number().int().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        // Antériorité explicite (mode comparatif du viewer) sinon la plus
+        // récente du même patient (helper DB existant). Fail-soft : aucune
+        // antériorité → génération simple inchangée.
+        let priorStudyId = input.priorStudyId;
+        if (!priorStudyId) {
+          const { listPriorStudiesForStudy } = await import("./db");
+          const priors = await listPriorStudiesForStudy(input.studyId);
+          priorStudyId = priors[0]?.id;
+        }
+        // runAiPreanalysis renvoie déjà des sections structurées
+        // (technique/resultats/conclusion) — pas de re-parsing de texte brut.
+        const result = await runAiPreanalysis(
+          {
+            studyId: input.studyId,
+            seriesId: input.seriesId,
+            indication: input.indication,
+            antecedents: input.antecedents,
+            keyImages: input.keyImages,
+            priorStudyId,
+            priorSeriesId: input.priorSeriesId,
+          },
+          { user: { id: ctx.user.id }, req: { ip: ctx.req?.ip } }
+        );
+        const sections = validateReportSections({
+          indication: input.indication ?? "",
+          technique: result.technique,
+          resultats: result.resultats,
+          conclusion: result.conclusion,
+        });
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "report.generate",
+          studyId: input.studyId,
+          detail: result.comparedPriorDate
+            ? `${result.model} compared:${priorStudyId}`
+            : result.model,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return {
+          sections,
+          aiModel: result.model,
+          keyImage: result.keyImage ?? null,
+          evolution: result.evolution ?? null,
+          comparedPriorDate: result.comparedPriorDate ?? null,
+        };
+      }),
+
+    // Signature : verrouille le compte-rendu (draft→signed), génère le PDF et le
+    // stocke. canSignReport impose une conclusion non vide + statut draft.
+    sign: adminProcedure
+      .input(z.object({ reportId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const { getDb } = await import("./db");
+        const { reports } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const rows = await db
+          .select()
+          .from(reports)
+          .where(eq(reports.id, input.reportId))
+          .limit(1);
+        const report = rows[0];
+        if (!report) throw new TRPCError({ code: "NOT_FOUND" });
+        const sections = validateReportSections(report);
+        if (!canSignReport(report.status as any, sections)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Conclusion requise, ou déjà signé.",
+          });
+        }
+        const study = await getStudyById(report.studyId);
+        const signedAt = new Date();
+        const signature = `Signé par ${ctx.user.name ?? "Dr"} le ${signedAt.toLocaleString("fr-CH")}`;
+        const pdf = buildReportPdf({
+          study: study as any,
+          report: sections,
+          signature,
+          keyImages: [],
+          aiAssisted: report.aiGenerated,
+        });
+        // storagePut suffixe la clé (hash anti-collision) : on persiste la clé
+        // RÉELLEMENT stockée (sa valeur de retour), pas la clé demandée.
+        const { key } = await storagePut(
+          `reports/${report.studyId}/report-${report.id}.pdf`,
+          pdf,
+          "application/pdf"
+        );
+        await db
+          .update(reports)
+          .set({
+            status: "signed",
+            signedBy: ctx.user.id,
+            signedAt,
+            pdfStorageKey: key,
+          })
+          .where(eq(reports.id, report.id));
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "report.sign",
+          studyId: report.studyId,
+          detail: `report ${report.id}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { success: true, pdfStorageKey: key };
+      }),
+
+    // Addendum (correction post-signature) : append-only, possible uniquement
+    // sur un compte-rendu signé. Régénère le PDF avec l'historique des addenda.
+    addAddendum: adminProcedure
+      .input(z.object({ reportId: z.number(), text: z.string().min(1) }))
+      .mutation(async ({ input, ctx }) => {
+        const { getDb } = await import("./db");
+        const { reports, reportAddenda } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const rows = await db
+          .select()
+          .from(reports)
+          .where(eq(reports.id, input.reportId))
+          .limit(1);
+        const report = rows[0];
+        if (!report) throw new TRPCError({ code: "NOT_FOUND" });
+        if (!canAddAddendum(report.status as any)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Addendum possible uniquement sur un compte-rendu signé.",
+          });
+        }
+        await db.insert(reportAddenda).values({
+          reportId: report.id,
+          text: input.text,
+          createdBy: ctx.user.id,
+        });
+        const addenda = await getReportAddenda(report.id);
+        const study = await getStudyById(report.studyId);
+        const signature = report.signedAt
+          ? `Signé le ${new Date(report.signedAt).toLocaleString("fr-CH")}`
+          : "";
+        const pdf = buildReportPdf({
+          study: study as any,
+          report: validateReportSections(report),
+          signature,
+          keyImages: [],
+          aiAssisted: report.aiGenerated,
+          addenda: addenda.map((a: any) => ({
+            text: a.text,
+            date: new Date(a.createdAt).toLocaleString("fr-CH"),
+            author: `Dr (#${a.createdBy})`,
+          })),
+        });
+        // storagePut suffixe TOUJOURS la clé de base : on lui passe la clé de
+        // base (jamais report.pdfStorageKey, déjà suffixée → double suffixe +
+        // objets orphelins) et on persiste la clé réelle retournée.
+        const { key } = await storagePut(
+          `reports/${report.studyId}/report-${report.id}.pdf`,
+          pdf,
+          "application/pdf"
+        );
+        await db
+          .update(reports)
+          .set({ pdfStorageKey: key })
+          .where(eq(reports.id, report.id));
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "report.addendum",
+          studyId: report.studyId,
+          detail: `report ${report.id}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { success: true };
+      }),
+
+    // URL signée du PDF (lecture). Renvoie null si pas encore généré/signé.
+    pdfUrl: medicalProcedure
+      .input(z.object({ reportId: z.number() }))
+      .query(async ({ input }) => {
+        const { getDb } = await import("./db");
+        const { reports } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) return { url: null };
+        const rows = await db
+          .select()
+          .from(reports)
+          .where(eq(reports.id, input.reportId))
+          .limit(1);
+        const key = rows[0]?.pdfStorageKey;
+        if (!key) return { url: null };
+        return { url: await storageGetSignedUrl(key) };
       }),
   }),
 });

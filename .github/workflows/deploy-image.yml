@@ -2,13 +2,48 @@ name: Build & publish image
 
 # Builds the Docker image and pushes it to GHCR so it can be deployed to the
 # VPS via the Hostinger API (which ships only the compose YAML, not source).
+#
+# Gate (audit H6) : le build/push de l'image de PROD n'a lieu QUE si la
+# vérification passe (typecheck + tests + audit des CVE critiques). Sans ce
+# gate, un commit cassé ou une CVE critique partait directement en image prod.
 on:
   push:
     branches: [self-host]
   workflow_dispatch:
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm check
+
+      - name: Unit tests
+        run: pnpm test
+
+      # Bloque uniquement sur une vulnérabilité CRITIQUE : les "high" transitives
+      # connues (path-to-regexp/lodash/esbuild, déjà patchées en amont) ne
+      # cassent pas le déploiement, mais toute NOUVELLE critique arrête la chaîne
+      # avant de produire une image de prod.
+      - name: Dependency audit (critical only)
+        run: pnpm audit --prod --audit-level critical
+
   build-and-push:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -49,9 +49,32 @@ import {
   getSmtpStatus,
 } from "./email";
 import { ENV } from "./_core/env";
+import { isAllowedRecipient } from "./_core/emailAllowList";
 import { shouldNotify, PRIORITY_TRIGGERS, STATUS_TRIGGERS } from "./risNotify";
 import { annotationDataSchema } from "./annotationSchema";
 import dcmjs from "dcmjs";
+
+// Garde commune aux endpoints `notifications.notify*` : ils sortent du PHI
+// (patientName) vers un destinataire LIBRE. On applique la même allow-list de
+// domaines que sendStudyReport et on trace l'egress dans l'audit trail, avant
+// tout envoi. Cf. audit C2.
+async function guardPhiNotify(
+  recipientEmail: string,
+  ctx: { user: { id: number }; req?: { ip?: string } }
+): Promise<void> {
+  if (!isAllowedRecipient(recipientEmail, ENV.reportEmailAllowedDomains))
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Destinataire non autorisé (domaine non whitelisté).",
+    });
+  await recordAccess({
+    userId: ctx.user.id,
+    action: "study.email.notify",
+    studyId: null,
+    detail: recipientEmail,
+    ipAddress: ctx.req?.ip ?? null,
+  });
+}
 
 // DICOM Application Entity Title: max 16 chars, no path separators or spaces.
 // Constrained here to block path traversal / SSRF when interpolated into the
@@ -176,9 +199,8 @@ async function buildSeriesExportContext(seriesId: number): Promise<{
   error?: string;
 }> {
   const { getDb } = await import("./db");
-  const { series, studies, patients, instances, annotations } = await import(
-    "../drizzle/schema"
-  );
+  const { series, studies, patients, instances, annotations } =
+    await import("../drizzle/schema");
   const { eq } = await import("drizzle-orm");
   const db = await getDb();
   if (!db) return { ctx: null, error: "DB indisponible" };
@@ -286,9 +308,8 @@ export const appRouter = router({
             message: "Registration disabled",
           });
         }
-        const { getUserByEmail, countUsers, createLocalUser } = await import(
-          "./db"
-        );
+        const { getUserByEmail, countUsers, createLocalUser } =
+          await import("./db");
         const { hashPassword } = await import("./localAuth");
         const { sdk } = await import("./_core/sdk");
 
@@ -654,6 +675,8 @@ export const appRouter = router({
           annotations,
           notifications,
           albumStudies,
+          reports,
+          reportAddenda,
         } = await import("../drizzle/schema");
         const { eq } = await import("drizzle-orm");
         const db = await getDb();
@@ -697,6 +720,29 @@ export const appRouter = router({
           .delete(notifications)
           .where(eq(notifications.studyId, input.id));
         await db.delete(albumStudies).where(eq(albumStudies.studyId, input.id));
+
+        // Compte-rendu de l'étude : le report (PHI clinique) et ses addenda
+        // doivent disparaître eux aussi, et son PDF nominatif être purgé du
+        // bucket — sinon une « suppression » laisse du PHI résiduel (droit à
+        // l'effacement nLPD/RGPD). Cf. audit C1.
+        const report = await getReportByStudy(input.id);
+        if (report) {
+          if (report.pdfStorageKey) {
+            try {
+              await storageDelete(report.pdfStorageKey);
+            } catch (err) {
+              console.warn(
+                `[studies.delete] could not remove report PDF ${report.pdfStorageKey}:`,
+                err
+              );
+            }
+          }
+          await db
+            .delete(reportAddenda)
+            .where(eq(reportAddenda.reportId, report.id));
+          await db.delete(reports).where(eq(reports.studyId, input.id));
+        }
+
         await db.delete(studies).where(eq(studies.id, input.id));
 
         await recordAccess({
@@ -1401,9 +1447,8 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        const { sendStudyReportImpl } = await import(
-          "./report/sendStudyReport"
-        );
+        const { sendStudyReportImpl } =
+          await import("./report/sendStudyReport");
         return sendStudyReportImpl(input, ctx as any);
       }),
 
@@ -1445,7 +1490,8 @@ export const appRouter = router({
           institution: z.string().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
+        await guardPhiNotify(input.recipientEmail, ctx);
         return notifyNewStudy(input);
       }),
 
@@ -1460,7 +1506,8 @@ export const appRouter = router({
           urgencyReason: z.string().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
+        await guardPhiNotify(input.recipientEmail, ctx);
         return notifyStatUrgent(input);
       }),
 
@@ -1475,7 +1522,8 @@ export const appRouter = router({
           reportSummary: z.string().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
+        await guardPhiNotify(input.recipientEmail, ctx);
         return notifyReportFinalized(input);
       }),
   }),

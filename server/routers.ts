@@ -24,6 +24,7 @@ import {
 } from "./db";
 import { storagePut, storageDelete, storageGetSignedUrl } from "./storage";
 import { runAiPreanalysis } from "./report/aiPreanalysis";
+import { runHermesChat } from "./report/hermesChat";
 import { buildReportPdf } from "./report/reportPdf";
 import {
   canSignReport,
@@ -1880,6 +1881,33 @@ export const appRouter = router({
         const key = rows[0]?.pdfStorageKey;
         if (!key) return { url: null };
         return { url: await storageGetSignedUrl(key) };
+      }),
+  }),
+
+  ai: router({
+    // Chat « Hermès radiologue » : assistant conversationnel sur l'étude courante.
+    // medicalProcedure (rôle clinique) + anti-IDOR (studyId résolu serveur) +
+    // rate-limit + PHI local par défaut (Claude seulement sous garde H4).
+    askHermes: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          messages: z
+            .array(
+              z.object({
+                role: z.enum(["user", "assistant"]),
+                content: z.string().min(1).max(4000),
+              })
+            )
+            .min(1)
+            .max(24),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        return runHermesChat(input, {
+          user: { id: ctx.user.id },
+          req: { ip: ctx.req?.ip },
+        });
       }),
   }),
 });

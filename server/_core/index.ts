@@ -317,8 +317,11 @@ async function startServer() {
     const body = req.body ?? {};
     const studyId = Number(body.studyId);
     const action = body.action;
+    // Borne anti-DoS : une section de CR raisonnable tient largement en 20k car.
     const currentText =
-      typeof body.currentText === "string" ? body.currentText : "";
+      typeof body.currentText === "string"
+        ? body.currentText.slice(0, 20_000)
+        : "";
     if (!Number.isInteger(studyId) || !ASSIST_ACTIONS.includes(action)) {
       res.status(400).json({ error: "Bad request" });
       return;

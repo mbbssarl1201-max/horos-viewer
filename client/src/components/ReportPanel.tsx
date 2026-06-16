@@ -85,10 +85,13 @@ export default function ReportPanel({
     action: "reformuler" | "structurer" | "conclure" | "terminologie"
   ) => {
     if (assistBusy || isSigned) return;
+    // Capture SYNCHRONE du texte précédent (le state React est asynchrone : on ne
+    // peut pas se fier à `assistPrev` dans le catch).
+    const previousText = sections[field];
     // Pour « conclure », la cible est Conclusion mais le texte source = Résultats.
     const sourceText =
       action === "conclure" ? sections.resultats : sections[field];
-    setAssistPrev(p => ({ ...p, [field]: sections[field] }));
+    setAssistPrev(p => ({ ...p, [field]: previousText }));
     setAssistBusy(field);
     setSections(s => ({ ...s, [field]: "" }));
     const setField = (updater: (cur: string) => string) =>
@@ -127,8 +130,8 @@ export default function ReportPanel({
         reader.cancel().catch(() => {});
       }
     } catch {
-      // Échec : restaure le texte précédent.
-      setSections(s => ({ ...s, [field]: assistPrev[field] ?? s[field] }));
+      // Échec : restaure le texte précédent (capturé synchronement).
+      setSections(s => ({ ...s, [field]: previousText }));
       setMessage("Assistant Hermès indisponible.");
     } finally {
       setAssistBusy(null);

@@ -52,24 +52,30 @@ describe("syncVault", () => {
     expect(out.errors.length).toBeGreaterThan(0);
   });
 
-  it("synchronise les .md et supprime les sources disparues", async () => {
+  it("synchronise les .md (sources préfixées vault:) et supprime les sources coffre disparues, jamais les uploads manuels", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "vault-"));
     await fs.writeFile(path.join(dir, "a.md"), "# A\nContenu A");
     await fs.writeFile(path.join(dir, "b.md"), "# B\nContenu B");
-    // En base, une source "vieux.md" qui n'existe plus dans le coffre.
+    // En base : une source coffre disparue (vault:vieux.md), la source coffre
+    // courante (vault:a.md), et un upload manuel (manuel.md, sans préfixe).
     vi.spyOn(store, "listKnowledgeSources").mockResolvedValue([
-      "a.md",
-      "vieux.md",
+      "vault:a.md",
+      "vault:vieux.md",
+      "manuel.md",
     ]);
     const out = await syncVault(dir);
     expect(out.files).toBe(2);
     expect(out.chunks).toBeGreaterThan(0);
-    // "vieux.md" supprimée (clearKnowledge appelée avec cette source).
-    expect(
-      (store.clearKnowledge as any).mock.calls.some(
-        (c: any[]) => c[0] === "vieux.md"
-      )
-    ).toBe(true);
+    const cleared = (store.clearKnowledge as any).mock.calls.map(
+      (c: any[]) => c[0]
+    );
+    // les chunks insérés portent le préfixe vault:
+    expect((store.insertChunks as any).mock.calls[0][0][0].source).toContain(
+      "vault:"
+    );
+    // vault:vieux.md supprimée ; manuel.md JAMAIS supprimée
+    expect(cleared).toContain("vault:vieux.md");
+    expect(cleared).not.toContain("manuel.md");
     expect(out.removed).toBe(1);
     await fs.rm(dir, { recursive: true, force: true });
   });

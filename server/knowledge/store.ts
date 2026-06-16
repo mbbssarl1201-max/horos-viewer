@@ -90,3 +90,13 @@ export async function clearKnowledge(source?: string): Promise<void> {
     await db.delete(knowledgeChunks);
   }
 }
+
+/** Liste les `source` distinctes présentes en base (pour la synchro de coffre). */
+export async function listKnowledgeSources(): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .selectDistinct({ source: knowledgeChunks.source })
+    .from(knowledgeChunks);
+  return rows.map(r => r.source);
+}

@@ -76,6 +76,79 @@ export default function ReportPanel({
   const [includeVideo, setIncludeVideo] = useState(true);
   const [message, setMessage] = useState("");
 
+  // Assistance Hermès par section : flux en cours + texte précédent (pour ↩).
+  const [assistBusy, setAssistBusy] = useState<string | null>(null);
+  const [assistPrev, setAssistPrev] = useState<Partial<Sections>>({});
+
+  const runAssist = async (
+    field: keyof Sections,
+    action: "reformuler" | "structurer" | "conclure" | "terminologie"
+  ) => {
+    if (assistBusy || isSigned) return;
+    // Capture SYNCHRONE du texte précédent (le state React est asynchrone : on ne
+    // peut pas se fier à `assistPrev` dans le catch).
+    const previousText = sections[field];
+    // Pour « conclure », la cible est Conclusion mais le texte source = Résultats.
+    const sourceText =
+      action === "conclure" ? sections.resultats : sections[field];
+    setAssistPrev(p => ({ ...p, [field]: previousText }));
+    setAssistBusy(field);
+    setSections(s => ({ ...s, [field]: "" }));
+    const setField = (updater: (cur: string) => string) =>
+      setSections(s => ({ ...s, [field]: updater(s[field]) }));
+    try {
+      const resp = await fetch("/api/hermes/report-assist/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ studyId, action, currentText: sourceText }),
+      });
+      if (!resp.ok || !resp.body) throw new Error("no-stream");
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+          for (const part of parts) {
+            const line = part.trim();
+            if (!line.startsWith("data:")) continue;
+            try {
+              const evt = JSON.parse(line.slice(5).trim());
+              if (typeof evt.t === "string") setField(c => c + evt.t);
+              else if (evt.error) setField(c => c + `\n⚠️ ${evt.error}`);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      } finally {
+        reader.cancel().catch(() => {});
+      }
+    } catch {
+      // Échec : restaure le texte précédent (capturé synchronement).
+      setSections(s => ({ ...s, [field]: previousText }));
+      setMessage("Assistant Hermès indisponible.");
+    } finally {
+      setAssistBusy(null);
+    }
+  };
+
+  const restoreAssist = (field: keyof Sections) => {
+    const prev = assistPrev[field];
+    if (prev === undefined) return;
+    setSections(s => ({ ...s, [field]: prev }));
+    setAssistPrev(p => {
+      const { [field]: _drop, ...rest } = p;
+      void _drop;
+      return rest;
+    });
+  };
+
   // --- Compte-rendu persisté (router `reports`) ---------------------------
   const reportQuery = trpc.reports.getByStudy.useQuery({ studyId });
   const upsertDraft = trpc.reports.upsertDraft.useMutation();
@@ -245,9 +318,59 @@ export default function ReportPanel({
             className={field}
             rows={k === "resultats" ? 5 : 2}
             value={sections[k]}
-            disabled={isSigned}
+            disabled={isSigned || assistBusy === k}
             onChange={e => setSections(s => ({ ...s, [k]: e.target.value }))}
           />
+          {!isSigned && (
+            <div className="flex flex-wrap gap-1 text-[10px]">
+              <button
+                type="button"
+                className="px-1.5 py-0.5 rounded bg-muted/50 hover:bg-muted disabled:opacity-40"
+                disabled={assistBusy != null}
+                onClick={() => void runAssist(k, "reformuler")}
+              >
+                ✨ Reformuler
+              </button>
+              <button
+                type="button"
+                className="px-1.5 py-0.5 rounded bg-muted/50 hover:bg-muted disabled:opacity-40"
+                disabled={assistBusy != null}
+                onClick={() => void runAssist(k, "structurer")}
+              >
+                Structurer
+              </button>
+              <button
+                type="button"
+                className="px-1.5 py-0.5 rounded bg-muted/50 hover:bg-muted disabled:opacity-40"
+                disabled={assistBusy != null}
+                onClick={() => void runAssist(k, "terminologie")}
+              >
+                Terminologie
+              </button>
+              {k === "conclusion" && (
+                <button
+                  type="button"
+                  className="px-1.5 py-0.5 rounded bg-muted/50 hover:bg-muted disabled:opacity-40"
+                  disabled={assistBusy != null}
+                  onClick={() => void runAssist("conclusion", "conclure")}
+                >
+                  Proposer depuis les résultats
+                </button>
+              )}
+              {assistPrev[k] !== undefined && assistBusy !== k && (
+                <button
+                  type="button"
+                  className="px-1.5 py-0.5 rounded text-amber-500 hover:underline"
+                  onClick={() => restoreAssist(k)}
+                >
+                  ↩ Restaurer
+                </button>
+              )}
+              {assistBusy === k && (
+                <span className="text-cyan-400">Hermès rédige…</span>
+              )}
+            </div>
+          )}
         </div>
       ))}
 

@@ -63,6 +63,7 @@ import {
   knowledgeStats,
   clearKnowledge,
 } from "./knowledge/store";
+import { syncVault, listVaultMarkdown } from "./knowledge/vaultSync";
 import { selectRelevant } from "./knowledge/retrieve";
 
 // Garde commune aux endpoints `notifications.notify*` : ils sortent du PHI
@@ -2018,6 +2019,31 @@ export const appRouter = router({
         await clearKnowledge(input.source);
         return { ok: true };
       }),
+    // Statut du coffre Obsidian (chemin configuré + nb de .md), sans embedder.
+    vaultStatus: adminProcedure.query(async () => {
+      const dir = ENV.knowledgeVaultDir;
+      if (!dir)
+        return { dir: "", configured: false, exists: false, fileCount: 0 };
+      const files = await listVaultMarkdown(dir);
+      return {
+        dir,
+        configured: true,
+        exists: files.length > 0,
+        fileCount: files.length,
+      };
+    }),
+    // Synchronise le coffre Obsidian dédié → base RAG (chunks + embeddings locaux).
+    syncVault: adminProcedure.mutation(async ({ ctx }) => {
+      const result = await syncVault(ENV.knowledgeVaultDir);
+      await recordAccess({
+        userId: ctx.user.id,
+        action: "knowledge.vault_sync",
+        studyId: null,
+        detail: `files=${result.files} chunks=${result.chunks} removed=${result.removed}`,
+        ipAddress: ctx.req?.ip ?? null,
+      });
+      return result;
+    }),
   }),
 });
 

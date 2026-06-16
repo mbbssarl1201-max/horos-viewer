@@ -54,6 +54,14 @@ import { isAllowedRecipient } from "./_core/emailAllowList";
 import { shouldNotify, PRIORITY_TRIGGERS, STATUS_TRIGGERS } from "./risNotify";
 import { annotationDataSchema } from "./annotationSchema";
 import dcmjs from "dcmjs";
+import { chunkMarkdown } from "./knowledge/chunk";
+import { embedText } from "./knowledge/embeddings";
+import {
+  insertChunks,
+  searchSimilar,
+  knowledgeStats,
+  clearKnowledge,
+} from "./knowledge/store";
 
 // Garde commune aux endpoints `notifications.notify*` : ils sortent du PHI
 // (patientName) vers un destinataire LIBRE. On applique la même allow-list de
@@ -1908,6 +1916,71 @@ export const appRouter = router({
           user: { id: ctx.user.id },
           req: { ip: ctx.req?.ip },
         });
+      }),
+  }),
+  knowledge: router({
+    // Ingestion de fichiers .md (coffre Obsidian) → chunks + embeddings locaux + stockage.
+    ingest: adminProcedure
+      .input(
+        z.object({
+          files: z
+            .array(
+              z.object({
+                name: z.string().min(1).max(512),
+                content: z.string().max(2_000_000),
+              })
+            )
+            .min(1)
+            .max(50),
+        })
+      )
+      .mutation(async ({ input }) => {
+        let inserted = 0;
+        const errors: string[] = [];
+        for (const f of input.files) {
+          try {
+            const chunks = chunkMarkdown(f.name, f.content);
+            const rows: {
+              source: string;
+              heading: string;
+              content: string;
+              embedding: number[];
+            }[] = [];
+            for (const c of chunks) {
+              try {
+                const embedding = await embedText(
+                  `${c.heading}\n${c.content}`.trim()
+                );
+                rows.push({ ...c, embedding });
+              } catch {
+                errors.push(`${f.name}: embedding échoué (chunk)`);
+              }
+            }
+            inserted += await insertChunks(rows);
+          } catch {
+            errors.push(`${f.name}: ingestion échouée`);
+          }
+        }
+        return { inserted, errors };
+      }),
+    // Recherche par similarité (test/2c).
+    search: adminProcedure
+      .input(
+        z.object({
+          query: z.string().min(1).max(2000),
+          k: z.number().int().min(1).max(20).default(5),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const emb = await embedText(input.query);
+        return { results: await searchSimilar(emb, input.k) };
+      }),
+    stats: adminProcedure.query(async () => knowledgeStats()),
+    clear: adminProcedure
+      .input(z.object({ source: z.string().max(512).optional() }))
+      .mutation(async ({ input }) => {
+        await clearKnowledge(input.source);
+        return { ok: true };
       }),
   }),
 });

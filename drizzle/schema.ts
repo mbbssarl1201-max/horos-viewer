@@ -320,3 +320,13 @@ export type Report = typeof reports.$inferSelect;
 export type InsertReport = typeof reports.$inferInsert;
 export type ReportAddendum = typeof reportAddenda.$inferSelect;
 export type InsertReportAddendum = typeof reportAddenda.$inferInsert;
+
+// Base de connaissances RAG d'Hermès (NON-PHI). `embedding` = JSON.stringify(number[]).
+export const knowledgeChunks = mysqlTable("knowledge_chunks", {
+  id: int("id").autoincrement().primaryKey(),
+  source: varchar("source", { length: 512 }).notNull(),
+  heading: varchar("heading", { length: 512 }),
+  content: text("content").notNull(),
+  embedding: text("embedding").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});

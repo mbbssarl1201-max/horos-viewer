@@ -19,6 +19,7 @@ import {
   markNotificationRead,
   createNotification,
   recordAccess,
+  countRecentAccess,
   getReportByStudy,
   getReportAddenda,
 } from "./db";
@@ -62,6 +63,7 @@ import {
   knowledgeStats,
   clearKnowledge,
 } from "./knowledge/store";
+import { selectRelevant } from "./knowledge/retrieve";
 
 // Garde commune aux endpoints `notifications.notify*` : ils sortent du PHI
 // (patientName) vers un destinataire LIBRE. On applique la même allow-list de
@@ -1974,6 +1976,40 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const emb = await embedText(input.query);
         return { results: await searchSimilar(emb, input.k) };
+      }),
+    // Recherche de connaissances exposée au radiologue (lecture seule).
+    searchPublic: medicalProcedure
+      .input(
+        z.object({
+          query: z.string().min(1).max(2000),
+          k: z.number().int().min(1).max(20).default(8),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const recent = await countRecentAccess(
+          ctx.user.id,
+          "knowledge.search",
+          60
+        );
+        if (recent >= 120) {
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: "Trop de recherches, réessayez plus tard.",
+          });
+        }
+        const emb = await embedText(input.query);
+        const hits = await searchSimilar(emb, input.k);
+        // Recherche directe : on garde tous les résultats au-dessus du seuil
+        // (jusqu'à k), pas la borne d'injection LLM (top-4).
+        const results = selectRelevant(hits, { maxChunks: input.k });
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "knowledge.search",
+          studyId: null,
+          detail: `q.len=${input.query.length}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { results };
       }),
     stats: adminProcedure.query(async () => knowledgeStats()),
     clear: adminProcedure

@@ -199,6 +199,101 @@ async function startServer() {
       }
     }
   });
+  // Chat Hermès en streaming (tokens token-par-token, modèle LOCAL). SSE.
+  // Auth = medicalProcedure (clinique). Anti-IDOR + rate-limit dans prepareHermesChat.
+  app.post("/api/hermes/chat/stream", async (req, res) => {
+    // CSRF (audit H2) : route PHI state-changing, appelée uniquement same-origin
+    // par la SPA. Un contexte cross-site est rejeté (même garde que /api/trpc).
+    if (req.headers["sec-fetch-site"] === "cross-site") {
+      res.status(403).json({ error: "Cross-site request blocked" });
+      return;
+    }
+    const { sdk } = await import("./sdk");
+    const { hasMedicalAccess } = await import("../rbac");
+    let user;
+    try {
+      user = await sdk.authenticateRequest(req as any);
+    } catch {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (!hasMedicalAccess(user)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    // Validation minimale de l'entrée
+    const body = req.body ?? {};
+    const studyId = Number(body.studyId);
+    const messages = Array.isArray(body.messages) ? body.messages : null;
+    if (!Number.isInteger(studyId) || !messages || messages.length === 0) {
+      res.status(400).json({ error: "Bad request" });
+      return;
+    }
+
+    const { prepareHermesChat } = await import("../report/hermesChat");
+    const { streamOllamaChat } = await import("../knowledge/stream");
+
+    let prep;
+    try {
+      prep = await prepareHermesChat(
+        { studyId, messages },
+        { user: { id: user.id } }
+      );
+    } catch (err: any) {
+      const code =
+        err?.code === "TOO_MANY_REQUESTS"
+          ? 429
+          : err?.code === "NOT_FOUND"
+            ? 404
+            : 500;
+      res.status(code).json({ error: err?.message ?? "Erreur" });
+      return;
+    }
+
+    // Si garde H4 (Claude) active : pas de streaming → 409, le client bascule en non-streaming.
+    if (prep.useClaude) {
+      res.status(409).json({ error: "streaming indisponible (backend cloud)" });
+      return;
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    const send = (obj: unknown) =>
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+    // Si le client ferme la connexion, on avorte le flux Ollama (pas de CPU
+    // gaspillé sur le VPS contendu).
+    const abortCtrl = new AbortController();
+    req.on("close", () => abortCtrl.abort());
+
+    try {
+      await streamOllamaChat(
+        prep.messages,
+        delta => send({ t: delta }),
+        abortCtrl.signal
+      );
+      const { recordAccess } = await import("../db");
+      await recordAccess({
+        userId: user.id,
+        action: "ai.hermes.chat",
+        studyId: prep.study.id,
+        detail: prep.model,
+        ipAddress: req.ip ?? null,
+      });
+      send({ done: true, sources: prep.sources, model: prep.model });
+      res.end();
+    } catch (err: any) {
+      logger.error("hermes.stream_failed", { error: String(err) });
+      if (!res.headersSent) {
+        res.status(500).json({ error: "stream failed" });
+      } else {
+        send({ error: "stream interrompu" });
+        res.end();
+      }
+    }
+  });
   // Export routes (ZIP DICOM + PDF) - must be before tRPC
   app.get("/api/export/dicom-zip/:studyId", async (req, res) => {
     try {

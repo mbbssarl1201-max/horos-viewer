@@ -1,0 +1,63 @@
+{
+  "deniedMcpServers": [
+    {
+      "serverName": "supabase"
+    },
+    {
+      "serverName": "hostinger-mcp"
+    },
+    {
+      "serverName": "manus-mcp"
+    },
+    {
+      "serverName": "phantombuster"
+    },
+    {
+      "serverName": "github"
+    },
+    {
+      "serverName": "github-pat"
+    },
+    {
+      "serverUrl": "https://mcp.notion.com/*"
+    },
+    {
+      "serverUrl": "https://calendarmcp.googleapis.com/*"
+    },
+    {
+      "serverUrl": "https://gmailmcp.googleapis.com/*"
+    },
+    {
+      "serverUrl": "https://bindings.mcp.cloudflare.com/*"
+    },
+    {
+      "serverUrl": "https://mcp.exa.ai/*"
+    },
+    {
+      "serverUrl": "https://mcp.supabase.com/*"
+    },
+    {
+      "serverUrl": "https://api.githubcopilot.com/*"
+    },
+    {
+      "serverCommand": [
+        "npx",
+        "-y",
+        "@upstash/context7-mcp"
+      ]
+    },
+    {
+      "serverCommand": [
+        "docker",
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "TFE_TOKEN",
+        "-e",
+        "TFE_ADDRESS",
+        "hashicorp/terraform-mcp-server"
+      ]
+    }
+  ]
+}

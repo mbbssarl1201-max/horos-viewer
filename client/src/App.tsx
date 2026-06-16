@@ -5,6 +5,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import KnowledgePage from "@/pages/KnowledgePage";
+import KnowledgeSearchPage from "@/pages/KnowledgeSearchPage";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Viewer from "./pages/Viewer";
@@ -17,6 +18,7 @@ function Router() {
       <Route path={"/viewer/:studyId?"} component={Viewer} />
       <Route path={"/404"} component={NotFound} />
       <Route path={"/admin/knowledge"} component={KnowledgePage} />
+      <Route path={"/knowledge"} component={KnowledgeSearchPage} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -29,6 +29,9 @@ export const ENV = {
   ollamaTextModel: process.env.OLLAMA_TEXT_MODEL ?? "qwen2.5:3b",
   // Modèle d'embeddings Ollama (RAG Hermès). Local, PHI-safe. `ollama pull nomic-embed-text`.
   ollamaEmbedModel: process.env.OLLAMA_EMBED_MODEL ?? "nomic-embed-text",
+  // Coffre Obsidian dédié (connaissances radiologiques NON-PHI) monté en lecture
+  // seule. Vide = non configuré. Source de la mémoire RAG (sync à la demande).
+  knowledgeVaultDir: process.env.KNOWLEDGE_VAULT_DIR ?? "",
   // Backend IA pour l'analyse d'images : "claude" (Anthropic cloud, meilleure
   // qualité) ou "ollama" (local, PHI-safe). Défaut "ollama".
   aiBackend: process.env.AI_BACKEND ?? "ollama",

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   HERMES_SYSTEM_PROMPT,
   buildHermesContext,
@@ -50,5 +50,34 @@ describe("assembleMessages", () => {
     const msgs = assembleMessages("CTX", hist, 5);
     expect(msgs).toHaveLength(7);
     expect(msgs[2]).toEqual({ role: "user", content: "m15" });
+  });
+});
+
+describe("chatViaOllama", () => {
+  beforeEach(() => {
+    process.env.OLLAMA_URL = "http://ollama-test:11434";
+    process.env.OLLAMA_TEXT_MODEL = "qwen2.5:3b";
+    vi.resetModules();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  it("envoie les messages à /api/chat et renvoie le contenu", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ message: { content: "Réponse Hermès" } }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { chatViaOllama } = await import("./hermesChat");
+    const out = await chatViaOllama([
+      { role: "system", content: "S" },
+      { role: "user", content: "Q" },
+    ]);
+    expect(out).toBe("Réponse Hermès");
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    expect(body.model).toBe("qwen2.5:3b");
+    expect(body.stream).toBe(false);
+    expect(body.messages[0]).toEqual({ role: "system", content: "S" });
   });
 });

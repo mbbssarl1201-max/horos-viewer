@@ -199,8 +199,9 @@ async function buildSeriesExportContext(seriesId: number): Promise<{
   error?: string;
 }> {
   const { getDb } = await import("./db");
-  const { series, studies, patients, instances, annotations } =
-    await import("../drizzle/schema");
+  const { series, studies, patients, instances, annotations } = await import(
+    "../drizzle/schema"
+  );
   const { eq } = await import("drizzle-orm");
   const db = await getDb();
   if (!db) return { ctx: null, error: "DB indisponible" };
@@ -308,8 +309,9 @@ export const appRouter = router({
             message: "Registration disabled",
           });
         }
-        const { getUserByEmail, countUsers, createLocalUser } =
-          await import("./db");
+        const { getUserByEmail, countUsers, createLocalUser } = await import(
+          "./db"
+        );
         const { hashPassword } = await import("./localAuth");
         const { sdk } = await import("./_core/sdk");
 
@@ -405,8 +407,8 @@ export const appRouter = router({
       .input(
         z
           .object({
-            modality: z.string().optional(),
-            timeFilter: z.string().optional(),
+            modality: z.string().max(16).optional(),
+            timeFilter: z.string().max(40).optional(),
           })
           .optional()
       )
@@ -1163,7 +1165,7 @@ export const appRouter = router({
         z.object({
           aet: aeTitleSchema,
           level: z.enum(["Study", "Series", "Instance"]),
-          query: z.record(z.string(), z.string()),
+          query: z.record(z.string().max(64), z.string().max(256)),
         })
       )
       .mutation(async ({ input }) => {
@@ -1447,8 +1449,9 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        const { sendStudyReportImpl } =
-          await import("./report/sendStudyReport");
+        const { sendStudyReportImpl } = await import(
+          "./report/sendStudyReport"
+        );
         return sendStudyReportImpl(input, ctx as any);
       }),
 

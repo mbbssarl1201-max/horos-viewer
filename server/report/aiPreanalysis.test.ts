@@ -16,6 +16,7 @@ describe("generatePreanalysis", () => {
     vi.doUnmock("@anthropic-ai/sdk");
     delete process.env.AI_BACKEND;
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.MEDIVIEW_CLOUD_AI_PHI_CONSENT;
   });
 
   it("parse Résultats/Conclusion depuis la réponse Ollama", async () => {
@@ -219,6 +220,8 @@ describe("generatePreanalysis", () => {
     process.env.AI_BACKEND = "claude";
     process.env.ANTHROPIC_API_KEY = "sk-test";
     process.env.ANTHROPIC_MODEL = "claude-opus-4-8";
+    // Consentement nLPD documenté (DPA) → l'envoi cloud est autorisé.
+    process.env.MEDIVIEW_CLOUD_AI_PHI_CONSENT = "true";
     const createMock = vi.fn(async () => ({
       content: [
         {
@@ -243,6 +246,37 @@ describe("generatePreanalysis", () => {
     expect(out.resultats).toMatch(/RAS/);
     expect(out.conclusion).toMatch(/Normal/);
     expect(out.model).toBe("claude-opus-4-8");
+  });
+
+  it("garde nLPD H4 : AI_BACKEND=claude SANS consentement → repli Ollama local (pas d'appel cloud)", async () => {
+    vi.resetModules();
+    process.env.AI_BACKEND = "claude";
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    // MEDIVIEW_CLOUD_AI_PHI_CONSENT non posé → le cloud ne doit PAS être utilisé.
+    const createMock = vi.fn();
+    vi.doMock("@anthropic-ai/sdk", () => ({
+      default: class {
+        messages = { create: createMock };
+        constructor(_: any) {}
+      },
+    }));
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        message: { content: "Résultats:\nRAS local\nConclusion:\nNormal" },
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { generatePreanalysis } = await import("./aiPreanalysis");
+    const out = await generatePreanalysis(
+      [{ pngBase64: "AAAA", sliceIndex: 0 }],
+      { modality: "CT" }
+    );
+    // Ollama (fetch) appelé, Anthropic JAMAIS.
+    expect(fetchMock).toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
+    expect(out.resultats).toMatch(/RAS local/);
+    expect(out.model).toBe("qwen2.5-vl:3b");
   });
 
   it("parseEvolution : extrait le verdict et nettoie la ligne", async () => {

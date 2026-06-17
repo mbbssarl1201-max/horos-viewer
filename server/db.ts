@@ -1,4 +1,4 @@
-import { eq, desc, and, like, sql, gte, ne, asc } from "drizzle-orm";
+import { eq, desc, and, like, sql, gte, ne, asc, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -468,7 +468,7 @@ export async function createInstance(data: {
 
 export async function createNotification(data: {
   userId: number;
-  type: "new_study" | "stat_urgent" | "report_finalized";
+  type: "new_study" | "stat_urgent" | "report_finalized" | "shared_study";
   title: string;
   message?: string;
   studyId?: number;
@@ -487,6 +487,29 @@ export async function getUserNotifications(userId: number) {
     .where(eq(notifications.userId, userId))
     .orderBy(desc(notifications.createdAt))
     .limit(50);
+}
+
+/**
+ * Liste les comptes cliniques (admin/radiologist/technician) hors l'appelant,
+ * pour le partage interne d'étude. PHI-safe : pas de hash de mot de passe.
+ */
+export async function listClinicalUsers(excludeUserId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      role: users.role,
+    })
+    .from(users)
+    .where(
+      and(
+        inArray(users.role, ["admin", "radiologist", "technician"]),
+        ne(users.id, excludeUserId)
+      )
+    );
 }
 
 export async function markNotificationRead(

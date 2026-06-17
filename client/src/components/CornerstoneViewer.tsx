@@ -118,6 +118,8 @@ export interface CornerstoneViewerHandle {
   setDsaActive: (active: boolean) => void;
   /** Assigne un outil au bouton DROIT (façon « Change the mouse button function »). */
   setSecondaryTool: (toolId: string) => void;
+  /** Dimensions (cols×rows) de l'image courante, ou null. */
+  getImageDimensions: () => { cols: number; rows: number } | null;
 }
 
 /**
@@ -491,6 +493,8 @@ const CornerstoneViewer = forwardRef<
   const onCursorRef = useRef<typeof onCursor>(undefined);
   // Outil assigné au bouton DROIT (W/L par défaut, façon Horos).
   const secondaryToolRef = useRef<string>("wwwl");
+  // Module cornerstone-core mémorisé pour les lectures synchrones (cache/metaData).
+  const cornerstoneCoreRef = useRef<any>(null);
   // Outil actif (ref pour les écouteurs attachés une seule fois, ex. Baguette).
   const activeToolRef = useRef<string>(activeTool);
   // Masque coloré du region-grow : canvas offscreen (résolution image) + imageId
@@ -825,6 +829,27 @@ const CornerstoneViewer = forwardRef<
           getViewport()?.render();
         } catch {}
         drawMaskOverlayRef.current?.();
+      },
+      getImageDimensions: () => {
+        try {
+          const cornerstone = cornerstoneCoreRef.current;
+          const viewport = getViewport();
+          const imageId = viewport?.getCurrentImageId?.();
+          if (!cornerstone || !imageId) return null;
+          // Image décodée en cache → colonnes/lignes fiables.
+          const image = cornerstone.cache?.getImage?.(imageId);
+          if (image?.columns && image?.rows) {
+            return { cols: image.columns, rows: image.rows };
+          }
+          // Repli sur imagePlaneModule (avant décodage complet).
+          const mod = cornerstone.metaData?.get?.("imagePlaneModule", imageId);
+          if (mod?.columns && mod?.rows) {
+            return { cols: mod.columns, rows: mod.rows };
+          }
+          return null;
+        } catch {
+          return null;
+        }
       },
       setSecondaryTool: (toolId: string) => {
         secondaryToolRef.current = toolId;
@@ -1473,6 +1498,7 @@ const CornerstoneViewer = forwardRef<
       csUtils = (cornerstone as any).utilities;
       csMeta = (cornerstone as any).metaData;
       csCache = (cornerstone as any).cache;
+      cornerstoneCoreRef.current = cornerstone;
     })();
 
     const emitCursor = (evt: MouseEvent) => {

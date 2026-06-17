@@ -103,6 +103,11 @@ import { COLORMAPS, getColormapLut } from "@/lib/colormaps";
 import { getPresetsForModality } from "@/lib/windowPresets";
 import { sortByInstanceNumber, sortBySliceLocation } from "@/lib/sortSeries";
 import { edgeLabelsFromIop } from "@/lib/orientationLabels";
+import {
+  formatCursorReadout,
+  formatImageInfo,
+  type CursorData,
+} from "@/lib/viewportOverlay";
 import { suggestIsoForModality } from "@/lib/surfaceThreshold";
 import { CONVOLUTION_KERNELS } from "@/lib/convolution";
 import { extractRoiStats } from "@/lib/annotationMapping";
@@ -339,6 +344,15 @@ export default function Viewer() {
   const [windowWidth, setWindowWidth] = useState(400);
   const [windowCenter, setWindowCenter] = useState(40);
   const [zoomPercent, setZoomPercent] = useState(100);
+  // Lecture curseur façon Horos (px/mm/valeur), alimentée par CornerstoneViewer.
+  const [cursor, setCursor] = useState<CursorData | null>(null);
+  // Outil assigné au bouton DROIT (défaut W/L, façon Horos « mouse button function »).
+  const [secondaryTool, setSecondaryTool] = useState<string>("wwwl");
+  // Dimensions image (cols×rows) pour l'overlay infos image ; null si inconnu.
+  const [imageDims, setImageDims] = useState<{
+    cols: number;
+    rows: number;
+  } | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<number | null>(null);
   const [viewportLayout, setViewportLayout] = useState<ViewportLayout>("1x1");
   // Cellule active de la grille multi-viewports : c'est elle que pilotent la
@@ -732,6 +746,7 @@ export default function Viewer() {
   useEffect(() => {
     if (viewMode !== "2d") {
       setOrientLabels(null);
+      setImageDims(null);
       return;
     }
     let cancelled = false;
@@ -745,6 +760,13 @@ export default function Viewer() {
       try {
         const iop = await activeViewerRef.current?.getImageOrientation?.();
         if (cancelled) return;
+        // Dimensions image (best-effort, synchrone) pour l'overlay infos.
+        try {
+          const dims = activeViewerRef.current?.getImageDimensions?.();
+          if (!cancelled) setImageDims(dims ?? null);
+        } catch {
+          /* dims best-effort */
+        }
         if (iop) {
           setOrientLabels(edgeLabelsFromIop(iop));
           return;
@@ -765,6 +787,17 @@ export default function Viewer() {
   useEffect(() => {
     setKeyImageSlices([]);
   }, [selectedSeries]);
+
+  // Affecte l'outil du bouton DROIT au viewer actif quand le choix change ou que
+  // la série/cellule active change (le tool group est recréé à ce moment-là).
+  useEffect(() => {
+    activeViewerRef.current?.setSecondaryTool?.(secondaryTool);
+  }, [secondaryTool, selectedSeries, activeCell, viewportLayout]);
+
+  // Le curseur ne concerne que la 2D : on le vide hors 2D.
+  useEffect(() => {
+    if (viewMode !== "2d") setCursor(null);
+  }, [viewMode]);
 
   // Anti-fuite PHI (audit C1) : le composant Viewer reste monté en navigation
   // viewer→viewer (route /viewer/:studyId), donc on purge explicitement les
@@ -2028,6 +2061,112 @@ export default function Viewer() {
           <span className="text-[9px]">3D</span>
         </button>
 
+        {/* Menu unifié « 2D/3D » façon Horos : regroupe les modes DÉJÀ existants
+            (2D, MPR, Volume, Surface, Curved, Fly-thru) en un seul sélecteur de
+            découvrabilité. Chaque option ne fait que router vers les setters
+            existants — aucun nouveau mode n'est créé. */}
+        <div
+          className="flex items-center gap-1 px-1"
+          title="Mode d'affichage 2D/3D (regroupe les modes existants)"
+        >
+          <select
+            className="bg-muted/40 border border-border rounded text-[11px] px-1 py-0.5"
+            value={
+              viewMode === "2d"
+                ? "2d"
+                : viewMode === "mpr"
+                  ? "mpr"
+                  : surface3d
+                    ? "surface"
+                    : "vr"
+            }
+            onChange={e => {
+              const v = e.target.value;
+              if (v === "2d") {
+                setViewMode("2d");
+              } else if (v === "mpr") {
+                setViewMode("mpr");
+              } else if (v === "curved") {
+                setViewMode("mpr");
+                setCurvedMprOpen(true);
+              } else if (v === "vr") {
+                setSurface3d(false);
+                setViewMode("3d");
+              } else if (v === "surface") {
+                setSurface3d(true);
+                setViewMode("3d");
+              } else if (v === "fly") {
+                setSurface3d(false);
+                setViewMode("3d");
+                setFlyThruNonce(n => n + 1);
+              }
+            }}
+          >
+            <option value="2d">2D — Coupe</option>
+            <option value="mpr">MPR — Reconstruction</option>
+            <option value="curved">MPR curviligne (bêta)</option>
+            <option value="vr">3D — Volume Rendering</option>
+            <option value="surface">3D — Surface</option>
+            <option value="fly">3D — Fly-thru / Endoscopie</option>
+          </select>
+        </div>
+
+        {/* Contrôle « Bouton souris » (façon Horos) : assigne un outil au bouton
+            DROIT. Le bouton gauche reste piloté par la barre d'outils. */}
+        <div
+          className="flex items-center gap-1 px-1"
+          title="Outil du bouton droit de la souris (le gauche reste l'outil actif)"
+        >
+          <span className="text-[9px] text-muted-foreground">Bouton droit</span>
+          <select
+            className="bg-muted/40 border border-border rounded text-[11px] px-1 py-0.5"
+            value={secondaryTool}
+            onChange={e => setSecondaryTool(e.target.value)}
+          >
+            <option value="wwwl">W/L</option>
+            <option value="zoom">Zoom</option>
+            <option value="pan">Déplacer</option>
+            <option value="scroll">Défiler les coupes</option>
+          </select>
+        </div>
+
+        {/* CLUT + Opacité directement en barre 2D (façon Horos). Partagent l'état
+            avec le popover « Image » → restent synchronisés. */}
+        {viewMode === "2d" && (
+          <div className="flex items-center gap-1 px-1">
+            <select
+              className="bg-muted/40 border border-border rounded text-[11px] px-1 py-0.5"
+              title="CLUT (palette couleur) ; « Aucun » = niveaux de gris"
+              value={activeColormap ?? ""}
+              onChange={e => {
+                const name = e.target.value || null;
+                setActiveColormap(name);
+                activeViewerRef.current?.setColormap(name);
+              }}
+            >
+              <option value="">Aucun CLUT</option>
+              {COLORMAPS.map(c => (
+                <option key={c.name} value={c.name}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <select
+              className="bg-muted/40 border border-border rounded text-[11px] px-1 py-0.5"
+              title="Table d'opacité (fonction VOI LUT)"
+              value={voiLutFn}
+              onChange={e => {
+                const fn = e.target.value as "LINEAR" | "SIGMOID";
+                setVoiLutFn(fn);
+                activeViewerRef.current?.setVoiLutFunction(fn);
+              }}
+            >
+              <option value="LINEAR">Opacité : Linéaire</option>
+              <option value="SIGMOID">Opacité : Sigmoïde</option>
+            </select>
+          </div>
+        )}
+
         {/* Disposition des viewports (mosaïque) — 2D uniquement */}
         {viewMode === "2d" && (
           <>
@@ -2995,6 +3134,7 @@ export default function Viewer() {
                       setWindowCenter(wc);
                     }}
                     onZoomChange={setZoomPercent}
+                    onCursor={setCursor}
                     instances={cellInstances}
                     savedAnnotations={savedAnnotations}
                     onSaveAnnotation={handleSaveAnnotation}
@@ -3046,6 +3186,7 @@ export default function Viewer() {
                                 : () => {}
                             }
                             onZoomChange={isActive ? setZoomPercent : undefined}
+                            onCursor={isActive ? setCursor : undefined}
                             instances={cellInstances}
                             // Seule la cellule active hydrate/persiste les
                             // annotations : évite la double-sauvegarde (les
@@ -3228,6 +3369,20 @@ export default function Viewer() {
               }}
             >
               <div>Zoom: {zoomPercent}%</div>
+              {/* Lecture curseur façon Horos : px + mm (si calibré) + valeur. */}
+              {viewMode === "2d" && cursor && (
+                <div className="mt-0.5">{formatCursorReadout(cursor)}</div>
+              )}
+              {/* Infos image (dimensions) — angle omis si non disponible. */}
+              {viewMode === "2d" &&
+                formatImageInfo({
+                  cols: imageDims?.cols,
+                  rows: imageDims?.rows,
+                }).map((line, i) => (
+                  <div key={`imginfo-${i}`} className="mt-0.5">
+                    {line}
+                  </div>
+                ))}
               {huStats && (
                 <div className="mt-1 border border-green-400/30 rounded px-2 py-1 bg-black/60">
                   <div className="text-green-400/90 font-semibold text-[9px] mb-0.5">

@@ -854,16 +854,41 @@ export default function VolumeViewer({
         })
         .catch(() => {});
     };
-  }, [
-    imageUrls,
-    orthancImageIds,
-    volumeId,
-    mode,
-    slabThicknessMm,
-    slabMode,
-    petImageUrls,
-    petVolumeId,
-  ]);
+    // `slabThicknessMm`/`slabMode` sont volontairement HORS de ces deps : un effet
+    // dédié les ré-applique sur le viewport vivant sans reconstruire le moteur
+    // (évite le « clignotement » au changement d'épaisseur/mode). Cf. plus bas.
+  }, [imageUrls, orthancImageIds, volumeId, mode, petImageUrls, petVolumeId]);
+
+  // Changement d'épaisseur de dalle / mode (MIP·MinIP·Moyenne) : ré-appliquer SANS
+  // reconstruire le moteur (rapide, pas de flicker). Couvre MPR + slab2d.
+  useEffect(() => {
+    if (mode !== "mpr" && mode !== "slab2d") return;
+    let cancelled = false;
+    (async () => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const { Enums } = await import("@cornerstonejs/core");
+      if (cancelled) return;
+      const ids = ["MPR_AXIAL", "MPR_SAGITTAL", "MPR_CORONAL", "SLAB2D_AXIAL"];
+      const live: string[] = [];
+      for (const id of ids) {
+        const vp = engine.getViewport?.(id);
+        if (!vp) continue;
+        try {
+          applySlab(vp, slabThicknessMm, slabMode, Enums);
+          live.push(id);
+        } catch {}
+      }
+      if (live.length) {
+        try {
+          engine.renderViewports(live);
+        } catch {}
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [slabThicknessMm, slabMode, mode]);
 
   // Changement de preset 3D : ré-appliquer SANS reconstruire le moteur (rapide).
   // `preset3d` est volontairement HORS du tableau de deps du useEffect principal.

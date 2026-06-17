@@ -60,6 +60,7 @@ import {
 } from "lucide-react";
 import { useState, useCallback } from "react";
 import { matchAllFields } from "@/lib/studySearch";
+import { matchesTodayModality } from "@/lib/quickAlbums";
 import { toast } from "sonner";
 
 // All DICOM modalities as seen in Horos
@@ -153,6 +154,15 @@ function albumMatches(study: any, key: string, openedIds: number[]): boolean {
     case "opened":
       return openedIds.includes(study?.id);
     default:
+      // Albums « Today <modalité> » façon Horos : clé « today:CT », « today:MR »…
+      if (key.startsWith("today:")) {
+        return matchesTodayModality(
+          key.slice("today:".length),
+          study,
+          parseStudyMs(study?.studyDate),
+          now
+        );
+      }
       return true;
   }
 }
@@ -702,31 +712,37 @@ export default function Home() {
                 Today's Studies
               </h3>
               <div className="space-y-0.5">
-                {ALL_MODALITIES.slice(0, 10).map(mod => (
-                  <button
-                    key={mod.key}
-                    onClick={() =>
-                      setSelectedModality(
-                        selectedModality === mod.key ? null : mod.key
-                      )
-                    }
-                    className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
-                      selectedModality === mod.key
-                        ? "bg-primary/20 text-primary"
-                        : "text-sidebar-foreground hover:bg-sidebar-accent"
-                    }`}
-                  >
-                    <span className="w-6 font-mono text-[10px] shrink-0">
-                      {mod.key}
-                    </span>
-                    <span className="truncate text-[10px]">
-                      {mod.description}
-                    </span>
-                    <span className="ml-auto text-[10px] text-muted-foreground">
-                      0
-                    </span>
-                  </button>
-                ))}
+                {ALL_MODALITIES.slice(0, 10).map(mod => {
+                  const albumKey = `today:${mod.key}`;
+                  const count = allStudies.filter((s: any) =>
+                    albumMatches(s, albumKey, openedIds)
+                  ).length;
+                  return (
+                    <button
+                      key={mod.key}
+                      onClick={() =>
+                        setSelectedAlbum(
+                          selectedAlbum === albumKey ? "database" : albumKey
+                        )
+                      }
+                      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
+                        selectedAlbum === albumKey
+                          ? "bg-primary/20 text-primary"
+                          : "text-sidebar-foreground hover:bg-sidebar-accent"
+                      }`}
+                    >
+                      <span className="w-6 font-mono text-[10px] shrink-0">
+                        {mod.key}
+                      </span>
+                      <span className="truncate text-[10px]">
+                        {mod.description}
+                      </span>
+                      <span className="ml-auto text-[10px] text-muted-foreground">
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -776,9 +792,33 @@ export default function Home() {
             <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1">
               Activity
             </h3>
-            <p className="text-[10px] text-muted-foreground">
-              No active transfers
-            </p>
+            {(() => {
+              const recent = openedIds
+                .map(id => allStudies.find((s: any) => s.id === id))
+                .filter(Boolean)
+                .slice(0, 6);
+              if (recent.length === 0)
+                return (
+                  <p className="text-[10px] text-muted-foreground">
+                    Aucune activité récente
+                  </p>
+                );
+              return (
+                <div className="space-y-0.5">
+                  {recent.map((s: any) => (
+                    <button
+                      key={s.id}
+                      onClick={() => navigate(`/viewer/${s.id}`)}
+                      className="w-full text-left text-[10px] text-muted-foreground hover:text-foreground truncate"
+                      title={`${s.patientName || "?"} — ${s.modality || ""} ${s.studyDescription || ""}`}
+                    >
+                      • {s.patientName || "Sans nom"}{" "}
+                      <span className="opacity-60">{s.modality || ""}</span>
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         </div>
 

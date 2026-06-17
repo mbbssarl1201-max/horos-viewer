@@ -6,6 +6,7 @@ import VolumeViewer, { PRESETS_3D } from "@/components/VolumeViewer";
 import TransferFunctionEditor from "@/components/TransferFunctionEditor";
 import { type OpacityPoint } from "@/lib/transferFunction";
 import { SLAB_MODES, type SlabMode } from "@/lib/slabBlend";
+import { isReconstructable } from "@/lib/volumeReconstruct";
 import type { ClipPlaneConfig, ClipAxis } from "@/lib/clipPlanes";
 import { shouldReselectSeries } from "@/lib/seriesSelection";
 import { trpc } from "@/lib/trpc";
@@ -409,6 +410,9 @@ export default function Viewer() {
   } | null>(null);
   const [slabThicknessMm, setSlabThicknessMm] = useState(0);
   const [slabMode, setSlabMode] = useState<SlabMode>("mip");
+  // « Épaisseur 2D » : monte un viewport volumique mono-plan (thick-slab
+  // MIP/MinIP/Moyenne) à la place du StackViewport 2D, en 1x1 seulement. Additif.
+  const [slab2dOn, setSlab2dOn] = useState(false);
   // ── Fusion PET-CT (MPR) ─────────────────────────────────────────────────
   // Série PET choisie pour la superposition (null = fusion désactivée), opacité
   // de fusion (0..1) et colormap. Fonctionnel uniquement si l'étude contient une
@@ -589,6 +593,15 @@ export default function Viewer() {
     () => (instancesList ?? []).map((inst: any) => inst.storageUrl || ""),
     [instancesList]
   );
+
+  // Série reconstructible en volume (≥ 2 coupes) → conditionne le mode
+  // « Épaisseur 2D » (toggle désactivé sinon). Même source que le chemin MPR.
+  const reconstructable = isReconstructable(volumeImageUrls);
+
+  // Auto-désactiver « Épaisseur 2D » si la nouvelle série n'est pas reconstructible.
+  useEffect(() => {
+    if (!reconstructable && slab2dOn) setSlab2dOn(false);
+  }, [reconstructable, slab2dOn]);
 
   // Séries PET (modality PT) disponibles dans l'étude pour la fusion.
   const petSeriesOptions = useMemo(
@@ -2061,6 +2074,23 @@ export default function Viewer() {
           <span className="text-[9px]">3D</span>
         </button>
 
+        {/* « Épaisseur 2D » (thick-slab MIP/MinIP/Moyenne sur la vue 2D 1x1).
+            Additif : monte un viewport volumique mono-plan à la place du stack.
+            Désactivé si la série n'est pas reconstructible (< 2 coupes). */}
+        <button
+          onClick={() => setSlab2dOn(v => !v)}
+          disabled={!reconstructable}
+          className={`toolbar-btn ${slab2dOn ? "active" : ""}`}
+          title={
+            reconstructable
+              ? "Épaisseur 2D (thick-slab MIP/MinIP/Moyenne)"
+              : "Série non reconstructible en volume (< 2 coupes)"
+          }
+        >
+          <Layers className="w-4 h-4" />
+          <span className="text-[9px]">Épaisseur</span>
+        </button>
+
         {/* Menu unifié « 2D/3D » façon Horos : regroupe les modes DÉJÀ existants
             (2D, MPR, Volume, Surface, Curved, Fly-thru) en un seul sélecteur de
             découvrabilité. Chaque option ne fait que router vers les setters
@@ -2198,8 +2228,9 @@ export default function Viewer() {
           </>
         )}
 
-        {/* Slab controls — MPR only */}
-        {viewMode === "mpr" && (
+        {/* Slab controls — MPR, ou vue 2D quand « Épaisseur 2D » est actif. La
+            fusion PET / Curved MPR restent MPR-only (bloc interne). */}
+        {(viewMode === "mpr" || (viewMode === "2d" && slab2dOn)) && (
           <div className="flex items-center gap-2 px-2">
             <label className="text-[10px] text-muted-foreground">Slab</label>
             <input
@@ -2224,105 +2255,109 @@ export default function Viewer() {
               ))}
             </select>
 
-            <Separator orientation="vertical" className="h-7 mx-1" />
+            {viewMode === "mpr" && (
+              <>
+                <Separator orientation="vertical" className="h-7 mx-1" />
 
-            {/* Fusion PET-CT — MPR uniquement. Fonctionnel si l'étude contient
+                {/* Fusion PET-CT — MPR uniquement. Fonctionnel si l'étude contient
                 une série PET (modality PT) ; sinon désactivé avec un message
                 explicite. La superposition est additive et fail-safe : un échec
                 de chargement PET laisse le MPR CT intact. */}
-            <label
-              className="text-[10px] text-muted-foreground"
-              title="Superposer une série PET colorée sur le CT (fusion)"
-            >
-              Fusion PET
-            </label>
-            {hasPet ? (
-              <>
-                <select
-                  className="bg-transparent text-[10px] border border-border rounded"
-                  value={fusionPetSeries ?? ""}
-                  onChange={e =>
-                    setFusionPetSeries(
-                      e.target.value ? Number(e.target.value) : null
-                    )
-                  }
-                  title="Choisir la série PET à fusionner"
+                <label
+                  className="text-[10px] text-muted-foreground"
+                  title="Superposer une série PET colorée sur le CT (fusion)"
                 >
-                  <option value="">Désactivée</option>
-                  {petSeriesOptions.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.seriesDescription ||
-                        `Série PET ${s.seriesNumber ?? s.id}`}
-                    </option>
-                  ))}
-                </select>
-                {fusionPetSeries && (
+                  Fusion PET
+                </label>
+                {hasPet ? (
                   <>
                     <select
                       className="bg-transparent text-[10px] border border-border rounded"
-                      value={petColormapId}
-                      onChange={e => setPetColormapId(e.target.value)}
-                      title="Palette de couleurs PET"
+                      value={fusionPetSeries ?? ""}
+                      onChange={e =>
+                        setFusionPetSeries(
+                          e.target.value ? Number(e.target.value) : null
+                        )
+                      }
+                      title="Choisir la série PET à fusionner"
                     >
-                      {PET_COLORMAPS.map(c => (
-                        <option key={c.id} value={c.id}>
-                          {c.label}
+                      <option value="">Désactivée</option>
+                      {petSeriesOptions.map(s => (
+                        <option key={s.id} value={s.id}>
+                          {s.seriesDescription ||
+                            `Série PET ${s.seriesNumber ?? s.id}`}
                         </option>
                       ))}
                     </select>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      step={1}
-                      value={Math.round(fusionOpacity * 100)}
-                      onChange={e =>
-                        setFusionOpacity(Number(e.target.value) / 100)
-                      }
-                      title="Opacité de la fusion PET (%)"
-                    />
-                    <span className="text-[10px] w-8">
-                      {Math.round(fusionOpacity * 100)}%
-                    </span>
-                    {/* Facteur SUV (body weight) issu des métadonnées PET. */}
-                    {fusionActive && (
-                      <span
-                        className="text-[10px] text-muted-foreground"
-                        title={
-                          suvResult?.factor != null
-                            ? `SUV = valeur_pixel × ${suvResult.factor.toExponential(
-                                3
-                              )} (décroissance ${suvResult.decayTimeSec ?? "?"} s)`
-                            : suvResult?.reason ||
-                              "Facteur SUV en cours de calcul…"
-                        }
-                      >
-                        {suvResult?.factor != null
-                          ? `SUV ×${suvResult.factor.toExponential(2)}`
-                          : "SUV n/d"}
-                      </span>
+                    {fusionPetSeries && (
+                      <>
+                        <select
+                          className="bg-transparent text-[10px] border border-border rounded"
+                          value={petColormapId}
+                          onChange={e => setPetColormapId(e.target.value)}
+                          title="Palette de couleurs PET"
+                        >
+                          {PET_COLORMAPS.map(c => (
+                            <option key={c.id} value={c.id}>
+                              {c.label}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={Math.round(fusionOpacity * 100)}
+                          onChange={e =>
+                            setFusionOpacity(Number(e.target.value) / 100)
+                          }
+                          title="Opacité de la fusion PET (%)"
+                        />
+                        <span className="text-[10px] w-8">
+                          {Math.round(fusionOpacity * 100)}%
+                        </span>
+                        {/* Facteur SUV (body weight) issu des métadonnées PET. */}
+                        {fusionActive && (
+                          <span
+                            className="text-[10px] text-muted-foreground"
+                            title={
+                              suvResult?.factor != null
+                                ? `SUV = valeur_pixel × ${suvResult.factor.toExponential(
+                                    3
+                                  )} (décroissance ${suvResult.decayTimeSec ?? "?"} s)`
+                                : suvResult?.reason ||
+                                  "Facteur SUV en cours de calcul…"
+                            }
+                          >
+                            {suvResult?.factor != null
+                              ? `SUV ×${suvResult.factor.toExponential(2)}`
+                              : "SUV n/d"}
+                          </span>
+                        )}
+                      </>
                     )}
                   </>
+                ) : (
+                  <span className="text-[10px] text-muted-foreground/60 italic">
+                    Aucune série PET dans cette étude
+                  </span>
                 )}
-              </>
-            ) : (
-              <span className="text-[10px] text-muted-foreground/60 italic">
-                Aucune série PET dans cette étude
-              </span>
-            )}
 
-            <Separator orientation="vertical" className="h-7 mx-1" />
+                <Separator orientation="vertical" className="h-7 mx-1" />
 
-            {/* Curved MPR (bêta) — ouvre un panneau autonome de reformation
+                {/* Curved MPR (bêta) — ouvre un panneau autonome de reformation
                 curviligne. N'altère pas les viewports MPR. */}
-            <button
-              className="toolbar-btn"
-              title="Curved MPR (bêta) — reformation curviligne le long d'une courbe"
-              onClick={() => setCurvedMprOpen(true)}
-            >
-              <Spline className="w-4 h-4" />
-              <span className="text-[9px]">Curved MPR (bêta)</span>
-            </button>
+                <button
+                  className="toolbar-btn"
+                  title="Curved MPR (bêta) — reformation curviligne le long d'une courbe"
+                  onClick={() => setCurvedMprOpen(true)}
+                >
+                  <Spline className="w-4 h-4" />
+                  <span className="text-[9px]">Curved MPR (bêta)</span>
+                </button>
+              </>
+            )}
           </div>
         )}
         {/* Presets de rendu volumique — 3D only (liste déroulante : trop de
@@ -3118,28 +3153,41 @@ export default function Viewer() {
                     </div>
                   </div>
                 ) : viewportLayout === "1x1" ? (
-                  // 1x1 : rendu STRICTEMENT identique à l'historique — un seul
-                  // CornerstoneViewer, sans instanceKey (ids historiques),
-                  // remplissant le conteneur #cornerstone-viewport.
-                  <CornerstoneViewer
-                    ref={activeViewerRef}
-                    imageUrls={cellImageUrls}
-                    currentSlice={currentSlice}
-                    onSliceChange={setCurrentSlice}
-                    activeTool={activeTool}
-                    windowWidth={windowWidth}
-                    windowCenter={windowCenter}
-                    onWindowLevelChange={(ww, wc) => {
-                      setWindowWidth(ww);
-                      setWindowCenter(wc);
-                    }}
-                    onZoomChange={setZoomPercent}
-                    onCursor={setCursor}
-                    instances={cellInstances}
-                    savedAnnotations={savedAnnotations}
-                    onSaveAnnotation={handleSaveAnnotation}
-                    onRoiStats={setHuStats}
-                  />
+                  slab2dOn && reconstructable ? (
+                    // « Épaisseur 2D » : viewport volumique mono-plan (thick-slab
+                    // MIP/MinIP/Moyenne) à la place du StackViewport. Mirror du
+                    // chemin MPR (même imageUrls). Repli stack si la série n'est
+                    // pas reconstructible (toggle auto-désactivé en amont).
+                    <VolumeViewer
+                      mode="slab2d"
+                      imageUrls={volumeImageUrls}
+                      slabThicknessMm={slabThicknessMm}
+                      slabMode={slabMode}
+                    />
+                  ) : (
+                    // 1x1 : rendu STRICTEMENT identique à l'historique — un seul
+                    // CornerstoneViewer, sans instanceKey (ids historiques),
+                    // remplissant le conteneur #cornerstone-viewport.
+                    <CornerstoneViewer
+                      ref={activeViewerRef}
+                      imageUrls={cellImageUrls}
+                      currentSlice={currentSlice}
+                      onSliceChange={setCurrentSlice}
+                      activeTool={activeTool}
+                      windowWidth={windowWidth}
+                      windowCenter={windowCenter}
+                      onWindowLevelChange={(ww, wc) => {
+                        setWindowWidth(ww);
+                        setWindowCenter(wc);
+                      }}
+                      onZoomChange={setZoomPercent}
+                      onCursor={setCursor}
+                      instances={cellInstances}
+                      savedAnnotations={savedAnnotations}
+                      onSaveAnnotation={handleSaveAnnotation}
+                      onRoiStats={setHuStats}
+                    />
+                  )
                 ) : (
                   // Mosaïque 2D : N cellules de la MÊME série, chacune avec son
                   // propre moteur/tool group/viewport (instanceKey unique). Seule

@@ -24,6 +24,7 @@ import ExportPanel from "@/components/ExportPanel";
 import AnonymizeDialog from "@/components/AnonymizeDialog";
 import QueryPACS from "@/components/QueryPACS";
 import WorklistDialog from "@/components/WorklistDialog";
+import ShareStudyDialog from "@/components/ShareStudyDialog";
 import { useLocation } from "wouter";
 import {
   Database,
@@ -188,6 +189,7 @@ export default function Home() {
   const [showAnonymizeDialog, setShowAnonymizeDialog] = useState(false);
   const [showQueryPACS, setShowQueryPACS] = useState(false);
   const [showWorklist, setShowWorklist] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [selectedStudyId, setSelectedStudyId] = useState<number | null>(null);
   const [showMetaData, setShowMetaData] = useState(false);
   // Recherche multi-champs (Search ⌘F) — filtrage client de la liste d'études.
@@ -367,6 +369,13 @@ export default function Home() {
                 },
               },
               {
+                label: "Partager…",
+                onClick: () => {
+                  if (selectedStudyId) setShareOpen(true);
+                  else toast("Select a study first");
+                },
+              },
+              {
                 label: "Delete Study",
                 onClick: () => {
                   if (selectedStudyId) toast("Delete requires admin role");
@@ -504,7 +513,10 @@ export default function Home() {
         <ToolbarButton
           icon={Send}
           label="Cloud Sharing"
-          onClick={() => toast("Cloud Sharing coming soon")}
+          onClick={() => {
+            if (selectedStudyId) setShareOpen(true);
+            else toast("Sélectionnez une étude");
+          }}
         />
         <ToolbarSep />
         <ToolbarButton
@@ -1085,6 +1097,12 @@ export default function Home() {
       <QueryPACS open={showQueryPACS} onOpenChange={setShowQueryPACS} />
 
       <WorklistDialog open={showWorklist} onOpenChange={setShowWorklist} />
+
+      <ShareStudyDialog
+        studyId={selectedStudyId}
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+      />
 
       {/* Add PACS Server Dialog */}
       <Dialog open={showAddServer} onOpenChange={setShowAddServer}>

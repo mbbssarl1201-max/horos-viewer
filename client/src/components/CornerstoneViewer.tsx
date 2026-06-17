@@ -28,6 +28,8 @@ import {
   type RoiStats,
   type InstanceLike,
 } from "@/lib/annotationMapping";
+import type { CursorData } from "@/lib/viewportOverlay";
+import { computeScaleBar } from "@/lib/scaleBar";
 
 /**
  * CornerstoneViewer - Renders DICOM images using Cornerstone3D
@@ -73,6 +75,8 @@ interface CornerstoneViewerProps {
    * le moteur de rendu / le tool group / l'id de viewport partagés.
    */
   instanceKey?: string;
+  /** Émet la position curseur (image px + mm + valeur) au survol ; null à la sortie. */
+  onCursor?: (c: CursorData | null) => void;
 }
 
 // Poignée impérative exposée au parent : permet à la barre d'outils de demander
@@ -112,6 +116,10 @@ export interface CornerstoneViewerHandle {
   captureDsaMask: () => void;
   /** DSA : active/désactive l'affichage soustrait (live − masque). */
   setDsaActive: (active: boolean) => void;
+  /** Assigne un outil au bouton DROIT (façon « Change the mouse button function »). */
+  setSecondaryTool: (toolId: string) => void;
+  /** Dimensions (cols×rows) de l'image courante, ou null. */
+  getImageDimensions: () => { cols: number; rows: number } | null;
 }
 
 /**
@@ -324,7 +332,13 @@ function buildToolMap(cst: any): Record<string, string> {
 }
 
 // Make the chosen tool the primary-button tool; keep stack scroll on the wheel.
-function applyActiveTool(cst: any, toolGroup: any, activeTool: string) {
+// `secondaryTool` lie un outil au bouton DROIT (défaut W/L, façon Horos).
+function applyActiveTool(
+  cst: any,
+  toolGroup: any,
+  activeTool: string,
+  secondaryTool: string = "wwwl"
+) {
   const map = buildToolMap(cst);
   // Garde défensive : un id d'outil inconnu (ex. ancien « crosshair » absent du
   // map) retombe sur W/L au lieu de faire un return silencieux qui laissait le
@@ -336,9 +350,15 @@ function applyActiveTool(cst: any, toolGroup: any, activeTool: string) {
       toolGroup.setToolPassive(name);
     } catch {}
   });
-  toolGroup.setToolActive(csName, {
-    bindings: [{ mouseButton: cst.Enums.MouseBindings.Primary }],
-  });
+  // Si l'outil du bouton droit est le même que celui du bouton gauche, on lie
+  // les deux boutons en un seul appel (sinon le 2nd setToolActive écraserait le
+  // binding Primary). Sinon, Primary seul ici + Secondary plus bas.
+  const secName = map[secondaryTool] || map["wwwl"];
+  const primaryBindings = [{ mouseButton: cst.Enums.MouseBindings.Primary }];
+  if (secName === csName) {
+    primaryBindings.push({ mouseButton: cst.Enums.MouseBindings.Secondary });
+  }
+  toolGroup.setToolActive(csName, { bindings: primaryBindings });
   // Segmentation : si l'outil choisi est le pinceau ou la gomme, on bascule la
   // stratégie active du BrushTool (remplir vs effacer). Aucun effet sur les autres
   // outils (resolveBrushStrategy renvoie null).
@@ -353,6 +373,72 @@ function applyActiveTool(cst: any, toolGroup: any, activeTool: string) {
       bindings: [{ mouseButton: cst.Enums.MouseBindings.Wheel }],
     });
   } catch {}
+  // Outil sur le bouton DROIT (W/L par défaut, façon Horos), uniquement si
+  // différent de l'outil primaire (sinon déjà lié ci-dessus avec les 2 boutons).
+  if (secName && secName !== csName) {
+    try {
+      toolGroup.setToolActive(secName, {
+        bindings: [{ mouseButton: cst.Enums.MouseBindings.Secondary }],
+      });
+    } catch {}
+  }
+}
+
+// Dessine la règle calibrée (mm) le long du bord gauche du viewport. Best-effort :
+// si le pixel spacing ou la géométrie manquent (computeScaleBar → null), ne dessine
+// rien. `zoom` (px écran / px image) est mesuré exactement via worldToCanvas sur
+// deux points image distants de 1 px verticalement → indépendant de getZoom().
+function drawScaleBar(
+  cornerstone: any,
+  viewport: any,
+  i2w: ((imageId: string, ij: number[]) => number[]) | undefined,
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number
+) {
+  try {
+    if (!viewport || typeof i2w !== "function") return;
+    const imageId = viewport.getCurrentImageId?.();
+    if (!imageId || typeof viewport.worldToCanvas !== "function") return;
+    const mod = cornerstone?.metaData?.get?.("imagePlaneModule", imageId);
+    const rowSp = Number(mod?.rowPixelSpacing);
+    const pixelSpacingMm = Number.isFinite(rowSp) && rowSp > 0 ? rowSp : null;
+    if (pixelSpacingMm == null) return;
+    // zoom = distance écran (px) entre deux points image distants de 1 px en Y.
+    const c0 = viewport.worldToCanvas(i2w(imageId, [0, 0]));
+    const c1 = viewport.worldToCanvas(i2w(imageId, [0, 1]));
+    if (!c0 || !c1) return;
+    const zoom = Math.hypot(c1[0] - c0[0], c1[1] - c0[1]);
+    const bar = computeScaleBar(pixelSpacingMm, zoom, h);
+    if (!bar) return;
+
+    // Barre verticale + ticks + label, à ~16px du bord gauche, centrée en Y.
+    const x = 16;
+    const y0 = h / 2 - bar.barPx / 2;
+    const y1 = h / 2 + bar.barPx / 2;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,0,0.9)";
+    ctx.fillStyle = "rgba(255,255,0,0.9)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x, y0);
+    ctx.lineTo(x, y1);
+    ctx.stroke();
+    // Ticks aux extrémités.
+    ctx.beginPath();
+    ctx.moveTo(x, y0);
+    ctx.lineTo(x + 6, y0);
+    ctx.moveTo(x, y1);
+    ctx.lineTo(x + 6, y1);
+    ctx.stroke();
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${bar.labelMm} mm`, x + 9, h / 2);
+    ctx.restore();
+  } catch {
+    /* règle best-effort */
+  }
 }
 
 const CornerstoneViewer = forwardRef<
@@ -373,6 +459,7 @@ const CornerstoneViewer = forwardRef<
     onSaveAnnotation,
     onRoiStats,
     instanceKey,
+    onCursor,
   }: CornerstoneViewerProps,
   ref
 ) {
@@ -402,6 +489,12 @@ const CornerstoneViewer = forwardRef<
   const currentSliceRef = useRef(0);
   const onSaveAnnotationRef = useRef<typeof onSaveAnnotation>(undefined);
   const onRoiStatsRef = useRef<typeof onRoiStats>(undefined);
+  // Émission de la position curseur (ref pour ne pas relancer l'effet d'init).
+  const onCursorRef = useRef<typeof onCursor>(undefined);
+  // Outil assigné au bouton DROIT (W/L par défaut, façon Horos).
+  const secondaryToolRef = useRef<string>("wwwl");
+  // Module cornerstone-core mémorisé pour les lectures synchrones (cache/metaData).
+  const cornerstoneCoreRef = useRef<any>(null);
   // Outil actif (ref pour les écouteurs attachés une seule fois, ex. Baguette).
   const activeToolRef = useRef<string>(activeTool);
   // Masque coloré du region-grow : canvas offscreen (résolution image) + imageId
@@ -448,6 +541,7 @@ const CornerstoneViewer = forwardRef<
   currentSliceRef.current = currentSlice;
   onSaveAnnotationRef.current = onSaveAnnotation;
   onRoiStatsRef.current = onRoiStats;
+  onCursorRef.current = onCursor;
   activeToolRef.current = activeTool;
 
   // Effacement du labelmap (bouton « Effacer seg. » de la barre). On retire la
@@ -735,6 +829,44 @@ const CornerstoneViewer = forwardRef<
           getViewport()?.render();
         } catch {}
         drawMaskOverlayRef.current?.();
+      },
+      getImageDimensions: () => {
+        try {
+          const cornerstone = cornerstoneCoreRef.current;
+          const viewport = getViewport();
+          const imageId = viewport?.getCurrentImageId?.();
+          if (!cornerstone || !imageId) return null;
+          // Image décodée en cache → colonnes/lignes fiables.
+          const image = cornerstone.cache?.getImage?.(imageId);
+          if (image?.columns && image?.rows) {
+            return { cols: image.columns, rows: image.rows };
+          }
+          // Repli sur imagePlaneModule (avant décodage complet).
+          const mod = cornerstone.metaData?.get?.("imagePlaneModule", imageId);
+          if (mod?.columns && mod?.rows) {
+            return { cols: mod.columns, rows: mod.rows };
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      },
+      setSecondaryTool: (toolId: string) => {
+        secondaryToolRef.current = toolId;
+        (async () => {
+          try {
+            const cst = await import("@cornerstonejs/tools");
+            const tg = cst.ToolGroupManager.getToolGroup(
+              toolGroupIdRef.current
+            );
+            if (!tg) return;
+            // Ré-applique le binding complet (primaire + secondaire) pour rester
+            // cohérent avec l'outil gauche courant.
+            applyActiveTool(cst, tg, activeToolRef.current, toolId);
+          } catch (e) {
+            console.warn("[Cornerstone3D] setSecondaryTool ignoré:", e);
+          }
+        })();
       },
     }),
     [getViewport, onWindowLevelChange]
@@ -1036,7 +1168,12 @@ const CornerstoneViewer = forwardRef<
           viewportIdRef.current,
           renderingEngineIdRef.current
         );
-        applyActiveTool(cornerstoneTools, toolGroup, activeTool);
+        applyActiveTool(
+          cornerstoneTools,
+          toolGroup,
+          activeTool,
+          secondaryToolRef.current
+        );
 
         // --- Segmentation MVP (client only, in-memory labelmap) ---
         // On crée un labelmap STACK dérivé de la pile courante (mêmes imageIds,
@@ -1343,6 +1480,116 @@ const CornerstoneViewer = forwardRef<
     };
   }, [isInitialized]);
 
+  // Émission de la position curseur (façon Horos) : à chaque mousemove on calcule
+  // les coords image (px), les mm (px × pixelSpacing) et la valeur du pixel, puis
+  // on appelle onCursor. mouseleave → onCursor(null). Best-effort : si une API
+  // Cornerstone manque, on dégrade proprement (mm/valeur → null) sans planter.
+  useEffect(() => {
+    if (!isInitialized) return;
+    const el = viewportRef.current;
+    if (!el) return;
+    let csUtils: any = null;
+    let csMeta: any = null;
+    let csCache: any = null;
+    let disposed = false;
+    (async () => {
+      const cornerstone = await import("@cornerstonejs/core");
+      if (disposed) return;
+      csUtils = (cornerstone as any).utilities;
+      csMeta = (cornerstone as any).metaData;
+      csCache = (cornerstone as any).cache;
+      cornerstoneCoreRef.current = cornerstone;
+    })();
+
+    const emitCursor = (evt: MouseEvent) => {
+      const cb = onCursorRef.current;
+      if (!cb) return;
+      try {
+        const viewport = renderingEngineRef.current?.getViewport(
+          viewportIdRef.current
+        );
+        if (!viewport || typeof viewport.canvasToWorld !== "function") {
+          cb(null);
+          return;
+        }
+        const rect = el.getBoundingClientRect();
+        const canvasPt: [number, number] = [
+          evt.clientX - rect.left,
+          evt.clientY - rect.top,
+        ];
+        const world = viewport.canvasToWorld(canvasPt);
+        const imageId = viewport.getCurrentImageId?.();
+        // Coords image (px) via worldToImageCoords ; repli sur px canvas.
+        let xPx = canvasPt[0];
+        let yPx = canvasPt[1];
+        let onImage = false;
+        const w2i = csUtils?.worldToImageCoords;
+        if (world && imageId && typeof w2i === "function") {
+          const ij = w2i(imageId, world);
+          if (Array.isArray(ij) && ij.length >= 2) {
+            xPx = ij[0];
+            yPx = ij[1];
+            onImage = true;
+          }
+        }
+        // mm = px image × pixel spacing (depuis imagePlaneModule). null sinon.
+        let xMm: number | null = null;
+        let yMm: number | null = null;
+        let value: number | null = null;
+        if (onImage && imageId) {
+          const mod = csMeta?.get?.("imagePlaneModule", imageId);
+          const colSp = Number(mod?.columnPixelSpacing);
+          const rowSp = Number(mod?.rowPixelSpacing);
+          if (Number.isFinite(colSp) && colSp > 0) xMm = xPx * colSp;
+          if (Number.isFinite(rowSp) && rowSp > 0) yMm = yPx * rowSp;
+          // Valeur du pixel (brute, façon Horos « Val ») via le cache image.
+          try {
+            const image = csCache?.getImage?.(imageId);
+            const pixelData = image?.getPixelData?.();
+            const cols = image?.columns;
+            const rows = image?.rows;
+            const i = Math.round(xPx);
+            const j = Math.round(yPx);
+            if (
+              pixelData &&
+              cols &&
+              rows &&
+              i >= 0 &&
+              j >= 0 &&
+              i < cols &&
+              j < rows
+            ) {
+              const raw = pixelData[j * cols + i];
+              if (raw !== undefined) {
+                // Applique le Modality LUT (HU sur CT) façon Horos : slope/intercept.
+                const lut = csMeta?.get?.("modalityLutModule", imageId);
+                const slope = Number(lut?.rescaleSlope);
+                const intercept = Number(lut?.rescaleIntercept);
+                value =
+                  Number.isFinite(slope) && Number.isFinite(intercept)
+                    ? Number(raw) * slope + intercept
+                    : Number(raw);
+              }
+            }
+          } catch {
+            /* valeur best-effort */
+          }
+        }
+        cb({ xPx, yPx, xMm, yMm, value });
+      } catch {
+        onCursorRef.current?.(null);
+      }
+    };
+    const clearCursor = () => onCursorRef.current?.(null);
+    el.addEventListener("mousemove", emitCursor);
+    el.addEventListener("mouseleave", clearCursor);
+    return () => {
+      disposed = true;
+      el.removeEventListener("mousemove", emitCursor);
+      el.removeEventListener("mouseleave", clearCursor);
+    };
+  }, [isInitialized]);
+
   // Overlay du masque region-grow : un <canvas> ajouté IMPÉRATIVEMENT par-dessus
   // le canvas Cornerstone (sans toucher au JSX/DOM React). Redessiné à chaque
   // rendu/changement de caméra ; le masque (résolution image) est plaqué sur la
@@ -1466,29 +1713,37 @@ const CornerstoneViewer = forwardRef<
           }
           ctx.setTransform(1, 0, 0, 1, 0, 0);
           ctx.clearRect(0, 0, w, h);
-          const data = maskOverlayRef.current;
-          if (!data) return;
           const viewport = renderingEngineRef.current?.getViewport(
             viewportIdRef.current
           );
-          if (!viewport) return;
-          const curId = viewport.getCurrentImageId?.();
-          if (curId !== data.imageId) return; // masque seulement sur sa coupe
           const i2w = (cornerstone as any).utilities?.imageToWorldCoords;
-          if (typeof i2w !== "function") return;
-          const cw = data.canvas.width;
-          const ch = data.canvas.height;
-          const p0 = viewport.worldToCanvas?.(i2w(data.imageId, [0, 0]));
-          const px = viewport.worldToCanvas?.(i2w(data.imageId, [cw, 0]));
-          const py = viewport.worldToCanvas?.(i2w(data.imageId, [0, ch]));
-          if (!p0 || !px || !py) return;
-          const a = (px[0] - p0[0]) / cw;
-          const b = (px[1] - p0[1]) / cw;
-          const c = (py[0] - p0[0]) / ch;
-          const d = (py[1] - p0[1]) / ch;
-          ctx.setTransform(a, b, c, d, p0[0], p0[1]);
-          ctx.drawImage(data.canvas, 0, 0);
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+          // ── Masque coloré (region-grow / pinceau) plaqué sur sa coupe ──
+          const data = maskOverlayRef.current;
+          if (data && viewport && typeof i2w === "function") {
+            const curId = viewport.getCurrentImageId?.();
+            if (curId === data.imageId) {
+              const cw = data.canvas.width;
+              const ch = data.canvas.height;
+              const p0 = viewport.worldToCanvas?.(i2w(data.imageId, [0, 0]));
+              const px = viewport.worldToCanvas?.(i2w(data.imageId, [cw, 0]));
+              const py = viewport.worldToCanvas?.(i2w(data.imageId, [0, ch]));
+              if (p0 && px && py) {
+                const a = (px[0] - p0[0]) / cw;
+                const b = (px[1] - p0[1]) / cw;
+                const c = (py[0] - p0[0]) / ch;
+                const d = (py[1] - p0[1]) / ch;
+                ctx.setTransform(a, b, c, d, p0[0], p0[1]);
+                ctx.drawImage(data.canvas, 0, 0);
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+              }
+            }
+          }
+
+          // ── Règle calibrée en mm sur le bord gauche (façon Horos) ──
+          // pixelSpacingMm = taille d'un pixel image (mm) ; zoom = px écran par px
+          // image, mesuré exactement via deux points image distants de 1 px.
+          drawScaleBar(cornerstone, viewport, i2w, ctx, w, h);
         } catch {
           /* tracé best-effort */
         }
@@ -1763,7 +2018,12 @@ const CornerstoneViewer = forwardRef<
           toolGroupIdRef.current
         );
         if (toolGroup) {
-          applyActiveTool(cornerstoneTools, toolGroup, activeTool);
+          applyActiveTool(
+            cornerstoneTools,
+            toolGroup,
+            activeTool,
+            secondaryToolRef.current
+          );
         }
       } catch (err) {
         console.error("[Cornerstone3D] Tool change failed:", err);

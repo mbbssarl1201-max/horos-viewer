@@ -41,7 +41,7 @@ interface VolumeViewerProps {
   orthancImageIds?: string[];
   /** volumeId stable fourni par useOrthancVolume (sinon valeur locale par défaut). */
   volumeId?: string;
-  mode: "mpr" | "3d";
+  mode: "mpr" | "3d" | "slab2d";
   /** Épaisseur de coupe en mm (0 = coupe fine). */
   slabThicknessMm?: number;
   /** Mode de projection slab. */
@@ -252,6 +252,27 @@ function applySurface(vp: any, isoValue: number, enabled: boolean) {
   }
 }
 
+/**
+ * Applique l'épaisseur de dalle (slab thickness) + le mode de projection
+ * (MIP/MinIP/Moyenne via BlendModes) à UN viewport ORTHOGRAPHIC. Factorisé pour
+ * être partagé entre le chemin MPR (4 vues) et le chemin slab2d (1 vue) — même
+ * API Cornerstone, déjà éprouvée. `thicknessMm <= 0` → no-op (coupe fine).
+ * Best-effort : chaque appel est isolé par l'appelant en try/catch.
+ */
+function applySlab(
+  vp: any,
+  thicknessMm: number | undefined,
+  mode: SlabMode | undefined,
+  Enums: any
+) {
+  if (!vp || !thicknessMm || thicknessMm <= 0) return;
+  const blendKey = slabModeToBlend(mode ?? "mip");
+  // BlendModes est dans Enums du core (pas dans csToolsEnums).
+  const blend = Enums?.BlendModes?.[blendKey];
+  vp.setSlabThickness(thicknessMm);
+  if (blend !== undefined) vp.setBlendMode(blend);
+}
+
 export default function VolumeViewer({
   imageUrls,
   orthancImageIds,
@@ -278,6 +299,7 @@ export default function VolumeViewer({
   const coronalRef = useRef<HTMLDivElement>(null);
   const obliqueRef = useRef<HTMLDivElement>(null);
   const vr3dRef = useRef<HTMLDivElement>(null);
+  const slab2dRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<any>(null);
   // Module @cornerstonejs/tools capturé au setup pour un teardown SYNCHRONE dans
@@ -565,16 +587,15 @@ export default function VolumeViewer({
           };
 
           // ── Slab thickness + blend mode ───────────────────────────────────
-          const applySlab = () => {
-            if (!slabThicknessMm || slabThicknessMm <= 0) return;
-            const blendKey = slabModeToBlend(slabMode ?? "mip");
-            // BlendModes est dans Enums du core (pas dans csToolsEnums)
-            const blend = (Enums as any).BlendModes?.[blendKey];
+          const applyMprSlab = () => {
             for (const id of allIds) {
               try {
-                const vp = engine.getViewport(id) as any;
-                vp.setSlabThickness(slabThicknessMm);
-                if (blend !== undefined) vp.setBlendMode(blend);
+                applySlab(
+                  engine.getViewport(id),
+                  slabThicknessMm,
+                  slabMode,
+                  Enums
+                );
               } catch {}
             }
             engine.renderViewports(allIds);
@@ -582,10 +603,100 @@ export default function VolumeViewer({
 
           engine.resize(true, false);
           applyMprWindow();
-          applySlab();
+          applyMprSlab();
           volume.load(() => {
             applyMprWindow();
-            applySlab();
+            applyMprSlab();
+          });
+        } else if (mode === "slab2d") {
+          // ── Vue 2D « épaisseur » : UN viewport ORTHOGRAPHIC AXIAL volumique
+          // (plan d'acquisition), thick-slab MIP/MinIP/Moyenne. Mirror du chemin
+          // MPR mais mono-plan. Additif : monté à la place du StackViewport 2D
+          // seulement quand l'utilisateur active le toggle.
+          const csTools = await import("@cornerstonejs/tools");
+          const {
+            init: toolsInit,
+            ToolGroupManager,
+            WindowLevelTool,
+            StackScrollTool,
+            PanTool,
+            ZoomTool,
+            Enums: csToolsEnums,
+            addTool,
+          } = csTools as any;
+          csToolsRef.current = csTools;
+
+          await toolsInit();
+          for (const t of [
+            WindowLevelTool,
+            StackScrollTool,
+            PanTool,
+            ZoomTool,
+          ]) {
+            try {
+              addTool(t);
+            } catch {} // déjà enregistré — ignorer
+          }
+
+          engine.setViewports([
+            {
+              viewportId: "SLAB2D_AXIAL",
+              element: slab2dRef.current!,
+              type: Enums.ViewportType.ORTHOGRAPHIC,
+              defaultOptions: { orientation: Enums.OrientationAxis.AXIAL },
+            },
+          ]);
+          await setVolumesForViewports(
+            engine,
+            [{ volumeId: volId }],
+            ["SLAB2D_AXIAL"]
+          );
+
+          // ── ToolGroup : W/L (droit) + zoom (milieu) + pan + scroll molette ──
+          const TG_ID = "HOROS_SLAB2D_TG";
+          try {
+            ToolGroupManager.destroyToolGroup?.(TG_ID);
+          } catch {}
+          const tg = ToolGroupManager.createToolGroup(TG_ID)!;
+          for (const t of [
+            WindowLevelTool,
+            StackScrollTool,
+            PanTool,
+            ZoomTool,
+          ]) {
+            tg.addTool(t.toolName);
+          }
+          tg.addViewport("SLAB2D_AXIAL", VOLUME_ENGINE_ID);
+          const { MouseBindings } = csToolsEnums;
+          tg.setToolActive(WindowLevelTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Primary }],
+          });
+          tg.setToolActive(ZoomTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Secondary }],
+          });
+          tg.setToolActive(PanTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Auxiliary }],
+          });
+          tg.setToolActive(StackScrollTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Wheel }],
+          });
+
+          const applySlab2d = () => {
+            try {
+              applySlab(
+                engine.getViewport("SLAB2D_AXIAL"),
+                slabThicknessMm,
+                slabMode,
+                Enums
+              );
+            } catch {}
+            engine.renderViewports(["SLAB2D_AXIAL"]);
+          };
+
+          engine.resize(true, false);
+          applySlab2d();
+          volume.load(() => {
+            applySlab2d();
           });
         } else {
           engine.setViewports([
@@ -722,6 +833,9 @@ export default function VolumeViewer({
       } catch {}
       try {
         csTools?.ToolGroupManager?.destroyToolGroup?.("HOROS_3D_TG");
+      } catch {}
+      try {
+        csTools?.ToolGroupManager?.destroyToolGroup?.("HOROS_SLAB2D_TG");
       } catch {}
       try {
         engineRef.current?.destroy();
@@ -1066,11 +1180,15 @@ export default function VolumeViewer({
       {loading && (
         <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
           <p className="text-xs text-muted-foreground">
-            Building {mode === "mpr" ? "MPR" : "3D"} volume…
+            Building{" "}
+            {mode === "mpr" ? "MPR" : mode === "slab2d" ? "épaisseur 2D" : "3D"}{" "}
+            volume…
           </p>
         </div>
       )}
-      {mode === "mpr" ? (
+      {mode === "slab2d" ? (
+        <div ref={slab2dRef} className="absolute inset-0 bg-black" />
+      ) : mode === "mpr" ? (
         <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-px bg-border">
           <div
             ref={axialRef}

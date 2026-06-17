@@ -7,17 +7,29 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { useLocation } from "wouter";
 
 export default function NotificationsPanel() {
   const { data: notifications, isLoading } = trpc.notifications.list.useQuery();
   const markRead = trpc.notifications.markRead.useMutation();
   const utils = trpc.useUtils();
+  const [, navigate] = useLocation();
 
   const unreadCount = notifications?.filter((n: any) => !n.isRead).length || 0;
 
   const handleMarkRead = async (id: number) => {
     await markRead.mutateAsync({ id });
     utils.notifications.list.invalidate();
+  };
+
+  // Une notif liée à une étude ouvre l'étude au clic (et la marque lue).
+  const handleOpen = async (notif: any) => {
+    if (notif.studyId == null) return;
+    if (!notif.isRead) {
+      await markRead.mutateAsync({ id: notif.id });
+      utils.notifications.list.invalidate();
+    }
+    navigate(`/viewer/${notif.studyId}`);
   };
 
   const getIcon = (type: string) => {
@@ -72,8 +84,20 @@ export default function NotificationsPanel() {
                   }`}
                 >
                   <div className="shrink-0 mt-0.5">{getIcon(notif.type)}</div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate">{notif.title}</p>
+                  <div
+                    className={`flex-1 min-w-0 ${
+                      notif.studyId != null ? "cursor-pointer" : ""
+                    }`}
+                    role={notif.studyId != null ? "button" : undefined}
+                    onClick={
+                      notif.studyId != null
+                        ? () => handleOpen(notif)
+                        : undefined
+                    }
+                  >
+                    <p className="text-xs font-medium truncate">
+                      {notif.title}
+                    </p>
                     {notif.message && (
                       <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2">
                         {notif.message}

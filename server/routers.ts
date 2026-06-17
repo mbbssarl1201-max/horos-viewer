@@ -22,7 +22,9 @@ import {
   countRecentAccess,
   getReportByStudy,
   getReportAddenda,
+  listClinicalUsers,
 } from "./db";
+import { buildShareNotification } from "./studyShare";
 import { storagePut, storageDelete, storageGetSignedUrl } from "./storage";
 import { runAiPreanalysis } from "./report/aiPreanalysis";
 import { runHermesChat } from "./report/hermesChat";
@@ -768,6 +770,62 @@ export const appRouter = router({
 
         return { success: true };
       }),
+
+    // Partage INTERNE d'une étude : transmet à un confrère MediView via une
+    // notification. Mono-tenant → n'octroie aucun accès nouveau ; PHI-safe,
+    // audité (recordAccess). Lien externe/OTP hors scope.
+    share: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          recipientUserId: z.number().int(),
+          note: z.string().max(1000).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const recent = await countRecentAccess(ctx.user.id, "study.share", 60);
+        if (recent >= 60)
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: "Limite atteinte.",
+          });
+        if (input.recipientUserId === ctx.user.id)
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Destinataire invalide.",
+          });
+        const study = await getStudyById(input.studyId);
+        if (!study)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
+        const clinical = await listClinicalUsers(ctx.user.id);
+        if (!clinical.some(u => u.id === input.recipientUserId))
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Destinataire non clinique.",
+          });
+        const { title, message } = buildShareNotification(
+          ctx.user.name ?? "",
+          input.note
+        );
+        await createNotification({
+          userId: input.recipientUserId,
+          type: "shared_study",
+          title,
+          message,
+          studyId: input.studyId,
+        });
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "study.share",
+          studyId: input.studyId,
+          detail: `to=${input.recipientUserId}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { ok: true };
+      }),
   }),
 
   // Series router
@@ -1113,6 +1171,13 @@ export const appRouter = router({
         await markNotificationRead(input.id, ctx.user.id);
         return { success: true };
       }),
+  }),
+
+  // Comptes utilisateurs (destinataires de partage interne).
+  users: router({
+    listClinical: medicalProcedure.query(async ({ ctx }) => {
+      return listClinicalUsers(ctx.user.id);
+    }),
   }),
 
   // Orthanc PACS router

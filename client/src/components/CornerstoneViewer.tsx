@@ -1560,7 +1560,16 @@ const CornerstoneViewer = forwardRef<
               j < rows
             ) {
               const raw = pixelData[j * cols + i];
-              if (raw !== undefined) value = Number(raw);
+              if (raw !== undefined) {
+                // Applique le Modality LUT (HU sur CT) façon Horos : slope/intercept.
+                const lut = csMeta?.get?.("modalityLutModule", imageId);
+                const slope = Number(lut?.rescaleSlope);
+                const intercept = Number(lut?.rescaleIntercept);
+                value =
+                  Number.isFinite(slope) && Number.isFinite(intercept)
+                    ? Number(raw) * slope + intercept
+                    : Number(raw);
+              }
             }
           } catch {
             /* valeur best-effort */

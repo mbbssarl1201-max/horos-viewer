@@ -189,6 +189,7 @@ export const notifications = mysqlTable(
       "new_study",
       "stat_urgent",
       "report_finalized",
+      "shared_study",
     ]).notNull(),
     title: varchar("title", { length: 256 }).notNull(),
     message: text("message"),

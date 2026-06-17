@@ -1,0 +1,1 @@
+ALTER TABLE `notifications` MODIFY COLUMN `type` enum('new_study','stat_urgent','report_finalized','shared_study') NOT NULL;

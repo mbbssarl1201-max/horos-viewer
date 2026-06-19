@@ -204,7 +204,11 @@ export async function generatePreanalysis(
   }
   if (opts.measurements) {
     ctxLines.push(
-      `MESURES OBJECTIVES (segmentation automatique du volume entier, volumes en mL) — fais-en usage et NE LES CONTREDIS PAS dans ta description ; signale toute valeur qui te paraît anormale :\n${opts.measurements}`
+      `MESURES OBJECTIVES (segmentation automatique du volume entier, volumes en mL). RÈGLES STRICTES :\n` +
+        `- CITE EXPLICITEMENT les volumes des structures pertinentes dans la section Résultats (ex. « Cerveau : 1144 mL »).\n` +
+        `- Ne CONTREDIS JAMAIS ces volumes ; signale toute valeur qui te paraît anormale pour l'âge/le contexte.\n` +
+        `- N'invente AUCUNE autre mesure que celles fournies ici.\n` +
+        `Mesures :\n${opts.measurements}`
     );
   }
   const userText = ctxLines.join("\n");

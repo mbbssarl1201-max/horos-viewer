@@ -331,3 +331,24 @@ export const knowledgeChunks = mysqlTable("knowledge_chunks", {
   embedding: text("embedding").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
+
+// Mode validation IA : snapshot du brouillon de pré-analyse par étude + verdict
+// du médecin (la lecture humaine = vérité). Permet de mesurer, sur les vrais
+// examens, le taux d'accord de l'IA vision. Non-PHI sensible (pas de pixels).
+export const aiEvaluations = mysqlTable("ai_evaluations", {
+  id: int("id").autoincrement().primaryKey(),
+  studyId: int("studyId").notNull().unique(),
+  userId: int("userId").notNull(),
+  model: varchar("model", { length: 128 }),
+  modality: varchar("modality", { length: 16 }),
+  aiAbnormal: boolean("aiAbnormal"),
+  aiConclusion: text("aiConclusion"),
+  // Verdict du médecin sur le brouillon IA (null tant que non évalué).
+  verdict: mysqlEnum("verdict", ["juste", "partielle", "fausse"]),
+  // L'IA a-t-elle MANQUÉ une anomalie réelle ? (sécurité clinique)
+  missedFinding: boolean("missedFinding").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  evaluatedAt: timestamp("evaluatedAt"),
+});
+export type AiEvaluation = typeof aiEvaluations.$inferSelect;
+export type InsertAiEvaluation = typeof aiEvaluations.$inferInsert;

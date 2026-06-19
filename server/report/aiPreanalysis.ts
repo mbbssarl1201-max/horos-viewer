@@ -6,6 +6,7 @@ import {
   listSeriesByStudy,
   countRecentAccess,
   recordAccess,
+  snapshotAiEvaluation,
 } from "../db";
 
 /**
@@ -501,6 +502,22 @@ export async function runAiPreanalysis(
     detail: result.model,
     ipAddress: ctx.req?.ip ?? null,
   });
+
+  // Mode validation : snapshot du brouillon IA pour cette étude (le médecin le
+  // jugera après lecture). Best-effort — ne bloque jamais la pré-analyse.
+  try {
+    await snapshotAiEvaluation({
+      studyId: study.id,
+      userId: ctx.user.id,
+      model: result.model,
+      modality: (study as any).modality ?? null,
+      aiAbnormal: result.abnormal ?? null,
+      aiConclusion: result.conclusion ?? null,
+    });
+  } catch (e) {
+    console.warn("[aiPreanalysis] snapshot évaluation échoué:", e);
+  }
+
   return { ...result, keyImage, comparedPriorDate };
 }
 

@@ -1999,6 +1999,37 @@ export const appRouter = router({
       const { gpuWake } = await import("./report/gpuControl");
       return gpuWake();
     }),
+    // --- Mode validation IA -------------------------------------------------
+    // Verdict du médecin sur le brouillon IA d'une étude (juste/partielle/fausse
+    // + anomalie ratée). La lecture humaine = vérité ; sert à mesurer l'accord.
+    recordEvaluation: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          verdict: z.enum(["juste", "partielle", "fausse"]),
+          missedFinding: z.boolean().default(false),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { recordAiVerdict } = await import("./db");
+        await recordAiVerdict(input);
+        return { ok: true };
+      }),
+    // Verdict déjà saisi pour une étude (pour pré-cocher l'UI).
+    evaluation: medicalProcedure
+      .input(z.object({ studyId: z.number().int() }))
+      .query(async ({ input }) => {
+        const { getAiEvaluation } = await import("./db");
+        const e = await getAiEvaluation(input.studyId);
+        return e
+          ? { verdict: e.verdict, missedFinding: e.missedFinding }
+          : { verdict: null, missedFinding: false };
+      }),
+    // Statistiques d'accord IA mesurées sur les examens évalués.
+    evaluationStats: medicalProcedure.query(async () => {
+      const { getAiEvaluationStats } = await import("./db");
+      return getAiEvaluationStats();
+    }),
   }),
   knowledge: router({
     // Ingestion de fichiers .md (coffre Obsidian) → chunks + embeddings locaux + stockage.

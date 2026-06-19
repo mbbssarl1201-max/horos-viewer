@@ -14,6 +14,7 @@ import {
   accessLogs,
   reports,
   reportAddenda,
+  aiEvaluations,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
@@ -655,4 +656,90 @@ export async function getReportAddenda(reportId: number) {
     .from(reportAddenda)
     .where(eq(reportAddenda.reportId, reportId))
     .orderBy(asc(reportAddenda.createdAt));
+}
+
+// --- Mode validation IA -----------------------------------------------------
+
+/** Snapshot du brouillon IA pour une étude (à la pré-analyse). Conserve le
+ *  verdict déjà saisi s'il existe (on ne ré-évalue pas en ré-analysant). */
+export async function snapshotAiEvaluation(data: {
+  studyId: number;
+  userId: number;
+  model?: string | null;
+  modality?: string | null;
+  aiAbnormal?: boolean | null;
+  aiConclusion?: string | null;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .insert(aiEvaluations)
+    .values({
+      studyId: data.studyId,
+      userId: data.userId,
+      model: data.model ?? null,
+      modality: data.modality ?? null,
+      aiAbnormal: data.aiAbnormal ?? null,
+      aiConclusion: data.aiConclusion ?? null,
+    })
+    .onDuplicateKeyUpdate({
+      set: {
+        userId: data.userId,
+        model: data.model ?? null,
+        modality: data.modality ?? null,
+        aiAbnormal: data.aiAbnormal ?? null,
+        aiConclusion: data.aiConclusion ?? null,
+      },
+    });
+}
+
+/** Verdict du médecin sur le brouillon IA d'une étude. */
+export async function recordAiVerdict(data: {
+  studyId: number;
+  verdict: "juste" | "partielle" | "fausse";
+  missedFinding: boolean;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(aiEvaluations)
+    .set({
+      verdict: data.verdict,
+      missedFinding: data.missedFinding,
+      evaluatedAt: sql`now()`,
+    })
+    .where(eq(aiEvaluations.studyId, data.studyId));
+}
+
+/** Verdict déjà saisi pour une étude (ou null). */
+export async function getAiEvaluation(studyId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(aiEvaluations)
+    .where(eq(aiEvaluations.studyId, studyId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/** Statistiques d'accord IA (sur les évaluations renseignées). */
+export async function getAiEvaluationStats() {
+  const db = await getDb();
+  if (!db) return { total: 0, juste: 0, partielle: 0, fausse: 0, missed: 0 };
+  const rows: { verdict: string | null; missed: boolean }[] = await db
+    .select({
+      verdict: aiEvaluations.verdict,
+      missed: aiEvaluations.missedFinding,
+    })
+    .from(aiEvaluations);
+  const evaluated = rows.filter(r => r.verdict != null);
+  const count = (v: string) => evaluated.filter(r => r.verdict === v).length;
+  return {
+    total: evaluated.length,
+    juste: count("juste"),
+    partielle: count("partielle"),
+    fausse: count("fausse"),
+    missed: evaluated.filter(r => r.missed).length,
+  };
 }

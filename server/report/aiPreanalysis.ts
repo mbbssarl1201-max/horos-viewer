@@ -468,12 +468,17 @@ export async function runAiPreanalysis(
     prior,
   });
 
-  // Rendu de la coupe désignée par l'IA → image clé du compte rendu. Repli si
-  // l'IA n'a pas donné de numéro exploitable : on prend la coupe du MILIEU de
-  // l'échantillon (représentative du volume) — jamais la 1re coupe.
+  // Image clé du compte rendu :
+  //  - si l'IA SIGNALE une anomalie et donne un numéro → SA coupe (localisation
+  //    de la lésion, ce que le médecin veut voir) ;
+  //  - sinon (examen normal / pas de numéro fiable) → la coupe du MILIEU de
+  //    l'échantillon, représentative du volume — JAMAIS la 1re coupe (un petit
+  //    modèle tend sinon à renvoyer un numéro bas arbitraire sur un examen normal).
   let keyImage: RunAiPreanalysisResult["keyImage"] = null;
-  let keySlice = result.keySliceNumber;
-  if (!keySlice && images.length > 0) {
+  let keySlice: number | null = null;
+  if (result.abnormal === true && result.keySliceNumber) {
+    keySlice = result.keySliceNumber;
+  } else if (images.length > 0) {
     keySlice = images[Math.floor(images.length / 2)].sliceIndex;
   }
   if (input.seriesId && keySlice) {

@@ -503,6 +503,14 @@ export async function runAiPreanalysis(
     prior,
   });
 
+  // Précision déterministe : on annexe les volumes RÉELS mesurés au rapport, sans
+  // dépendre du LLM (un petit modèle ne les cite pas de façon fiable). Données
+  // objectives, clairement étiquetées « indicatif » → le médecin valide.
+  if (measurements) {
+    result.resultats =
+      `${result.resultats}\n\nVolumes mesurés (segmentation automatique, indicatif) : ${measurements}`.trim();
+  }
+
   // Image clé du compte rendu :
   //  - si l'IA SIGNALE une anomalie et donne un numéro → SA coupe (localisation
   //    de la lésion, ce que le médecin veut voir) ;

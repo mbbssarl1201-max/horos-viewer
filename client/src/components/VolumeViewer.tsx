@@ -729,6 +729,22 @@ export default function VolumeViewer({
           );
           const vp = engine.getViewport("VR_3D") as any;
 
+          // Perf interactive : laisser VTK ABAISSER la qualité d'échantillonnage
+          // pendant la rotation/zoom (sample distance auto) puis raffiner au repos
+          // → rotation fluide même sur un gros volume (CT 400+ coupes), au lieu
+          // d'un rendu pleine qualité à chaque image (saccades). Best-effort.
+          try {
+            const a3d = vp.getActors?.()?.[0];
+            const mapper3d = (
+              a3d?.actor ??
+              a3d?.volumeActor ??
+              a3d
+            )?.getMapper?.();
+            mapper3d?.setAutoAdjustSampleDistances?.(true);
+          } catch {
+            /* API mapper indisponible — rendu par défaut */
+          }
+
           // ── Outils d'interaction 3D (rotation/pan/zoom) ──────────────────
           // Init @cornerstonejs/tools (idempotent) + tool group dédié au 3D :
           //   • TrackballRotate sur le bouton PRIMAIRE (rotation au glisser)

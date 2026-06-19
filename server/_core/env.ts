@@ -23,6 +23,13 @@ export const ENV = {
   orthancPassword: process.env.ORTHANC_PASSWORD ?? "",
   // IA locale (Ollama auto-hébergé) — pré-analyse vision des images clés.
   ollamaUrl: process.env.OLLAMA_URL ?? "http://ollama-hermes:11434",
+  // Endpoint Ollama DÉDIÉ à la vision (pré-analyse d'images). Séparé d'`ollamaUrl`
+  // pour router uniquement la vision vers le GPU (L4 Infomaniak, via tunnel chiffré),
+  // tout en gardant le texte/embeddings sur l'Ollama CPU local. Repli sur `ollamaUrl`.
+  ollamaVisionUrl:
+    process.env.OLLAMA_VISION_URL ??
+    process.env.OLLAMA_URL ??
+    "http://ollama-hermes:11434",
   ollamaVisionModel: process.env.OLLAMA_VISION_MODEL ?? "qwen2.5vl:3b",
   // Modèle de texte Ollama pour le chat Hermès (instruction-following). Présent
   // sur ollama-hermes. PHI-safe (local).

@@ -1648,6 +1648,21 @@ export default function Viewer() {
 
         <Separator orientation="vertical" className="h-7 mx-1" />
 
+        {/* Action clinique principale (Compte rendu IA) — ÉPINGLÉE juste après
+            « Back » pour rester TOUJOURS visible. Avant elle était en fin de
+            barre (~48 boutons, flex-wrap) et passait sur une 2ᵉ rangée souvent
+            ratée par l'utilisateur (« je ne vois pas le compte rendu IA »). */}
+        <button
+          className="toolbar-btn toolbar-btn-cr"
+          title="Compte rendu + pré-analyse IA (diagnostic IA, envoi à un confrère)"
+          onClick={openReport}
+        >
+          <FileText className="w-4 h-4" />
+          <span className="text-[9px] font-semibold">Compte rendu IA</span>
+        </button>
+
+        <Separator orientation="vertical" className="h-7 mx-1" />
+
         {/* Viewer Tools */}
         {VIEWER_TOOLS.map(tool => (
           <button
@@ -2727,16 +2742,6 @@ export default function Viewer() {
         >
           <ImagePlus className="w-4 h-4" />
           <span className="text-[9px]">Ajouter l'image</span>
-        </button>
-        {/* Action principale : bouton coloré pour qu'il soit repérable
-            immédiatement, même si la barre passe sur 2 rangées. */}
-        <button
-          className="toolbar-btn toolbar-btn-cr"
-          title="Compte rendu + pré-analyse IA (envoi à un confrère)"
-          onClick={openReport}
-        >
-          <FileText className="w-4 h-4" />
-          <span className="text-[9px] font-semibold">Compte rendu</span>
         </button>
         <button
           className="toolbar-btn"

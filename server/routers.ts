@@ -2039,6 +2039,31 @@ export const appRouter = router({
       const { getAiEvaluationStats } = await import("./db");
       return getAiEvaluationStats();
     }),
+    // Segmentation CT open-source (TotalSegmentator) auto-hébergée sur le GPU :
+    // renvoie les structures anatomiques + volumes. Anti-IDOR (série ∈ étude).
+    // NON certifié → aide à valider par le médecin.
+    segmentCt: medicalProcedure
+      .input(
+        z.object({ studyId: z.number().int(), seriesId: z.number().int() })
+      )
+      .mutation(async ({ input }) => {
+        const { getStudyById, listSeriesByStudy } = await import("./db");
+        const study = await getStudyById(input.studyId);
+        if (!study)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
+        const series = await listSeriesByStudy(input.studyId);
+        if (!series.some((s: any) => s.id === input.seriesId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Série inconnue pour cette étude",
+          });
+        }
+        const { segmentCtSeries } = await import("./report/ctSegmentation");
+        return segmentCtSeries(input.seriesId);
+      }),
   }),
   knowledge: router({
     // Ingestion de fichiers .md (coffre Obsidian) → chunks + embeddings locaux + stockage.

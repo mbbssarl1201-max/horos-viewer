@@ -36,6 +36,10 @@ export const ENV = {
   // l'usage. Vide = fonctionnalité désactivée (le GPU est supposé toujours là).
   gpuControlUrl: process.env.GPU_CONTROL_URL ?? "",
   gpuControlToken: process.env.GPU_CONTROL_TOKEN ?? "",
+  // Service de segmentation CT open-source (TotalSegmentator) sur le GPU.
+  // Vide = fonctionnalité désactivée. PHI-safe : tourne sur le GPU suisse.
+  segServiceUrl: process.env.SEG_SERVICE_URL ?? "",
+  segToken: process.env.SEG_TOKEN ?? "",
   // Modèle de texte Ollama pour le chat Hermès (instruction-following). Présent
   // sur ollama-hermes. PHI-safe (local).
   ollamaTextModel: process.env.OLLAMA_TEXT_MODEL ?? "qwen2.5:3b",

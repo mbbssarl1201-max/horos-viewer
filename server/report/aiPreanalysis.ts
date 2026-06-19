@@ -348,6 +348,8 @@ export interface RunAiPreanalysisInput {
   // Mode précis (CT) : segmenter d'abord le volume (TotalSegmentator) et ancrer
   // le rapport vision dans les volumes mesurés.
   includeSegmentation?: boolean;
+  // Segmentation en pleine résolution (1.5mm) — plus précise, ~2x plus lente.
+  highResSegmentation?: boolean;
 }
 
 export interface RunAiPreanalysisResult extends PreanalysisResult {
@@ -481,7 +483,9 @@ export async function runAiPreanalysis(
   if (input.includeSegmentation && input.seriesId && ENV.segServiceUrl) {
     try {
       const { segmentCtSeries } = await import("./ctSegmentation");
-      const seg = await segmentCtSeries(input.seriesId);
+      const seg = await segmentCtSeries(input.seriesId, {
+        highRes: input.highResSegmentation,
+      });
       if (seg.structures.length) {
         measurements = seg.structures
           .slice(0, 30)

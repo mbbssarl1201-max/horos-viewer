@@ -1557,6 +1557,7 @@ export const appRouter = router({
           sampleCount: z.number().int().min(1).max(24).optional(),
           // Mode précis (CT) : ancrer le rapport dans les volumes segmentés.
           includeSegmentation: z.boolean().optional(),
+          highResSegmentation: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -2046,7 +2047,11 @@ export const appRouter = router({
     // NON certifié → aide à valider par le médecin.
     segmentCt: medicalProcedure
       .input(
-        z.object({ studyId: z.number().int(), seriesId: z.number().int() })
+        z.object({
+          studyId: z.number().int(),
+          seriesId: z.number().int(),
+          highRes: z.boolean().optional(),
+        })
       )
       .mutation(async ({ input }) => {
         const { getStudyById, listSeriesByStudy } = await import("./db");
@@ -2064,7 +2069,7 @@ export const appRouter = router({
           });
         }
         const { segmentCtSeries } = await import("./report/ctSegmentation");
-        return segmentCtSeries(input.seriesId);
+        return segmentCtSeries(input.seriesId, { highRes: input.highRes });
       }),
   }),
   knowledge: router({

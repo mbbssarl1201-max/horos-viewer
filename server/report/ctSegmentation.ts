@@ -32,7 +32,10 @@ function zipBuffers(files: { name: string; buf: Buffer }[]): Promise<Buffer> {
   });
 }
 
-export async function segmentCtSeries(seriesId: number): Promise<SegResult> {
+export async function segmentCtSeries(
+  seriesId: number,
+  opts?: { highRes?: boolean }
+): Promise<SegResult> {
   if (!ENV.segServiceUrl) {
     throw new Error("Service de segmentation non configuré");
   }
@@ -56,7 +59,9 @@ export async function segmentCtSeries(seriesId: number): Promise<SegResult> {
   const fd = new FormData();
   fd.append("file", new Blob([new Uint8Array(zip)]), "series.zip");
 
-  const resp = await fetch(`${ENV.segServiceUrl}/segment?fast=1`, {
+  // fast=1 (3mm, défaut) rapide ; fast=0 (1.5mm) = haute précision, ~2x plus lent.
+  const fastParam = opts?.highRes ? 0 : 1;
+  const resp = await fetch(`${ENV.segServiceUrl}/segment?fast=${fastParam}`, {
     method: "POST",
     headers: { "X-Seg-Token": ENV.segToken },
     body: fd,

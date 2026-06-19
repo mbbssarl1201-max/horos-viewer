@@ -202,6 +202,8 @@ export default function ReportPanel({
   const aiEval = trpc.ai.evaluation.useQuery({ studyId });
   const aiEvalStats = trpc.ai.evaluationStats.useQuery();
   const recordEval = trpc.ai.recordEvaluation.useMutation();
+  // Segmentation CT open-source (TotalSegmentator) sur le GPU.
+  const segmentCt = trpc.ai.segmentCt.useMutation();
   const [missedFinding, setMissedFinding] = useState(false);
   useEffect(() => {
     if (aiEval.data) setMissedFinding(aiEval.data.missedFinding);
@@ -611,6 +613,50 @@ export default function ReportPanel({
           >
             {preanalyze.isPending ? "Analyse en cours…" : "Pré-analyse IA"}
           </button>
+          <button
+            type="button"
+            onClick={() =>
+              segmentCt.mutate({
+                studyId,
+                seriesId: analyzedSeriesId ?? seriesId,
+              })
+            }
+            disabled={segmentCt.isPending || (gpuManaged && !gpuReady)}
+            className="text-[11px] rounded bg-purple-500/15 text-purple-400 px-2 py-1 disabled:opacity-50"
+            title="Segmentation anatomique open-source (TotalSegmentator) — structures + volumes (CT). Aide non certifiée."
+          >
+            {segmentCt.isPending
+              ? "Segmentation… (~1 min)"
+              : "Segmentation IA (CT)"}
+          </button>
+        </div>
+      )}
+
+      {/* --- Résultat segmentation CT (TotalSegmentator) ------------------ */}
+      {!isSigned && segmentCt.isError && (
+        <p className="text-[10px] text-destructive">
+          Segmentation indisponible (réveille l'IA ou réessaie).
+        </p>
+      )}
+      {!isSigned && segmentCt.data && (
+        <div className="mt-1 rounded border border-purple-500/30 p-2 space-y-1">
+          <p className="text-[11px] font-medium text-purple-400">
+            {segmentCt.data.count} structures détectées (TotalSegmentator,{" "}
+            {segmentCt.data.durationS}s) — aide non certifiée, à valider.
+          </p>
+          <div className="max-h-40 overflow-auto text-[11px]">
+            {segmentCt.data.structures.map(s => (
+              <div
+                key={s.name}
+                className="flex justify-between border-b border-border/20 py-0.5"
+              >
+                <span className="text-muted-foreground">{s.name}</span>
+                <span className="text-foreground font-mono">
+                  {s.volumeMl} mL
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

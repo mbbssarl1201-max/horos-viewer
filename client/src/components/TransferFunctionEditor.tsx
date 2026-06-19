@@ -2,10 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import {
   type OpacityPoint,
   type TfPreset,
+  type ColorPoint,
   normalizeOpacityPoints,
   defaultOpacityRamp,
   serializePresets,
   deserializePresets,
+  normalizeColorPoints,
+  hexToRgb01,
+  rgb01ToHex,
+  defaultColorPoints,
 } from "@/lib/transferFunction";
 
 const LO = -1000;
@@ -31,6 +36,8 @@ function fromY(y: number) {
 interface Props {
   points: OpacityPoint[];
   onChange: (points: OpacityPoint[]) => void;
+  colorPoints?: ColorPoint[];
+  onColorChange?: (points: ColorPoint[]) => void;
 }
 
 /**
@@ -38,7 +45,12 @@ interface Props {
  * ajout d'un point ; glisser = déplacer ; Maj+clic sur un point = supprimer.
  * Presets perso en localStorage. La couleur reste gérée par le preset clinique.
  */
-export default function TransferFunctionEditor({ points, onChange }: Props) {
+export default function TransferFunctionEditor({
+  points,
+  onChange,
+  colorPoints,
+  onColorChange,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<number | null>(null);
   const [presets, setPresets] = useState<TfPreset[]>([]);
@@ -177,6 +189,64 @@ export default function TransferFunctionEditor({ points, onChange }: Props) {
           Réinit.
         </button>
       </div>
+      {onColorChange && (
+        <div className="mt-2 border-t border-border pt-1 space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-muted-foreground">Couleurs</span>
+            <button
+              type="button"
+              className="text-[10px] px-1 rounded bg-muted/50 hover:bg-muted"
+              onClick={() =>
+                onColorChange(
+                  normalizeColorPoints(
+                    (colorPoints && colorPoints.length
+                      ? colorPoints
+                      : defaultColorPoints(-1000, 1000)
+                    ).concat({ value: 0, r: 1, g: 1, b: 0 })
+                  )
+                )
+              }
+            >
+              + couleur
+            </button>
+          </div>
+          {(colorPoints ?? []).map((cp, i) => (
+            <div key={i} className="flex items-center gap-1">
+              <input
+                type="number"
+                className="w-16 bg-muted/40 border border-border rounded text-[10px] px-1"
+                value={Math.round(cp.value)}
+                onChange={e => {
+                  const next = (colorPoints ?? []).slice();
+                  next[i] = { ...cp, value: Number(e.target.value) };
+                  onColorChange(normalizeColorPoints(next));
+                }}
+                title="Valeur HU"
+              />
+              <input
+                type="color"
+                value={rgb01ToHex(cp.r, cp.g, cp.b)}
+                onChange={e => {
+                  const c = hexToRgb01(e.target.value);
+                  const next = (colorPoints ?? []).slice();
+                  next[i] = { value: cp.value, ...c };
+                  onColorChange(normalizeColorPoints(next));
+                }}
+              />
+              <button
+                type="button"
+                className="text-[10px] text-destructive"
+                onClick={() =>
+                  onColorChange((colorPoints ?? []).filter((_, j) => j !== i))
+                }
+                title="Supprimer"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

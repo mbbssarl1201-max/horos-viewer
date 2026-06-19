@@ -137,12 +137,12 @@ export async function generatePreanalysis(
     : maxImages;
 
   const chosen = keyImages.slice(0, perStudy);
-  const curImages = chosen.map(k => downscalePngBase64(k.pngBase64, 768));
+  const curImages = chosen.map(k => downscalePngBase64(k.pngBase64, 512));
   const curSlices = chosen.map(k => k.sliceIndex);
 
   const priorChosen = comparing ? opts.prior!.images.slice(0, perStudy) : [];
   const priorImages = priorChosen.map(k =>
-    downscalePngBase64(k.pngBase64, 768)
+    downscalePngBase64(k.pngBase64, 512)
   );
   const priorSlices = priorChosen.map(k => k.sliceIndex);
   const priorDate = opts.prior?.date;
@@ -210,7 +210,7 @@ async function generateViaOllama(
 ): Promise<PreanalysisResult> {
   const model = ENV.ollamaVisionModel;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 180_000);
+  const timeout = setTimeout(() => controller.abort(), 240_000);
   let content = "";
   try {
     const resp = await fetch(`${ENV.ollamaUrl}/api/chat`, {
@@ -221,7 +221,7 @@ async function generateViaOllama(
         model,
         stream: false,
         keep_alive: "30s",
-        options: { num_ctx: numCtx },
+        options: { num_ctx: numCtx, num_predict: 512 },
         messages: [
           { role: "system", content: system },
           {
@@ -282,7 +282,7 @@ async function generateViaClaude(
       system,
       messages: [{ role: "user", content }],
     },
-    { timeout: 180_000 }
+    { timeout: 240_000 }
   );
   const text = (resp.content as any[])
     .filter(b => b.type === "text")
@@ -379,7 +379,7 @@ export async function runAiPreanalysis(
       const sampled = await sampleSeriesPngs(input.seriesId, {
         windowCenter: wc,
         windowWidth: ww,
-        count: input.sampleCount ?? (input.priorStudyId ? 8 : 16),
+        count: input.sampleCount ?? (input.priorStudyId ? 4 : 6),
       });
       images = sampled.images.map(s => ({
         pngBase64: s.pngBase64,
@@ -421,7 +421,7 @@ export async function runAiPreanalysis(
           const sampledPrior = await sampleSeriesPngs(priorSeriesId, {
             windowCenter: wc,
             windowWidth: ww,
-            count: 8,
+            count: 6,
           });
           if (sampledPrior.images.length > 0) {
             prior = {

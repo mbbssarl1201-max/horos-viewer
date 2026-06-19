@@ -3588,89 +3588,105 @@ export default function Viewer() {
 
           {/* Bottom Controls */}
           <div className="h-10 border-t border-border bg-card flex items-center px-3 gap-3 shrink-0">
-            {/* Slice navigation */}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() => setCurrentSlice(0)}
-            >
-              <SkipBack className="w-3 h-3" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() => setCurrentSlice(prev => Math.max(0, prev - 1))}
-            >
-              <ChevronLeft className="w-3 h-3" />
-            </Button>
+            {/* En 3D (volume rendering / surface / fly-thru), pas de notion de
+                « coupe » : on navigue en faisant pivoter le volume, pas en
+                avançant/reculant. On masque donc la nav de coupes + le ciné et
+                on affiche un indice d'interaction. */}
+            {viewMode === "3d" && (
+              <div className="flex-1 text-[10px] text-muted-foreground">
+                Volume 3D — glissez pour pivoter · molette ou clic droit : zoom
+                · clic du milieu : déplacer
+              </div>
+            )}
+            {viewMode !== "3d" && (
+              <>
+                {/* Slice navigation */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => setCurrentSlice(0)}
+                >
+                  <SkipBack className="w-3 h-3" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => setCurrentSlice(prev => Math.max(0, prev - 1))}
+                >
+                  <ChevronLeft className="w-3 h-3" />
+                </Button>
 
-            <div className="flex-1 flex items-center gap-2">
-              <Slider
-                value={[currentSlice]}
-                max={Math.max(0, totalSlices - 1)}
-                step={1}
-                onValueChange={([v]) => setCurrentSlice(v)}
-                className="flex-1"
-              />
-              <span className="text-[10px] text-muted-foreground font-mono w-16 text-right">
-                {currentSlice + 1} / {totalSlices}
-              </span>
-            </div>
+                <div className="flex-1 flex items-center gap-2">
+                  <Slider
+                    value={[currentSlice]}
+                    max={Math.max(0, totalSlices - 1)}
+                    step={1}
+                    onValueChange={([v]) => setCurrentSlice(v)}
+                    className="flex-1"
+                  />
+                  <span className="text-[10px] text-muted-foreground font-mono w-16 text-right">
+                    {currentSlice + 1} / {totalSlices}
+                  </span>
+                </div>
 
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() =>
-                setCurrentSlice(prev => Math.min(totalSlices - 1, prev + 1))
-              }
-            >
-              <ChevronRight className="w-3 h-3" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() => setCurrentSlice(totalSlices - 1)}
-            >
-              <SkipForward className="w-3 h-3" />
-            </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() =>
+                    setCurrentSlice(prev => Math.min(totalSlices - 1, prev + 1))
+                  }
+                >
+                  <ChevronRight className="w-3 h-3" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => setCurrentSlice(totalSlices - 1)}
+                >
+                  <SkipForward className="w-3 h-3" />
+                </Button>
 
-            <Separator orientation="vertical" className="h-6" />
+                <Separator orientation="vertical" className="h-6" />
 
-            {/* Ciné / boucle */}
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                onClick={toggleCine}
-                disabled={totalSlices <= 1}
-                title={
-                  cinePlaying ? "Pause (Espace)" : "Lecture en boucle (Espace)"
-                }
-              >
-                {cinePlaying ? (
-                  <Pause className="w-3 h-3" />
-                ) : (
-                  <Play className="w-3 h-3" />
-                )}
-              </Button>
-              <select
-                value={cineFps}
-                onChange={e => setCineFps(Number(e.target.value))}
-                className="bg-transparent text-[10px] border border-border rounded px-1 py-0.5 text-muted-foreground"
-                title="Cadence du ciné (images/seconde)"
-              >
-                {CINE_FPS_OPTIONS.map(fps => (
-                  <option key={fps} value={fps}>
-                    {fps} ips
-                  </option>
-                ))}
-              </select>
-            </div>
+                {/* Ciné / boucle */}
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={toggleCine}
+                    disabled={totalSlices <= 1}
+                    title={
+                      cinePlaying
+                        ? "Pause (Espace)"
+                        : "Lecture en boucle (Espace)"
+                    }
+                  >
+                    {cinePlaying ? (
+                      <Pause className="w-3 h-3" />
+                    ) : (
+                      <Play className="w-3 h-3" />
+                    )}
+                  </Button>
+                  <select
+                    value={cineFps}
+                    onChange={e => setCineFps(Number(e.target.value))}
+                    className="bg-transparent text-[10px] border border-border rounded px-1 py-0.5 text-muted-foreground"
+                    title="Cadence du ciné (images/seconde)"
+                  >
+                    {CINE_FPS_OPTIONS.map(fps => (
+                      <option key={fps} value={fps}>
+                        {fps} ips
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
 
             <Separator orientation="vertical" className="h-6" />
 

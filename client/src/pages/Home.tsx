@@ -1288,7 +1288,11 @@ function MenuDropdown({
         {label}
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-0.5 w-48 bg-popover border border-border rounded-md shadow-lg py-1 z-50">
+        // Pas de marge (mt-*) entre le bouton et la liste : une marge créerait une
+        // zone morte que la souris traverse en descendant → onMouseLeave fermerait
+        // le menu avant qu'on l'atteigne. La liste est accolée au bouton (top-full),
+        // donc le survol reste continu du bouton vers les items.
+        <div className="absolute top-full left-0 w-48 bg-popover border border-border rounded-md shadow-lg py-1 z-50">
           {items.map(item => (
             <button
               key={item.label}

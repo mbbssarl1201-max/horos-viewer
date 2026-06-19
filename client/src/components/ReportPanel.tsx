@@ -231,6 +231,7 @@ export default function ReportPanel({
       seriesId?: number;
       windowCenter?: number;
       windowWidth?: number;
+      includeSegmentation?: boolean;
     }
   ) => {
     const sid = override?.seriesId ?? seriesId;
@@ -247,6 +248,7 @@ export default function ReportPanel({
       })),
       indication: sections.indication || undefined,
       antecedents: antecedentsArg || undefined,
+      includeSegmentation: override?.includeSegmentation,
     });
     setAnalyzedSeriesId(sid);
     // On ne pré-remplit que les champs vides pour ne pas écraser le médecin.
@@ -628,6 +630,19 @@ export default function ReportPanel({
             {segmentCt.isPending
               ? "Segmentation… (~1 min)"
               : "Segmentation IA (CT)"}
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              runPreanalysis(antecedents, { includeSegmentation: true })
+            }
+            disabled={preanalyze.isPending || (gpuManaged && !gpuReady)}
+            className="text-[11px] rounded bg-emerald-500/15 text-emerald-400 px-2 py-1 disabled:opacity-50"
+            title="Compte rendu vision ANCRÉ dans les volumes mesurés par la segmentation (CT) — plus précis, ~1-2 min."
+          >
+            {preanalyze.isPending
+              ? "Analyse précise…"
+              : "Compte rendu IA précis (CT)"}
           </button>
         </div>
       )}

@@ -117,6 +117,9 @@ export async function generatePreanalysis(
     studyDescription?: string;
     antecedents?: string;
     totalSlices?: number;
+    // Mesures objectives (segmentation TotalSegmentator) injectées pour ancrer le
+    // rapport dans des volumes RÉELS — précision accrue, moins d'invention.
+    measurements?: string;
     prior?: {
       images: PreanalysisKeyImage[];
       date?: string;
@@ -197,6 +200,11 @@ export async function generatePreanalysis(
     );
     ctxLines.push(
       "Analyse l'ensemble de ces coupes selon la méthode, rédige Technique / Résultats / Conclusion, puis indique Anomalie (oui/non) et le numéro de la Coupe-clé."
+    );
+  }
+  if (opts.measurements) {
+    ctxLines.push(
+      `MESURES OBJECTIVES (segmentation automatique du volume entier, volumes en mL) — fais-en usage et NE LES CONTREDIS PAS dans ta description ; signale toute valeur qui te paraît anormale :\n${opts.measurements}`
     );
   }
   const userText = ctxLines.join("\n");
@@ -333,6 +341,9 @@ export interface RunAiPreanalysisInput {
   // Antériorité à comparer (mesure d'évolution) ; absente → pas de comparaison.
   priorStudyId?: number;
   priorSeriesId?: number;
+  // Mode précis (CT) : segmenter d'abord le volume (TotalSegmentator) et ancrer
+  // le rapport vision dans les volumes mesurés.
+  includeSegmentation?: boolean;
 }
 
 export interface RunAiPreanalysisResult extends PreanalysisResult {
@@ -460,12 +471,31 @@ export async function runAiPreanalysis(
     }
   }
 
+  // Mode précis : segmentation du volume entier → volumes objectifs injectés
+  // dans le prompt vision. Fail-soft (si indispo, on garde le rapport vision seul).
+  let measurements: string | undefined;
+  if (input.includeSegmentation && input.seriesId && ENV.segServiceUrl) {
+    try {
+      const { segmentCtSeries } = await import("./ctSegmentation");
+      const seg = await segmentCtSeries(input.seriesId);
+      if (seg.structures.length) {
+        measurements = seg.structures
+          .slice(0, 30)
+          .map(s => `${s.name}: ${s.volumeMl} mL`)
+          .join(" ; ");
+      }
+    } catch (e) {
+      console.warn("[aiPreanalysis] segmentation (mode précis) échouée:", e);
+    }
+  }
+
   const result = await _internal.generatePreanalysis(images, {
     indication: input.indication,
     antecedents: input.antecedents,
     modality: (study as any).modality ?? undefined,
     studyDescription: (study as any).studyDescription ?? undefined,
     totalSlices,
+    measurements,
     prior,
   });
 

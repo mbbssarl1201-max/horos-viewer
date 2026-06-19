@@ -1555,6 +1555,8 @@ export const appRouter = router({
           windowCenter: z.number().optional(),
           windowWidth: z.number().optional(),
           sampleCount: z.number().int().min(1).max(24).optional(),
+          // Mode précis (CT) : ancrer le rapport dans les volumes segmentés.
+          includeSegmentation: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {

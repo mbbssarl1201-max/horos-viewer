@@ -210,6 +210,13 @@ describe("generatePreanalysis", () => {
     expect(out.keySliceNumber).toBeNull();
   });
 
+  it("parseKeySlice : robuste aux formats « coupe n° X » et numéro sur la ligne suivante", async () => {
+    const { parseKeySlice } = await import("./aiPreanalysis");
+    expect(parseKeySlice("Coupe-clé : coupe n° 47").keySliceNumber).toBe(47);
+    expect(parseKeySlice("Coupe-clé:\n123").keySliceNumber).toBe(123);
+    expect(parseKeySlice("Coupe-clé: 8").keySliceNumber).toBe(8);
+  });
+
   it("backend claude : appelle l'API Anthropic et parse 3 sections", async () => {
     vi.resetModules();
     process.env.AI_BACKEND = "claude";

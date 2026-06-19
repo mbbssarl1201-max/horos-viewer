@@ -468,17 +468,22 @@ export async function runAiPreanalysis(
     prior,
   });
 
-  // Rendu de la coupe désignée par l'IA → image clé du compte rendu.
+  // Rendu de la coupe désignée par l'IA → image clé du compte rendu. Repli si
+  // l'IA n'a pas donné de numéro exploitable : on prend la coupe du MILIEU de
+  // l'échantillon (représentative du volume) — jamais la 1re coupe.
   let keyImage: RunAiPreanalysisResult["keyImage"] = null;
-  if (input.seriesId && result.keySliceNumber) {
+  let keySlice = result.keySliceNumber;
+  if (!keySlice && images.length > 0) {
+    keySlice = images[Math.floor(images.length / 2)].sliceIndex;
+  }
+  if (input.seriesId && keySlice) {
     try {
       const { renderSliceByNumber } = await import("./aiSampling");
-      const b64 = await renderSliceByNumber(
-        input.seriesId,
-        result.keySliceNumber,
-        { windowCenter: wc, windowWidth: ww }
-      );
-      if (b64) keyImage = { pngBase64: b64, sliceIndex: result.keySliceNumber };
+      const b64 = await renderSliceByNumber(input.seriesId, keySlice, {
+        windowCenter: wc,
+        windowWidth: ww,
+      });
+      if (b64) keyImage = { pngBase64: b64, sliceIndex: keySlice };
     } catch (e) {
       console.warn("[aiPreanalysis] rendu coupe-clé échoué:", e);
     }
@@ -500,10 +505,18 @@ export function parseKeySlice(text: string): {
   keySliceNumber: number | null;
 } {
   const abn = text.match(/Anomalie\s*:?\s*(oui|non|yes|no)/i);
-  const ks = text.match(/Coupe[-\s]?cl[ée]\s*:?\s*(\d+|aucune|none|aucun)/i);
+  // Robuste aux formats du modèle : "Coupe-clé: 47", "Coupe-clé : coupe n° 47",
+  // ou le numéro sur la ligne SUIVANTE. On prend le 1er entier dans les ~80
+  // caractères qui suivent l'étiquette (newlines incluses) ; "aucune" → null.
+  let keySliceNumber: number | null = null;
+  const after = text.split(/Coupe[-\s]?cl[ée]\s*:?/i)[1];
+  if (after) {
+    const num = after.slice(0, 80).match(/\d+/);
+    if (num) keySliceNumber = parseInt(num[0], 10);
+  }
   return {
     abnormal: abn ? /oui|yes/i.test(abn[1]) : null,
-    keySliceNumber: ks && /^\d+$/.test(ks[1]) ? parseInt(ks[1], 10) : null,
+    keySliceNumber,
   };
 }
 

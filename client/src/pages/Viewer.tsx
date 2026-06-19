@@ -4,7 +4,7 @@ import CornerstoneViewer, {
 } from "@/components/CornerstoneViewer";
 import VolumeViewer, { PRESETS_3D } from "@/components/VolumeViewer";
 import TransferFunctionEditor from "@/components/TransferFunctionEditor";
-import { type OpacityPoint } from "@/lib/transferFunction";
+import { type OpacityPoint, type ColorPoint } from "@/lib/transferFunction";
 import { SLAB_MODES, type SlabMode } from "@/lib/slabBlend";
 import { isReconstructable } from "@/lib/volumeReconstruct";
 import type {
@@ -378,6 +378,7 @@ export default function Viewer() {
     { axis: "z", enabled: false, position: 0.5, invert: false },
   ]);
   const [opacityPoints, setOpacityPoints] = useState<OpacityPoint[]>([]);
+  const [colorPoints, setColorPoints] = useState<ColorPoint[]>([]);
   const updateClip = (axis: ClipAxis, patch: Partial<ClipPlaneConfig>) =>
     setClipPlanes(prev =>
       prev.map(c => (c.axis === axis ? { ...c, ...patch } : c))
@@ -2548,6 +2549,8 @@ export default function Viewer() {
               <TransferFunctionEditor
                 points={opacityPoints}
                 onChange={setOpacityPoints}
+                colorPoints={colorPoints}
+                onColorChange={setColorPoints}
               />
             </div>
             <Separator orientation="vertical" className="h-7 mx-1" />
@@ -3342,6 +3345,7 @@ export default function Viewer() {
                   clipPlanes={clipPlanes}
                   obliqueClip={obliqueClip}
                   opacityPoints={opacityPoints}
+                  colorPoints={colorPoints}
                   surfaceIso={suggestIsoForModality(study?.modality)}
                   flyThruNonce={flyThruNonce}
                   cropFraction={cropFraction}

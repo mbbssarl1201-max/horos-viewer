@@ -17,6 +17,8 @@ import {
 import {
   normalizeOpacityPoints,
   type OpacityPoint,
+  normalizeColorPoints,
+  type ColorPoint,
 } from "@/lib/transferFunction";
 
 // Ré-export pour compat (Viewer.tsx importe PRESETS_3D depuis ce module).
@@ -65,6 +67,8 @@ interface VolumeViewerProps {
   surfaceIso?: number;
   /** Mode "3d" : surcharge la courbe d'opacité (fenêtrage 3D). Vide = preset. */
   opacityPoints?: OpacityPoint[];
+  /** Mode "3d" : surcharge la couleur (rgbTransferFunction). < 2 points = preset. */
+  colorPoints?: ColorPoint[];
   /** Compteur : chaque incrément déclenche une animation fly-thru (endoscopie). */
   flyThruNonce?: number;
   /** Mode "3d" : à chaque incrément, exporte une vidéo de rotation (turntable). */
@@ -292,6 +296,7 @@ export default function VolumeViewer({
   surface3d = false,
   surfaceIso = 300,
   opacityPoints,
+  colorPoints,
   flyThruNonce = 0,
   turntableNonce = 0,
   cropFraction = 0,
@@ -1204,6 +1209,42 @@ export default function VolumeViewer({
       if (raf) cancelAnimationFrame(raf);
     };
   }, [mode, preset3d, opacitySig]);
+
+  // Surcharge de la couleur (éditeur de fonction de transfert) : mirror exact de
+  // l'effet d'opacité ci-dessus, mais sur la rgbTransferFunction de l'acteur
+  // volume. < 2 points → on laisse le preset clinique garder la couleur.
+  const colorSig = (colorPoints ?? [])
+    .map(p => `${p.value}:${p.r}:${p.g}:${p.b}`)
+    .join("|");
+  useEffect(() => {
+    if (mode !== "3d") return;
+    const pts = normalizeColorPoints(colorPoints ?? []);
+    if (pts.length < 2) return;
+    let raf = 0;
+    const apply = () => {
+      try {
+        const vp = engineRef.current?.getViewport?.("VR_3D") as any;
+        const actors = vp?.getActors?.();
+        const actor =
+          actors?.[0]?.actor ?? actors?.[0]?.volumeActor ?? actors?.[0];
+        const property = actor?.getProperty?.();
+        const cfun = property?.getRGBTransferFunction?.(0);
+        if (!cfun?.addRGBPoint) return;
+        cfun.removeAllPoints?.();
+        for (const p of pts) cfun.addRGBPoint(p.value, p.r, p.g, p.b);
+        vp.render?.();
+      } catch {
+        /* acteur pas prêt / API indispo — ignoré */
+      }
+    };
+    // Laisse le preset s'appliquer d'abord (potentiellement asynchrone), puis surcharge.
+    raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(apply);
+    });
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [mode, preset3d, colorSig]);
 
   // Changement d'opacité / colormap de la fusion PET : ré-appliquer SANS
   // reconstruire le moteur (rapide, glissement de curseur fluide). N'agit que si

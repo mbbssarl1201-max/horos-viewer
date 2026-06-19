@@ -1133,16 +1133,11 @@ export default function Viewer() {
     toast.success("Image clé ajoutée au compte rendu");
   };
 
-  // Ouvre le compte rendu : si aucune image clé n'a été ajoutée, capture
-  // automatiquement la coupe affichée pour que la pré-analyse IA puisse démarrer
-  // toute seule (le panneau lance l'IA automatiquement dans ce cas).
+  // Ouvre le compte rendu. On NE capture PLUS automatiquement la coupe affichée
+  // (c'était toujours la 1re coupe → polluait le rapport) : le serveur échantillonne
+  // toute la série lui-même et l'IA DÉSIGNE la coupe-clé pertinente, qui devient
+  // l'image clé du rapport. Le médecin peut toujours ajouter des images à la main.
   const openReport = () => {
-    if (reportKeyImages.length === 0) {
-      const b64 = captureCurrentPng();
-      if (b64) {
-        setReportKeyImages([{ pngBase64: b64, sliceIndex: currentSlice }]);
-      }
-    }
     setReportOpen(true);
   };
 

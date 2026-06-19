@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { slabModeToBlend, type SlabMode } from "@/lib/slabBlend";
-import { buildClipPlanes, type ClipPlaneConfig } from "@/lib/clipPlanes";
+import {
+  buildClipPlanes,
+  buildObliqueClipPlane,
+  type ClipPlaneConfig,
+  type ObliqueClipConfig,
+} from "@/lib/clipPlanes";
 import { PRESETS_3D, presetParId } from "@/lib/volumePresets3d";
 import { catmullRomSpline } from "@/lib/flyThruPath";
 import { turntableAngles, orbitAroundFocalPoint } from "@/lib/turntable";
@@ -68,6 +73,8 @@ interface VolumeViewerProps {
   cropFraction?: number;
   /** Mode "3d" : plans de coupe interactifs par axe (sagittal/coronal/axial). */
   clipPlanes?: ClipPlaneConfig[];
+  /** Mode "3d" : plan de coupe oblique additif (azimut/élévation/position/invert). */
+  obliqueClip?: ObliqueClipConfig;
   /**
    * Fusion PET-CT (additif, fail-safe) : URLs (MinIO, schéma wadouri:) des
    * coupes de la série PET à superposer sur le CT/volume principal. Si absent
@@ -289,6 +296,7 @@ export default function VolumeViewer({
   turntableNonce = 0,
   cropFraction = 0,
   clipPlanes,
+  obliqueClip,
   petImageUrls,
   petVolumeId,
   fusionOpacity = 0.5,
@@ -1066,11 +1074,16 @@ export default function VolumeViewer({
     };
   }, [turntableNonce, mode]);
 
-  const clipSig = (clipPlanes ?? [])
-    .map(
-      c => `${c.axis}:${c.enabled ? 1 : 0}:${c.position}:${c.invert ? 1 : 0}`
-    )
-    .join("|");
+  const clipSig =
+    (clipPlanes ?? [])
+      .map(
+        c => `${c.axis}:${c.enabled ? 1 : 0}:${c.position}:${c.invert ? 1 : 0}`
+      )
+      .join("|") +
+    "|ob:" +
+    (obliqueClip && obliqueClip.enabled
+      ? `1:${obliqueClip.azimuthDeg}:${obliqueClip.elevationDeg}:${obliqueClip.position}:${obliqueClip.invert ? 1 : 0}`
+      : "0");
 
   // Scissor (recadrage boîte centrale) + plans de coupe interactifs par axe.
   // Tout passe dans la MÊME passe (un seul removeAllClippingPlanes) ; additif et
@@ -1090,9 +1103,19 @@ export default function VolumeViewer({
 
         const b = actor.getBounds?.();
         const interactivePlanes = buildClipPlanes(b, clipPlanes ?? []);
+        const obliquePlane = buildObliqueClipPlane(
+          b,
+          obliqueClip ?? {
+            enabled: false,
+            azimuthDeg: 0,
+            elevationDeg: 0,
+            position: 0.5,
+            invert: false,
+          }
+        );
         const needScissor = cropFraction > 0.01 && b && b.length >= 6;
 
-        if (needScissor || interactivePlanes.length) {
+        if (needScissor || interactivePlanes.length || obliquePlane) {
           const vtkPlane = (
             await import("@kitware/vtk.js/Common/DataModel/Plane")
           ).default;
@@ -1126,6 +1149,13 @@ export default function VolumeViewer({
             const pl = vtkPlane.newInstance();
             pl.setOrigin(c.origin as any);
             pl.setNormal(c.normal as any);
+            mapper.addClippingPlane?.(pl);
+          }
+
+          if (obliquePlane) {
+            const pl = vtkPlane.newInstance();
+            pl.setOrigin(obliquePlane.origin as any);
+            pl.setNormal(obliquePlane.normal as any);
             mapper.addClippingPlane?.(pl);
           }
         }

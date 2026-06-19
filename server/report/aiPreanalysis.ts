@@ -41,6 +41,11 @@ export function downscalePngBase64(b64: string, maxDim: number): string {
   }
 }
 
+// Côté le plus grand (px) auquel on réduit chaque coupe avant l'envoi au VLM.
+// La vision tournant sur GPU (L4), on conserve la pleine résolution des coupes
+// CT (512 px) ; 768 est un plafond qui n'altère pas les coupes natives.
+const VISION_MAX_DIM = 768;
+
 export interface PreanalysisKeyImage {
   pngBase64: string;
   sliceIndex: number;
@@ -129,20 +134,22 @@ export async function generatePreanalysis(
     );
   }
   const comparing = !!opts.prior && opts.prior.images.length > 0;
-  // Claude encaisse plus d'images ; Ollama local est plafonné (RAM/latence).
-  // En mode comparatif, le budget est partagé entre les deux examens.
-  const maxImages = useClaude ? 16 : 6;
+  // Vision portée par le GPU L4 (24 Go VRAM) → 16 coupes pleine résolution,
+  // comme Claude. En mode comparatif, le budget est partagé entre les deux examens.
+  const maxImages = 16;
   const perStudy = comparing
     ? Math.max(1, Math.floor(maxImages / 2))
     : maxImages;
 
   const chosen = keyImages.slice(0, perStudy);
-  const curImages = chosen.map(k => downscalePngBase64(k.pngBase64, 384));
+  const curImages = chosen.map(k =>
+    downscalePngBase64(k.pngBase64, VISION_MAX_DIM)
+  );
   const curSlices = chosen.map(k => k.sliceIndex);
 
   const priorChosen = comparing ? opts.prior!.images.slice(0, perStudy) : [];
   const priorImages = priorChosen.map(k =>
-    downscalePngBase64(k.pngBase64, 384)
+    downscalePngBase64(k.pngBase64, VISION_MAX_DIM)
   );
   const priorSlices = priorChosen.map(k => k.sliceIndex);
   const priorDate = opts.prior?.date;
@@ -213,14 +220,16 @@ async function generateViaOllama(
   const timeout = setTimeout(() => controller.abort(), 240_000);
   let content = "";
   try {
-    const resp = await fetch(`${ENV.ollamaUrl}/api/chat`, {
+    const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
       body: JSON.stringify({
         model,
         stream: false,
-        keep_alive: "30s",
+        // GPU dédié : on garde le modèle chargé en VRAM (évite le warm-up ~67 s
+        // au premier compte rendu). -1 = pas de déchargement.
+        keep_alive: -1,
         options: { num_ctx: numCtx, num_predict: 512 },
         messages: [
           { role: "system", content: system },
@@ -379,7 +388,9 @@ export async function runAiPreanalysis(
       const sampled = await sampleSeriesPngs(input.seriesId, {
         windowCenter: wc,
         windowWidth: ww,
-        count: input.sampleCount ?? (input.priorStudyId ? 3 : 4),
+        // Vision sur GPU : on analyse 16 coupes réparties sur tout le volume
+        // (8 quand on compare une antériorité, pour partager le budget).
+        count: input.sampleCount ?? (input.priorStudyId ? 8 : 16),
       });
       images = sampled.images.map(s => ({
         pngBase64: s.pngBase64,
@@ -421,7 +432,7 @@ export async function runAiPreanalysis(
           const sampledPrior = await sampleSeriesPngs(priorSeriesId, {
             windowCenter: wc,
             windowWidth: ww,
-            count: 4,
+            count: 8,
           });
           if (sampledPrior.images.length > 0) {
             prior = {

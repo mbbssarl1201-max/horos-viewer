@@ -154,7 +154,7 @@ describe("generatePreanalysis", () => {
     expect(downscalePngBase64(b64, 1000)).toBe(b64);
   });
 
-  it("plafonne à 6 images envoyées au VLM (Ollama)", async () => {
+  it("plafonne à 16 images envoyées au VLM (Ollama/GPU)", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({
@@ -163,22 +163,17 @@ describe("generatePreanalysis", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
     const { generatePreanalysis } = await import("./aiPreanalysis");
-    const many = Array.from({ length: 8 }, (_, i) => ({
+    const many = Array.from({ length: 20 }, (_, i) => ({
       pngBase64: `IMG${i}`,
       sliceIndex: i,
     }));
     await generatePreanalysis(many, {});
     const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
     const userMsg = body.messages.find((m: any) => m.role === "user");
-    expect(userMsg.images).toHaveLength(6);
-    expect(userMsg.images).toEqual([
-      "IMG0",
-      "IMG1",
-      "IMG2",
-      "IMG3",
-      "IMG4",
-      "IMG5",
-    ]);
+    expect(userMsg.images).toHaveLength(16);
+    expect(userMsg.images).toEqual(
+      Array.from({ length: 16 }, (_, i) => `IMG${i}`)
+    );
   });
 
   it("parse l'anomalie et le numéro de coupe-clé, sans fuite dans la conclusion", async () => {

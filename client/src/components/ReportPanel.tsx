@@ -197,6 +197,20 @@ export default function ReportPanel({
   const gpuManaged = gpuState !== "unknown";
   const gpuReady = !gpuManaged || gpuState === "ready";
   const gpuBusy = gpuState === "waking" || gpuState === "starting";
+
+  // --- Mode validation IA : verdict du médecin + stats d'accord -------------
+  const aiEval = trpc.ai.evaluation.useQuery({ studyId });
+  const aiEvalStats = trpc.ai.evaluationStats.useQuery();
+  const recordEval = trpc.ai.recordEvaluation.useMutation();
+  const [missedFinding, setMissedFinding] = useState(false);
+  useEffect(() => {
+    if (aiEval.data) setMissedFinding(aiEval.data.missedFinding);
+  }, [aiEval.data]);
+  const submitVerdict = async (verdict: "juste" | "partielle" | "fausse") => {
+    await recordEval.mutateAsync({ studyId, verdict, missedFinding });
+    aiEval.refetch();
+    aiEvalStats.refetch();
+  };
   const [aiAbnormal, setAiAbnormal] = useState<boolean | null>(null);
   const [aiKeySlice, setAiKeySlice] = useState<number | null>(null);
   // Série réellement analysée (peut différer de la série ouverte, ex. bouton
@@ -597,6 +611,71 @@ export default function ReportPanel({
           >
             {preanalyze.isPending ? "Analyse en cours…" : "Pré-analyse IA"}
           </button>
+        </div>
+      )}
+
+      {/* --- Mode validation IA : verdict du médecin + fiabilité mesurée -- */}
+      {(aiAssisted || aiEval.data?.verdict != null) && (
+        <div className="mt-1 rounded border border-border/50 p-2 space-y-1.5">
+          <p className="text-[11px] text-muted-foreground">
+            Après ta lecture, la pré-analyse IA était :
+          </p>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {(
+              [
+                ["juste", "✅ Juste", "bg-green-500/15 text-green-500"],
+                ["partielle", "⚠️ Partielle", "bg-amber-500/15 text-amber-600"],
+                ["fausse", "❌ Fausse", "bg-red-500/15 text-red-400"],
+              ] as const
+            ).map(([v, label, cls]) => (
+              <button
+                key={v}
+                type="button"
+                disabled={recordEval.isPending}
+                onClick={() => submitVerdict(v)}
+                className={`text-[11px] rounded px-2 py-1 disabled:opacity-50 ${cls} ${
+                  aiEval.data?.verdict === v
+                    ? "ring-2 ring-offset-1 ring-current"
+                    : ""
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={missedFinding}
+              onChange={e => setMissedFinding(e.target.checked)}
+            />
+            L'IA a manqué une anomalie réelle
+          </label>
+          {aiEval.data?.verdict && (
+            <p className="text-[10px] text-green-500">
+              Verdict enregistré, merci.
+            </p>
+          )}
+          {aiEvalStats.data && aiEvalStats.data.total > 0 && (
+            <p className="text-[10px] text-muted-foreground">
+              Fiabilité mesurée :{" "}
+              <span className="text-foreground font-medium">
+                {Math.round(
+                  ((aiEvalStats.data.juste + aiEvalStats.data.partielle * 0.5) /
+                    aiEvalStats.data.total) *
+                    100
+                )}
+                %
+              </span>{" "}
+              ({aiEvalStats.data.juste} justes · {aiEvalStats.data.partielle}{" "}
+              partielles · {aiEvalStats.data.fausse} fausses sur{" "}
+              {aiEvalStats.data.total} évaluées
+              {aiEvalStats.data.missed > 0
+                ? ` · ⚠️ ${aiEvalStats.data.missed} anomalie(s) ratée(s)`
+                : ""}
+              )
+            </p>
+          )}
         </div>
       )}
 

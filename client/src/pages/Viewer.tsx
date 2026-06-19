@@ -7,7 +7,11 @@ import TransferFunctionEditor from "@/components/TransferFunctionEditor";
 import { type OpacityPoint } from "@/lib/transferFunction";
 import { SLAB_MODES, type SlabMode } from "@/lib/slabBlend";
 import { isReconstructable } from "@/lib/volumeReconstruct";
-import type { ClipPlaneConfig, ClipAxis } from "@/lib/clipPlanes";
+import type {
+  ClipPlaneConfig,
+  ClipAxis,
+  ObliqueClipConfig,
+} from "@/lib/clipPlanes";
 import { shouldReselectSeries } from "@/lib/seriesSelection";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -383,6 +387,15 @@ export default function Viewer() {
     y: "Coronal",
     z: "Axial",
   };
+  const [obliqueClip, setObliqueClip] = useState<ObliqueClipConfig>({
+    enabled: false,
+    azimuthDeg: 0,
+    elevationDeg: 0,
+    position: 0.5,
+    invert: false,
+  });
+  const updateOblique = (patch: Partial<ObliqueClipConfig>) =>
+    setObliqueClip(prev => ({ ...prev, ...patch }));
   // Fly-thru / endoscopie : un compteur incrémenté déclenche l'animation caméra.
   const [flyThruNonce, setFlyThruNonce] = useState(0);
   // Scissor : fraction de découpe du volume 3D (0 = aucune).
@@ -2465,6 +2478,70 @@ export default function Viewer() {
                   </label>
                 </div>
               ))}
+              {/* Plan de coupe oblique */}
+              <div className="flex items-center gap-1 border-t border-border pt-1 mt-1 flex-wrap">
+                <label className="flex items-center gap-1 text-[10px] w-16">
+                  <input
+                    type="checkbox"
+                    checked={obliqueClip.enabled}
+                    onChange={e => updateOblique({ enabled: e.target.checked })}
+                    className="accent-primary"
+                  />
+                  Oblique
+                </label>
+                <label className="text-[9px] flex items-center gap-0.5">
+                  Az
+                  <input
+                    type="range"
+                    min={0}
+                    max={360}
+                    step={1}
+                    value={obliqueClip.azimuthDeg}
+                    disabled={!obliqueClip.enabled}
+                    onChange={e =>
+                      updateOblique({ azimuthDeg: Number(e.target.value) })
+                    }
+                    title="Azimut (°)"
+                  />
+                </label>
+                <label className="text-[9px] flex items-center gap-0.5">
+                  Él
+                  <input
+                    type="range"
+                    min={-90}
+                    max={90}
+                    step={1}
+                    value={obliqueClip.elevationDeg}
+                    disabled={!obliqueClip.enabled}
+                    onChange={e =>
+                      updateOblique({ elevationDeg: Number(e.target.value) })
+                    }
+                    title="Élévation (°)"
+                  />
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={obliqueClip.position}
+                  disabled={!obliqueClip.enabled}
+                  onChange={e =>
+                    updateOblique({ position: Number(e.target.value) })
+                  }
+                  title="Position du plan oblique"
+                />
+                <label className="flex items-center gap-0.5 text-[9px]">
+                  <input
+                    type="checkbox"
+                    checked={obliqueClip.invert}
+                    disabled={!obliqueClip.enabled}
+                    onChange={e => updateOblique({ invert: e.target.checked })}
+                    className="accent-primary"
+                  />
+                  Inv
+                </label>
+              </div>
             </div>
             <div className="border-l border-border pl-2 ml-1">
               <div className="text-[10px] mb-0.5">Opacité (fenêtrage 3D)</div>
@@ -3263,6 +3340,7 @@ export default function Viewer() {
                   surface3d={surface3d}
                   turntableNonce={turntableNonce}
                   clipPlanes={clipPlanes}
+                  obliqueClip={obliqueClip}
                   opacityPoints={opacityPoints}
                   surfaceIso={suggestIsoForModality(study?.modality)}
                   flyThruNonce={flyThruNonce}

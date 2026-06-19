@@ -3,6 +3,8 @@ import {
   clampClipPosition,
   axisClipPlane,
   buildClipPlanes,
+  obliqueClipPlane,
+  buildObliqueClipPlane,
 } from "./clipPlanes";
 
 const B = [0, 10, 0, 20, 0, 30]; // xmin,xmax,ymin,ymax,zmin,zmax
@@ -44,5 +46,72 @@ describe("buildClipPlanes", () => {
     expect(buildClipPlanes(B, cfgs)).toHaveLength(2);
     expect(buildClipPlanes([1, 2, 3], cfgs)).toEqual([]);
     expect(buildClipPlanes(B, [])).toEqual([]);
+  });
+});
+
+describe("obliqueClipPlane", () => {
+  const B = [0, 10, 0, 10, 0, 10]; // cube 10, centre (5,5,5)
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+  it("az=0 el=0 → normale +X", () => {
+    const p = obliqueClipPlane(B, 0, 0, 0.5, false);
+    expect(
+      near(p.normal[0], 1) && near(p.normal[1], 0) && near(p.normal[2], 0)
+    ).toBe(true);
+  });
+  it("az=90 el=0 → normale +Y", () => {
+    const p = obliqueClipPlane(B, 90, 0, 0.5, false);
+    expect(
+      near(p.normal[0], 0) && near(p.normal[1], 1) && near(p.normal[2], 0)
+    ).toBe(true);
+  });
+  it("el=90 → normale +Z", () => {
+    const p = obliqueClipPlane(B, 0, 90, 0.5, false);
+    expect(near(p.normal[2], 1)).toBe(true);
+  });
+  it("invert → normale opposée", () => {
+    const p = obliqueClipPlane(B, 0, 0, 0.5, true);
+    expect(near(p.normal[0], -1)).toBe(true);
+  });
+  it("position 0.5 → origine au centre", () => {
+    const p = obliqueClipPlane(B, 0, 0, 0.5, false);
+    expect(
+      near(p.origin[0], 5) && near(p.origin[1], 5) && near(p.origin[2], 5)
+    ).toBe(true);
+  });
+});
+
+describe("buildObliqueClipPlane", () => {
+  it("désactivé → null", () => {
+    expect(
+      buildObliqueClipPlane([0, 10, 0, 10, 0, 10], {
+        enabled: false,
+        azimuthDeg: 0,
+        elevationDeg: 0,
+        position: 0.5,
+        invert: false,
+      })
+    ).toBeNull();
+  });
+  it("bounds invalides → null", () => {
+    expect(
+      buildObliqueClipPlane([0, 1], {
+        enabled: true,
+        azimuthDeg: 0,
+        elevationDeg: 0,
+        position: 0.5,
+        invert: false,
+      })
+    ).toBeNull();
+  });
+  it("activé + bounds OK → spec non nulle", () => {
+    expect(
+      buildObliqueClipPlane([0, 10, 0, 10, 0, 10], {
+        enabled: true,
+        azimuthDeg: 30,
+        elevationDeg: 20,
+        position: 0.5,
+        invert: false,
+      })
+    ).not.toBeNull();
   });
 });

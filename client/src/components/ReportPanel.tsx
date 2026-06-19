@@ -246,13 +246,15 @@ export default function ReportPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [history.data]);
 
-  // Auto-pré-analyse à l'ouverture (une seule fois), uniquement si aucun
-  // compte-rendu persisté n'existe encore et qu'une image clé est disponible.
+  // Auto-pré-analyse à l'ouverture (une seule fois), si aucun compte-rendu
+  // persisté n'existe encore. NE dépend PLUS d'une image clé capturée : le
+  // serveur échantillonne toute la série lui-même (seriesId) → l'IA tourne même
+  // en 3D/VR ou quand la capture du canvas échoue.
   const autoRan = useRef(false);
   useEffect(() => {
     if (
       !autoRan.current &&
-      keyImages.length > 0 &&
+      seriesId != null &&
       history.isFetched &&
       reportQuery.isFetched &&
       !report &&
@@ -263,7 +265,7 @@ export default function ReportPanel({
       void runPreanalysis(auto).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyImages.length, history.isFetched, reportQuery.isFetched]);
+  }, [seriesId, history.isFetched, reportQuery.isFetched]);
 
   const aiAssisted = aiAbnormal !== null || aiGenerate.data != null;
 

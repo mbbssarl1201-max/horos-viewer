@@ -1543,7 +1543,10 @@ export const appRouter = router({
                 sliceIndex: z.number().int().min(0),
               })
             )
-            .min(1)
+            // 0 autorisé : le serveur échantillonne TOUTE la série lui-même
+            // (sampleSeriesPngs) à partir de seriesId — pas besoin d'une image
+            // clé capturée côté client (qui échoue notamment en 3D/VR).
+            .min(0)
             .max(20),
           indication: z.string().max(5000).optional(),
           antecedents: z.string().max(5000).optional(),

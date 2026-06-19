@@ -204,6 +204,8 @@ export default function ReportPanel({
   const recordEval = trpc.ai.recordEvaluation.useMutation();
   // Segmentation CT open-source (TotalSegmentator) sur le GPU.
   const segmentCt = trpc.ai.segmentCt.useMutation();
+  // Haute précision (1.5mm) : plus précis, ~2x plus lent. Rapide par défaut.
+  const [highResSeg, setHighResSeg] = useState(false);
   const [missedFinding, setMissedFinding] = useState(false);
   useEffect(() => {
     if (aiEval.data) setMissedFinding(aiEval.data.missedFinding);
@@ -232,6 +234,7 @@ export default function ReportPanel({
       windowCenter?: number;
       windowWidth?: number;
       includeSegmentation?: boolean;
+      highResSegmentation?: boolean;
     }
   ) => {
     const sid = override?.seriesId ?? seriesId;
@@ -249,6 +252,7 @@ export default function ReportPanel({
       indication: sections.indication || undefined,
       antecedents: antecedentsArg || undefined,
       includeSegmentation: override?.includeSegmentation,
+      highResSegmentation: override?.highResSegmentation,
     });
     setAnalyzedSeriesId(sid);
     // On ne pré-remplit que les champs vides pour ne pas écraser le médecin.
@@ -621,6 +625,7 @@ export default function ReportPanel({
               segmentCt.mutate({
                 studyId,
                 seriesId: analyzedSeriesId ?? seriesId,
+                highRes: highResSeg,
               })
             }
             disabled={segmentCt.isPending || (gpuManaged && !gpuReady)}
@@ -634,7 +639,10 @@ export default function ReportPanel({
           <button
             type="button"
             onClick={() =>
-              runPreanalysis(antecedents, { includeSegmentation: true })
+              runPreanalysis(antecedents, {
+                includeSegmentation: true,
+                highResSegmentation: highResSeg,
+              })
             }
             disabled={preanalyze.isPending || (gpuManaged && !gpuReady)}
             className="text-[11px] rounded bg-emerald-500/15 text-emerald-400 px-2 py-1 disabled:opacity-50"
@@ -644,6 +652,17 @@ export default function ReportPanel({
               ? "Analyse précise…"
               : "Compte rendu IA précis (CT)"}
           </button>
+          <label
+            className="flex items-center gap-1 text-[10px] text-muted-foreground"
+            title="Segmentation 1.5mm au lieu de 3mm : plus précise sur les petites structures, ~2x plus lente."
+          >
+            <input
+              type="checkbox"
+              checked={highResSeg}
+              onChange={e => setHighResSeg(e.target.checked)}
+            />
+            haute précision
+          </label>
         </div>
       )}
 

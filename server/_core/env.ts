@@ -31,6 +31,11 @@ export const ENV = {
     process.env.OLLAMA_URL ??
     "http://ollama-hermes:11434",
   ollamaVisionModel: process.env.OLLAMA_VISION_MODEL ?? "qwen2.5vl:3b",
+  // Plan de contrôle du GPU vision (sidecar gpu-control) : pilote la mise en
+  // veille (shelve) / réveil (unshelve) de l'instance GPU pour ne payer qu'à
+  // l'usage. Vide = fonctionnalité désactivée (le GPU est supposé toujours là).
+  gpuControlUrl: process.env.GPU_CONTROL_URL ?? "",
+  gpuControlToken: process.env.GPU_CONTROL_TOKEN ?? "",
   // Modèle de texte Ollama pour le chat Hermès (instruction-following). Présent
   // sur ollama-hermes. PHI-safe (local).
   ollamaTextModel: process.env.OLLAMA_TEXT_MODEL ?? "qwen2.5:3b",

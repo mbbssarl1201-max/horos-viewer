@@ -181,6 +181,22 @@ export default function ReportPanel({
   const preanalyze = trpc.email.aiPreanalysis.useMutation();
   const send = trpc.email.sendStudyReport.useMutation();
   const history = trpc.studies.patientHistory.useQuery({ studyId });
+
+  // --- Pilotage GPU vision (veille/réveil — facturation à l'usage) ---------
+  // Le GPU se met en veille après inactivité ; on sonde son état et on propose
+  // un bouton « Réveiller l'IA ». state "unknown" = pilotage non configuré →
+  // on n'entrave rien (comportement historique : GPU supposé toujours dispo).
+  const gpuStatusQ = trpc.ai.gpuStatus.useQuery(undefined, {
+    refetchInterval: q => {
+      const s = (q.state.data as { state?: string } | undefined)?.state;
+      return s === "waking" || s === "starting" ? 4000 : 20000;
+    },
+  });
+  const gpuWake = trpc.ai.gpuWake.useMutation();
+  const gpuState = gpuStatusQ.data?.state ?? "unknown";
+  const gpuManaged = gpuState !== "unknown";
+  const gpuReady = !gpuManaged || gpuState === "ready";
+  const gpuBusy = gpuState === "waking" || gpuState === "starting";
   const [aiAbnormal, setAiAbnormal] = useState<boolean | null>(null);
   const [aiKeySlice, setAiKeySlice] = useState<number | null>(null);
   // Série réellement analysée (peut différer de la série ouverte, ex. bouton
@@ -413,8 +429,48 @@ export default function ReportPanel({
       )}
       {(preanalyze.isError || aiGenerate.isError) && !isSigned && (
         <p className="text-[10px] text-destructive">
-          IA indisponible, rédigez manuellement.
+          {gpuManaged && !gpuReady
+            ? "IA en veille — cliquez « Réveiller l'IA » puis relancez."
+            : "IA indisponible, rédigez manuellement."}
         </p>
+      )}
+
+      {/* --- État du GPU vision (veille/réveil — facturation à l'usage) ---- */}
+      {gpuManaged && !isSigned && (
+        <div className="flex items-center gap-2 text-[11px]">
+          {gpuState === "ready" && (
+            <span className="inline-flex items-center gap-1 text-green-500">
+              <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+              IA prête
+            </span>
+          )}
+          {gpuBusy && (
+            <span className="inline-flex items-center gap-1 text-amber-500">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
+              Réveil de l'IA en cours… (~1–2 min)
+            </span>
+          )}
+          {gpuState === "asleep" && (
+            <>
+              <span className="inline-flex items-center gap-1 text-muted-foreground">
+                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
+                IA en veille
+              </span>
+              <button
+                type="button"
+                disabled={gpuWake.isPending}
+                onClick={async () => {
+                  await gpuWake.mutateAsync();
+                  gpuStatusQ.refetch();
+                }}
+                className="rounded bg-primary/15 text-primary px-2 py-0.5 disabled:opacity-50"
+                title="Sort le GPU de veille (~1–2 min), puis l'IA est rapide"
+              >
+                {gpuWake.isPending ? "Réveil…" : "Réveiller l'IA"}
+              </button>
+            </>
+          )}
+        </div>
       )}
 
       {/* --- Actions brouillon -------------------------------------------- */}
@@ -422,7 +478,7 @@ export default function ReportPanel({
         <div className="flex gap-2 flex-wrap">
           <Button
             size="sm"
-            disabled={aiGenerate.isPending}
+            disabled={aiGenerate.isPending || (gpuManaged && !gpuReady)}
             onClick={async () => {
               const r = await aiGenerate.mutateAsync({
                 studyId,
@@ -522,7 +578,7 @@ export default function ReportPanel({
                 ...BONE_WINDOW,
               })
             }
-            disabled={preanalyze.isPending}
+            disabled={preanalyze.isPending || (gpuManaged && !gpuReady)}
             className="text-[11px] rounded bg-amber-500/15 text-amber-600 px-2 py-1 disabled:opacity-50"
             title="Analyse la série osseuse en fenêtre Bone (2000/500) — recherche de fracture"
           >
@@ -531,7 +587,11 @@ export default function ReportPanel({
           <button
             type="button"
             onClick={() => runPreanalysis()}
-            disabled={preanalyze.isPending || keyImages.length === 0}
+            disabled={
+              preanalyze.isPending ||
+              keyImages.length === 0 ||
+              (gpuManaged && !gpuReady)
+            }
             className="text-[11px] rounded bg-primary/15 text-primary px-2 py-1 disabled:opacity-50"
             title="Analyse la série affichée dans la fenêtre courante"
           >

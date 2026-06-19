@@ -346,6 +346,11 @@ export async function runAiPreanalysis(
   input: RunAiPreanalysisInput,
   ctx: { user: { id: number }; req?: { ip?: string } }
 ): Promise<RunAiPreanalysisResult> {
+  // Signale une activité au plan de contrôle GPU : réarme le minuteur de mise en
+  // veille pour que le GPU ne s'endorme pas pendant une séance de comptes rendus.
+  // Best-effort (n'échoue jamais) ; no-op si le pilotage GPU n'est pas configuré.
+  void (await import("./gpuControl")).gpuTouch();
+
   const recent = await countRecentAccess(
     ctx.user.id,
     "study.ai.preanalysis",

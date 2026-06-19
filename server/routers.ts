@@ -1988,6 +1988,17 @@ export const appRouter = router({
           req: { ip: ctx.req?.ip },
         });
       }),
+    // État du GPU vision (prêt / en veille / en réveil) pour piloter le bouton
+    // « Réveiller l'IA ». Lecture seule, rôle clinique.
+    gpuStatus: medicalProcedure.query(async () => {
+      const { gpuStatus } = await import("./report/gpuControl");
+      return gpuStatus();
+    }),
+    // Réveille le GPU vision (sort de veille). Déclenché par le bouton dédié.
+    gpuWake: medicalProcedure.mutation(async () => {
+      const { gpuWake } = await import("./report/gpuControl");
+      return gpuWake();
+    }),
   }),
   knowledge: router({
     // Ingestion de fichiers .md (coffre Obsidian) → chunks + embeddings locaux + stockage.

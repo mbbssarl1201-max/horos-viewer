@@ -2011,7 +2011,16 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input }) => {
-        const { recordAiVerdict } = await import("./db");
+        const { recordAiVerdict, getStudyById } = await import("./db");
+        // Garde : l'étude doit exister (cohérent avec aiPreanalysis). Mono-tenant
+        // → tout le personnel clinique accède à toutes les études de l'institut ;
+        // pas de propriété d'étude par utilisateur (modèle d'autorisation global).
+        const study = await getStudyById(input.studyId);
+        if (!study)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
         await recordAiVerdict(input);
         return { ok: true };
       }),

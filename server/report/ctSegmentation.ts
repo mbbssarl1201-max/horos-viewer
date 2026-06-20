@@ -39,7 +39,7 @@ function zipBuffers(files: { name: string; buf: Buffer }[]): Promise<Buffer> {
 
 export async function segmentCtSeries(
   seriesId: number,
-  opts?: { highRes?: boolean; overlayCount?: number }
+  opts?: { highRes?: boolean; overlayCount?: number; task?: string }
 ): Promise<SegResult> {
   if (!ENV.segServiceUrl) {
     throw new Error("Service de segmentation non configuré");
@@ -67,8 +67,9 @@ export async function segmentCtSeries(
   // fast=1 (3mm, défaut) rapide ; fast=0 (1.5mm) = haute précision, ~2x plus lent.
   const fastParam = opts?.highRes ? 0 : 1;
   const overlay = opts?.overlayCount ?? 0;
+  const task = encodeURIComponent(opts?.task ?? "total");
   const resp = await fetch(
-    `${ENV.segServiceUrl}/segment?fast=${fastParam}&overlay=${overlay}`,
+    `${ENV.segServiceUrl}/segment?fast=${fastParam}&overlay=${overlay}&task=${task}`,
     {
       method: "POST",
       headers: { "X-Seg-Token": ENV.segToken },

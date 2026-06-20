@@ -222,6 +222,98 @@ export async function generatePreanalysis(
   return generateViaOllama(images, userText, numCtx, system);
 }
 
+/**
+ * Localise l'anomalie sur une coupe (grounding vision) → boîte en FRACTIONS 0-1
+ * de l'image (robuste au redimensionnement interne du modèle). null si rien.
+ * Best-effort, APPROXIMATIF : à valider par le médecin.
+ */
+export async function locateAnomaly(
+  pngBase64: string
+): Promise<{ x1: number; y1: number; x2: number; y2: number } | null> {
+  const sys =
+    "Tu localises l'anomalie PRINCIPALE sur une coupe d'imagerie médicale. " +
+    "Réponds UNIQUEMENT par un JSON " +
+    '{"x1":,"y1":,"x2":,"y2":} où chaque valeur est une FRACTION entre 0.0 et 1.0 ' +
+    "(x = horizontal depuis la gauche, y = vertical depuis le haut) délimitant la zone anormale. " +
+    "Si aucune anomalie nette, réponds {}. Aucun autre texte.";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
+  try {
+    const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: ENV.ollamaVisionModel,
+        stream: false,
+        keep_alive: -1,
+        options: { num_ctx: 4096, num_predict: 80 },
+        messages: [
+          { role: "system", content: sys },
+          {
+            role: "user",
+            content: "Boîte de l'anomalie ?",
+            images: [pngBase64],
+          },
+        ],
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const m = (data?.message?.content ?? "").match(/\{[^}]*\}/);
+    if (!m) return null;
+    const o = JSON.parse(m[0]);
+    const f = (v: any) =>
+      typeof v === "number" ? Math.max(0, Math.min(1, v)) : NaN;
+    const box = { x1: f(o.x1), y1: f(o.y1), x2: f(o.x2), y2: f(o.y2) };
+    if (Object.values(box).some(Number.isNaN)) return null;
+    if (box.x2 <= box.x1 || box.y2 <= box.y1) return null;
+    return box;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Dessine un cadre (rectangle) sur une image PNG aux coords fractionnaires. */
+export function drawAnomalyBox(
+  pngBase64: string,
+  box: { x1: number; y1: number; x2: number; y2: number },
+  rgb: [number, number, number] = [255, 80, 80]
+): string {
+  try {
+    const img = PNG.sync.read(Buffer.from(pngBase64, "base64"));
+    const { width: w, height: h, data } = img;
+    const x1 = Math.round(box.x1 * w);
+    const y1 = Math.round(box.y1 * h);
+    const x2 = Math.round(box.x2 * w);
+    const y2 = Math.round(box.y2 * h);
+    const th = Math.max(2, Math.round(Math.min(w, h) / 200));
+    const set = (x: number, y: number) => {
+      if (x < 0 || y < 0 || x >= w || y >= h) return;
+      const i = (y * w + x) * 4;
+      data[i] = rgb[0];
+      data[i + 1] = rgb[1];
+      data[i + 2] = rgb[2];
+      data[i + 3] = 255;
+    };
+    for (let t = 0; t < th; t++) {
+      for (let x = x1; x <= x2; x++) {
+        set(x, y1 + t);
+        set(x, y2 - t);
+      }
+      for (let y = y1; y <= y2; y++) {
+        set(x1 + t, y);
+        set(x2 - t, y);
+      }
+    }
+    return PNG.sync.write(img).toString("base64");
+  } catch {
+    return pngBase64;
+  }
+}
+
 async function generateViaOllama(
   images: string[],
   userText: string,
@@ -538,6 +630,22 @@ export async function runAiPreanalysis(
       if (b64) keyImage = { pngBase64: b64, sliceIndex: keySlice };
     } catch (e) {
       console.warn("[aiPreanalysis] rendu coupe-clé échoué:", e);
+    }
+  }
+
+  // Annotation de l'anomalie : si l'IA a repéré une anomalie, on localise la zone
+  // et on dessine un cadre sur l'image clé (approximatif, à valider). Best-effort.
+  if (keyImage && result.abnormal === true) {
+    try {
+      const box = await locateAnomaly(keyImage.pngBase64);
+      if (box) {
+        keyImage = {
+          pngBase64: drawAnomalyBox(keyImage.pngBase64, box),
+          sliceIndex: keyImage.sliceIndex,
+        };
+      }
+    } catch (e) {
+      console.warn("[aiPreanalysis] annotation anomalie échouée:", e);
     }
   }
 

@@ -154,6 +154,26 @@ describe("generatePreanalysis", () => {
     expect(downscalePngBase64(b64, 1000)).toBe(b64);
   });
 
+  it("drawAnomalyBox dessine un cadre coloré aux bonnes coordonnées", async () => {
+    const { PNG } = await import("pngjs");
+    const { drawAnomalyBox } = await import("./aiPreanalysis");
+    const img = new PNG({ width: 100, height: 100 }); // tout noir transparent
+    const b64 = PNG.sync.write(img).toString("base64");
+    const out = drawAnomalyBox(
+      b64,
+      { x1: 0.2, y1: 0.2, x2: 0.8, y2: 0.8 },
+      [255, 0, 0]
+    );
+    const dec = PNG.sync.read(Buffer.from(out, "base64"));
+    // pixel sur le bord supérieur du cadre (y≈20, x≈50) doit être rouge
+    const i = (20 * 100 + 50) * 4;
+    expect(dec.data[i]).toBeGreaterThan(200); // R
+    expect(dec.data[i + 1]).toBeLessThan(60); // G
+    // centre (50,50) doit rester non rouge (intérieur du cadre, non dessiné)
+    const c = (50 * 100 + 50) * 4;
+    expect(dec.data[c]).toBeLessThan(60);
+  });
+
   it("plafonne à 16 images envoyées au VLM (Ollama/GPU)", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,

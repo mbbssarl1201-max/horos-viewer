@@ -179,6 +179,9 @@ export async function generatePreanalysis(
     // Mesures objectives (segmentation TotalSegmentator) injectées pour ancrer le
     // rapport dans des volumes RÉELS — précision accrue, moins d'invention.
     measurements?: string;
+    // Connaissances de référence (RAG) injectées comme DONNÉES : critères ACR/
+    // TI-RADS/Fleischner, valeurs normales, sémiologie. Récupérées localement.
+    references?: string;
     prior?: {
       images: PreanalysisKeyImage[];
       date?: string;
@@ -269,6 +272,13 @@ export async function generatePreanalysis(
         `- N'invente AUCUNE autre mesure que celles fournies ici.\n` +
         `Mesures :\n${opts.measurements}`
     );
+  }
+  // Références de connaissances (RAG) : injectées comme DONNÉES, après le
+  // contexte de l'étude. buildKnowledgeBlock préfixe déjà « à utiliser SI
+  // PERTINENT ». N'invente rien : ce sont des références, pas le cas du patient.
+  if (opts.references) {
+    ctxLines.push("");
+    ctxLines.push(opts.references);
   }
   const userText = ctxLines.join("\n");
   const base = buildSystemPrompt(opts.modality);
@@ -713,6 +723,36 @@ export async function runAiPreanalysis(
     }
   }
 
+  // RAG : récupère des connaissances de référence radiologiques (critères,
+  // valeurs normales, sémiologie) pertinentes pour CETTE modalité/région, et
+  // les injecte comme DONNÉES dans le prompt. Tout est LOCAL (embeddings Ollama
+  // + base knowledge_chunks) → PHI-safe. Fail-soft : si indispo, rapport sans RAG.
+  let references: string | undefined;
+  try {
+    const query = [
+      (study as any).modality,
+      (study as any).studyDescription,
+      input.indication,
+    ]
+      .filter(Boolean)
+      .join(" — ")
+      .trim();
+    if (query) {
+      const { embedText } = await import("../knowledge/embeddings");
+      const { searchSimilar } = await import("../knowledge/store");
+      const { selectRelevant, buildKnowledgeBlock } = await import(
+        "../knowledge/retrieve"
+      );
+      const sims = await searchSimilar(await embedText(query), 8);
+      const block = buildKnowledgeBlock(
+        selectRelevant(sims, { minScore: 0.5, maxChunks: 4, maxChars: 2500 })
+      );
+      if (block) references = block;
+    }
+  } catch (e) {
+    console.warn("[aiPreanalysis] RAG références indisponible:", e);
+  }
+
   const result = await _internal.generatePreanalysis(images, {
     indication: input.indication,
     antecedents: input.antecedents,
@@ -720,6 +760,7 @@ export async function runAiPreanalysis(
     studyDescription: (study as any).studyDescription ?? undefined,
     totalSlices,
     measurements,
+    references,
     prior,
   });
 

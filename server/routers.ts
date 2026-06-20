@@ -2054,6 +2054,7 @@ export const appRouter = router({
           task: z
             .enum([
               "total",
+              "total_mr",
               "head_glands_cavities",
               "headneck_bones_vessels",
               "brain_structures",

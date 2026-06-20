@@ -263,6 +263,7 @@ export default function ReportPanel({
   // Région à segmenter (corps par défaut ; tête/cou pour scanners de face/crâne).
   const [segTask, setSegTask] = useState<
     | "total"
+    | "total_mr"
     | "head_glands_cavities"
     | "headneck_bones_vessels"
     | "brain_structures"
@@ -737,7 +738,8 @@ export default function ReportPanel({
             className="text-[11px] rounded bg-purple-500/10 text-purple-300 px-1 py-1 border border-purple-500/30"
             title="Région à segmenter (choisis tête/cou pour un scanner de face ou de crâne)"
           >
-            <option value="total">Corps</option>
+            <option value="total">Corps (CT)</option>
+            <option value="total_mr">Corps (IRM)</option>
             <option value="head_glands_cavities">
               Tête : yeux/sinus/glandes
             </option>

@@ -284,9 +284,11 @@ export async function secondOpinionAbnormal(
   images: PreanalysisKeyImage[],
   modality?: string
 ): Promise<boolean | null> {
+  // 8 coupes à 512px : assez pour un avis global, sans saturer le contexte du 2e
+  // modèle (16 grandes images débordaient le num_ctx → sortie incohérente).
   const pics = images
-    .slice(0, 16)
-    .map(k => downscalePngBase64(k.pngBase64, VISION_MAX_DIM));
+    .slice(0, 8)
+    .map(k => downscalePngBase64(k.pngBase64, 512));
   if (pics.length === 0) return null;
   const sys =
     "Tu es un SECOND lecteur en imagerie. On te montre des coupes d'un même examen. " +
@@ -303,7 +305,7 @@ export async function secondOpinionAbnormal(
         model: ENV.ollamaVisionModel2,
         stream: false,
         keep_alive: -1,
-        options: { num_ctx: 8192, num_predict: 24 },
+        options: { num_ctx: 16384, num_predict: 24 },
         messages: [
           { role: "system", content: sys },
           {

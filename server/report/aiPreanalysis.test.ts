@@ -418,3 +418,54 @@ describe("generatePreanalysis", () => {
     expect(pickPriorSeriesId([], "CT")).toBeNull();
   });
 });
+
+describe("buildSystemPrompt (prompt adapté à la modalité)", () => {
+  it("échographie (US) : checklist écho, kystes, JAMAIS de vocabulaire osseux", async () => {
+    const { buildSystemPrompt } = await import("./aiPreanalysis");
+    const p = buildSystemPrompt("US");
+    expect(p).toMatch(/ÉCHOGRAPHIE/);
+    expect(p.toLowerCase()).toMatch(/kyste/);
+    expect(p.toLowerCase()).toMatch(/anéchogène/);
+    expect(p.toLowerCase()).toMatch(/échostructure/);
+    // Le contresens à éliminer : l'avertissement « fenêtre osseuse » du scanner
+    // (signature « os cortical dense ») ne doit PAS apparaître sur une écho.
+    expect(p.toLowerCase()).not.toMatch(/os cortical dense/);
+  });
+
+  it("écho minuscule + espaces : la normalisation reconnaît la modalité", async () => {
+    const { buildSystemPrompt } = await import("./aiPreanalysis");
+    expect(buildSystemPrompt("  us ")).toMatch(/ÉCHOGRAPHIE/);
+  });
+
+  it("scanner (CT) : conserve l'avertissement fenêtre osseuse", async () => {
+    const { buildSystemPrompt } = await import("./aiPreanalysis");
+    const p = buildSystemPrompt("CT");
+    expect(p.toLowerCase()).toMatch(/fenêtre osseuse/);
+    expect(p.toLowerCase()).toMatch(/os cortical/);
+  });
+
+  it("IRM (MR) : signal/séquences, pas de fenêtre osseuse", async () => {
+    const { buildSystemPrompt } = await import("./aiPreanalysis");
+    const p = buildSystemPrompt("MR");
+    expect(p).toMatch(/IRM/);
+    expect(p.toLowerCase()).toMatch(/signal/);
+    expect(p.toLowerCase()).not.toMatch(/os cortical dense/);
+  });
+
+  it("modalité inconnue/vide : bloc générique sans vocabulaire osseux scanner", async () => {
+    const { buildSystemPrompt } = await import("./aiPreanalysis");
+    const p = buildSystemPrompt(undefined);
+    expect(p).toMatch(/non précisée/);
+    expect(p.toLowerCase()).not.toMatch(/os cortical dense/);
+  });
+
+  it("toutes modalités : lecture des curseurs + format de sortie présents", async () => {
+    const { buildSystemPrompt } = await import("./aiPreanalysis");
+    for (const m of ["US", "CT", "MR", "CR", "MG", "FOO", undefined]) {
+      const p = buildSystemPrompt(m);
+      expect(p.toLowerCase()).toMatch(/curseurs/); // lire les mesures incrustées
+      expect(p).toMatch(/Coupe-clé:/);
+      expect(p).toMatch(/Anomalie:/);
+    }
+  });
+});

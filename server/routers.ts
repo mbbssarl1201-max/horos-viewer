@@ -2122,6 +2122,19 @@ export const appRouter = router({
         );
         return getExhaustiveJob(input.jobId);
       }),
+    // Dictée vocale → texte (Whisper sur GPU suisse, PHI-safe). Audio en base64.
+    transcribe: medicalProcedure
+      .input(
+        z.object({
+          audioBase64: z.string().min(1).max(30_000_000),
+          mimeType: z.string().max(100),
+          lang: z.string().max(8).optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { transcribeAudio } = await import("./report/transcribe");
+        return transcribeAudio(input.audioBase64, input.mimeType, input.lang);
+      }),
   }),
   knowledge: router({
     // Ingestion de fichiers .md (coffre Obsidian) → chunks + embeddings locaux + stockage.

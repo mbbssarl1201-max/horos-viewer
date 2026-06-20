@@ -17,6 +17,11 @@ import {
   aiEvaluations,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import {
+  encryptField,
+  encryptDeterministic,
+  decryptField,
+} from "./_core/crypto";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -244,10 +249,15 @@ export async function listStudies(filters?: {
     .leftJoin(patients, eq(studies.patientId, patients.id))
     .orderBy(desc(studies.createdAt));
 
-  if (conditions.length > 0) {
-    return query.where(and(...conditions));
-  }
-  return query;
+  const rows =
+    conditions.length > 0 ? await query.where(and(...conditions)) : await query;
+  // Déchiffrement des identités patient (chiffrées au repos, nLPD).
+  return rows.map(r => ({
+    ...r,
+    patientName: decryptField(r.patientName),
+    patientDicomId: decryptField(r.patientDicomId),
+    birthDate: decryptField(r.birthDate),
+  }));
 }
 
 export async function getStudyById(studyId: number) {
@@ -278,7 +288,14 @@ export async function getStudyById(studyId: number) {
     .leftJoin(patients, eq(studies.patientId, patients.id))
     .where(eq(studies.id, studyId))
     .limit(1);
-  return result[0] || undefined;
+  const row = result[0];
+  if (!row) return undefined;
+  return {
+    ...row,
+    patientName: decryptField(row.patientName),
+    patientId: decryptField(row.patientId),
+    birthDate: decryptField(row.birthDate),
+  };
 }
 
 /**
@@ -343,27 +360,39 @@ export async function findOrCreatePatient(patientData: {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
+  // patientId chiffré DÉTERMINISTE : la dédup par égalité fonctionne toujours
+  // sur l'index, mais la valeur stockée est chiffrée au repos (nLPD).
+  const encPatientId = encryptDeterministic(patientData.patientId)!;
+
+  const decryptRow = (p: typeof patients.$inferSelect) => ({
+    ...p,
+    patientId: decryptField(p.patientId),
+    patientName: decryptField(p.patientName),
+    birthDate: decryptField(p.birthDate),
+    sex: decryptField(p.sex),
+  });
+
   const existing = await db
     .select()
     .from(patients)
-    .where(eq(patients.patientId, patientData.patientId))
+    .where(eq(patients.patientId, encPatientId))
     .limit(1);
 
-  if (existing.length > 0) return existing[0];
+  if (existing.length > 0) return decryptRow(existing[0]);
 
-  const result = await db.insert(patients).values({
-    patientId: patientData.patientId,
-    patientName: patientData.patientName,
-    birthDate: patientData.birthDate || null,
-    sex: patientData.sex || null,
+  await db.insert(patients).values({
+    patientId: encPatientId,
+    patientName: encryptField(patientData.patientName)!,
+    birthDate: encryptField(patientData.birthDate || null),
+    sex: encryptField(patientData.sex || null),
   });
 
   const newPatient = await db
     .select()
     .from(patients)
-    .where(eq(patients.patientId, patientData.patientId))
+    .where(eq(patients.patientId, encPatientId))
     .limit(1);
-  return newPatient[0];
+  return decryptRow(newPatient[0]);
 }
 
 // ============ DICOM IMPORT ============

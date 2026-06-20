@@ -41,10 +41,12 @@ export const patients = mysqlTable(
   "patients",
   {
     id: int("id").autoincrement().primaryKey(),
-    patientId: varchar("patientId", { length: 128 }).notNull(),
-    patientName: varchar("patientName", { length: 256 }).notNull(),
-    birthDate: varchar("birthDate", { length: 10 }),
-    sex: varchar("sex", { length: 2 }),
+    // Longueurs élargies : ces champs sont chiffrés au repos (nLPD) et le
+    // chiffré (base64 de IV+tag+ciphertext) est plus long que le clair.
+    patientId: varchar("patientId", { length: 512 }).notNull(),
+    patientName: varchar("patientName", { length: 1024 }).notNull(),
+    birthDate: varchar("birthDate", { length: 128 }),
+    sex: varchar("sex", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

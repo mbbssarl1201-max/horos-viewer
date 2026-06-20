@@ -53,6 +53,11 @@ import {
   getSmtpStatus,
 } from "./email";
 import { ENV } from "./_core/env";
+import {
+  decryptField,
+  encryptField,
+  encryptDeterministic,
+} from "./_core/crypto";
 import { isAllowedRecipient } from "./_core/emailAllowList";
 import { shouldNotify, PRIORITY_TRIGGERS, STATUS_TRIGGERS } from "./risNotify";
 import { annotationDataSchema } from "./annotationSchema";
@@ -236,6 +241,11 @@ async function buildSeriesExportContext(seriesId: number): Promise<{
     .where(eq(series.id, seriesId))
     .limit(1);
   if (!row) return { ctx: null, error: "Série introuvable" };
+  // Identités patient chiffrées au repos (nLPD) → déchiffrer pour l'usage aval.
+  row.patientName = decryptField(row.patientName);
+  row.patientDicomId = decryptField(row.patientDicomId);
+  row.birthDate = decryptField(row.birthDate);
+  row.sex = decryptField(row.sex);
 
   const seriesInstances = await db
     .select({
@@ -634,9 +644,14 @@ export const appRouter = router({
           if (STUDY_FIELDS.has(field)) {
             (studyUpdate as Record<string, unknown>)[field] = PLACEHOLDER;
           } else if (PATIENT_FIELDS.has(field)) {
-            // birthDate is varchar(10): the placeholder won't fit, so null it.
+            // Identités chiffrées au repos (nLPD) : on chiffre aussi le
+            // remplaçant d'anonymisation (déterministe pour patientId).
             (patientUpdate as Record<string, unknown>)[field] =
-              field === "birthDate" ? null : PLACEHOLDER;
+              field === "birthDate"
+                ? null
+                : field === "patientId"
+                  ? encryptDeterministic(PLACEHOLDER)
+                  : encryptField(PLACEHOLDER);
           }
         }
 

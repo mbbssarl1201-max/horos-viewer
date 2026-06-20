@@ -5,6 +5,9 @@ export const ENV = {
   oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
   ownerOpenId: process.env.OWNER_OPEN_ID ?? "",
   isProduction: process.env.NODE_ENV === "production",
+  // Chiffrement applicatif au repos des identités patient (nLPD). 32 octets en
+  // base64. Vide = fail-open (données en clair) pour migration progressive.
+  encryptionKey: process.env.ENCRYPTION_KEY ?? "",
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   // Self-hosted object storage (S3-compatible, e.g. MinIO). Replaces Forge.

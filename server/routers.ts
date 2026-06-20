@@ -2069,7 +2069,10 @@ export const appRouter = router({
           });
         }
         const { segmentCtSeries } = await import("./report/ctSegmentation");
-        return segmentCtSeries(input.seriesId, { highRes: input.highRes });
+        return segmentCtSeries(input.seriesId, {
+          highRes: input.highRes,
+          overlayCount: 6,
+        });
       }),
   }),
   knowledge: router({

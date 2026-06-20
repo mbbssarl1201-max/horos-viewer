@@ -14,10 +14,15 @@ export interface SegStructure {
   name: string;
   volumeMl: number;
 }
+export interface SegOverlay {
+  sliceIndex: number;
+  pngBase64: string;
+}
 export interface SegResult {
   durationS: number;
   count: number;
   structures: SegStructure[];
+  overlays?: SegOverlay[];
 }
 
 function zipBuffers(files: { name: string; buf: Buffer }[]): Promise<Buffer> {
@@ -34,7 +39,7 @@ function zipBuffers(files: { name: string; buf: Buffer }[]): Promise<Buffer> {
 
 export async function segmentCtSeries(
   seriesId: number,
-  opts?: { highRes?: boolean }
+  opts?: { highRes?: boolean; overlayCount?: number }
 ): Promise<SegResult> {
   if (!ENV.segServiceUrl) {
     throw new Error("Service de segmentation non configuré");
@@ -61,12 +66,16 @@ export async function segmentCtSeries(
 
   // fast=1 (3mm, défaut) rapide ; fast=0 (1.5mm) = haute précision, ~2x plus lent.
   const fastParam = opts?.highRes ? 0 : 1;
-  const resp = await fetch(`${ENV.segServiceUrl}/segment?fast=${fastParam}`, {
-    method: "POST",
-    headers: { "X-Seg-Token": ENV.segToken },
-    body: fd,
-    signal: AbortSignal.timeout(900_000),
-  });
+  const overlay = opts?.overlayCount ?? 0;
+  const resp = await fetch(
+    `${ENV.segServiceUrl}/segment?fast=${fastParam}&overlay=${overlay}`,
+    {
+      method: "POST",
+      headers: { "X-Seg-Token": ENV.segToken },
+      body: fd,
+      signal: AbortSignal.timeout(900_000),
+    }
+  );
   if (!resp.ok) {
     throw new Error(`Service segmentation HTTP ${resp.status}`);
   }

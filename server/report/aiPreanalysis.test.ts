@@ -164,6 +164,51 @@ describe("generatePreanalysis", () => {
     expect(userContent).toMatch(/renforcement postérieur/);
   });
 
+  it("injecte le texte OCR (mesures incrustées) dans le message user", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        message: { content: "Résultats:\nx\nConclusion:\ny" },
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { generatePreanalysis } = await import("./aiPreanalysis");
+    await generatePreanalysis([{ pngBase64: "IMG1", sliceIndex: 0 }], {
+      modality: "US",
+      screenText: "FOIE\nKyste 1: 8.2 cm",
+    });
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    const userContent = body.messages.find(
+      (m: any) => m.role === "user"
+    ).content;
+    expect(userContent).toMatch(/LUS À L'ÉCRAN/);
+    expect(userContent).toMatch(/8\.2 cm/);
+  });
+
+  it("extractBurnedInText : transcrit le texte, « aucun » -> null", async () => {
+    const { extractBurnedInText } = await import("./aiPreanalysis");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ message: { content: "FOIE  Kyste 8.2 cm" } }),
+      }))
+    );
+    expect(
+      await extractBurnedInText([{ pngBase64: "IMG", sliceIndex: 0 }])
+    ).toMatch(/8\.2 cm/);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ message: { content: "aucun" } }),
+      }))
+    );
+    expect(
+      await extractBurnedInText([{ pngBase64: "IMG", sliceIndex: 0 }])
+    ).toBeNull();
+  });
+
   it("downscalePngBase64 réduit une grande image au plus grand côté = maxDim", async () => {
     const { PNG } = await import("pngjs");
     const { downscalePngBase64 } = await import("./aiPreanalysis");

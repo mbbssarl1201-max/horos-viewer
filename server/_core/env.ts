@@ -31,6 +31,8 @@ export const ENV = {
     process.env.OLLAMA_URL ??
     "http://ollama-hermes:11434",
   ollamaVisionModel: process.env.OLLAMA_VISION_MODEL ?? "qwen2.5vl:7b",
+  // 2e modèle vision pour la « double lecture » (avis indépendant anomalie oui/non).
+  ollamaVisionModel2: process.env.OLLAMA_VISION_MODEL2 ?? "qwen2.5vl:3b",
   // Plan de contrôle du GPU vision (sidecar gpu-control) : pilote la mise en
   // veille (shelve) / réveil (unshelve) de l'instance GPU pour ne payer qu'à
   // l'usage. Vide = fonctionnalité désactivée (le GPU est supposé toujours là).

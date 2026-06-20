@@ -2134,6 +2134,27 @@ export const appRouter = router({
         );
         return getExhaustiveJob(input.jobId);
       }),
+    // Suggestion de codes CIM-10 depuis le compte rendu (LLM texte local).
+    // SUGGESTION à valider ; la facturation réelle reste dans MediAdmin.
+    suggestCodes: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          resultats: z.string().max(20000),
+          conclusion: z.string().max(20000),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { getStudyById } = await import("./db");
+        const study = await getStudyById(input.studyId);
+        if (!study)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
+        const { suggestCodes } = await import("./report/suggestCodes");
+        return suggestCodes(input.resultats, input.conclusion);
+      }),
     // Dictée vocale → texte (Whisper sur GPU suisse, PHI-safe). Audio en base64.
     transcribe: medicalProcedure
       .input(

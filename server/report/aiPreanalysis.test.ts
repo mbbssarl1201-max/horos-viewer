@@ -142,6 +142,28 @@ describe("generatePreanalysis", () => {
     expect(userContent).toMatch(/Antécédents/i);
   });
 
+  it("injecte les références RAG (connaissances) dans le message user", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        message: { content: "Résultats:\nx\nConclusion:\ny" },
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { generatePreanalysis } = await import("./aiPreanalysis");
+    await generatePreanalysis([{ pngBase64: "IMG1", sliceIndex: 0 }], {
+      modality: "US",
+      references:
+        "Connaissances de référence (DONNÉES) :\n[radio-ref › kyste] kyste = anéchogène, renforcement postérieur.",
+    });
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    const userContent = body.messages.find(
+      (m: any) => m.role === "user"
+    ).content;
+    expect(userContent).toMatch(/Connaissances de référence/);
+    expect(userContent).toMatch(/renforcement postérieur/);
+  });
+
   it("downscalePngBase64 réduit une grande image au plus grand côté = maxDim", async () => {
     const { PNG } = await import("pngjs");
     const { downscalePngBase64 } = await import("./aiPreanalysis");

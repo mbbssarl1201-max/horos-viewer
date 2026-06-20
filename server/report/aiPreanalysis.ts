@@ -303,7 +303,7 @@ export async function secondOpinionAbnormal(
         model: ENV.ollamaVisionModel2,
         stream: false,
         keep_alive: -1,
-        options: { num_ctx: 8192, num_predict: 8 },
+        options: { num_ctx: 8192, num_predict: 24 },
         messages: [
           { role: "system", content: sys },
           {
@@ -319,8 +319,9 @@ export async function secondOpinionAbnormal(
     if (!resp.ok) return null;
     const data = await resp.json();
     const txt = (data?.message?.content ?? "").toLowerCase();
-    if (/\b(oui|yes)\b/.test(txt)) return true;
-    if (/\b(non|no)\b/.test(txt)) return false;
+    // 1re occurrence de oui/non (tolère un peu de texte autour).
+    const mo = txt.match(/\b(oui|yes|non|no)\b/);
+    if (mo) return mo[1] === "oui" || mo[1] === "yes";
     return null;
   } catch {
     return null;
@@ -721,7 +722,8 @@ export async function runAiPreanalysis(
       secondOpinion = {
         abnormal: ab2,
         model: ENV.ollamaVisionModel2,
-        agree: ab2 === (result.abnormal ?? null),
+        // accord seulement si le 2e modèle a donné un avis NET (non null).
+        agree: ab2 !== null && ab2 === (result.abnormal ?? null),
       };
     } catch (e) {
       console.warn("[aiPreanalysis] 2e lecture échouée:", e);

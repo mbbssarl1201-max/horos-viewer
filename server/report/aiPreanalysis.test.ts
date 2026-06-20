@@ -463,6 +463,8 @@ describe("buildSystemPrompt (prompt adapté à la modalité)", () => {
     const { buildSystemPrompt } = await import("./aiPreanalysis");
     for (const m of ["US", "CT", "MR", "CR", "MG", "FOO", undefined]) {
       const p = buildSystemPrompt(m);
+      expect(p.toLowerCase()).toMatch(/radiologue senior/); // persona expert
+      expect(p.toLowerCase()).toMatch(/systématique/); // démarche systématique
       expect(p.toLowerCase()).toMatch(/curseurs/); // lire les mesures incrustées
       expect(p).toMatch(/Coupe-clé:/);
       expect(p).toMatch(/Anomalie:/);

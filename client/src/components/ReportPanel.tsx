@@ -419,7 +419,7 @@ export default function ReportPanel({
   const field =
     "w-full rounded bg-muted/40 border border-border px-2 py-1 text-sm";
   return (
-    <div className="absolute right-0 top-0 z-30 h-full w-[360px] bg-background border-l border-border p-4 overflow-y-auto space-y-3">
+    <div className="absolute right-0 top-0 z-30 h-full w-full sm:w-[360px] max-w-[100vw] bg-background border-l border-border p-4 overflow-y-auto space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="font-bold text-sm">Compte rendu</h3>
         <button onClick={onClose} className="text-xs text-muted-foreground">

@@ -3049,8 +3049,8 @@ export default function Viewer() {
 
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left Panel - Series Thumbnails */}
-        <div className="w-48 border-r border-border bg-sidebar flex flex-col shrink-0">
+        {/* Left Panel - Series Thumbnails (masqué sur très petit écran) */}
+        <div className="hidden sm:flex w-48 border-r border-border bg-sidebar flex-col shrink-0">
           <div className="p-2 border-b border-border">
             <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
               Series ({seriesList?.length || 0})
@@ -3100,7 +3100,7 @@ export default function Viewer() {
         </div>
 
         {/* Viewport Area */}
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-w-0">
           {/* Viewport */}
           <div
             ref={viewportRef}
@@ -3709,8 +3709,8 @@ export default function Viewer() {
           </div>
         </div>
 
-        {/* Right Panel - Info */}
-        <div className="w-56 border-l border-border bg-sidebar flex flex-col shrink-0">
+        {/* Right Panel - Info (masqué sous lg : métadonnées secondaires) */}
+        <div className="hidden lg:flex w-56 border-l border-border bg-sidebar flex-col shrink-0">
           <div className="p-3 border-b border-border">
             <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
               Study Info

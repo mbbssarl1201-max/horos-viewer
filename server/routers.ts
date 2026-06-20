@@ -1558,6 +1558,8 @@ export const appRouter = router({
           // Mode précis (CT) : ancrer le rapport dans les volumes segmentés.
           includeSegmentation: z.boolean().optional(),
           highResSegmentation: z.boolean().optional(),
+          // Double lecture : avis d'un 2e modèle (détecte les désaccords).
+          doubleRead: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {

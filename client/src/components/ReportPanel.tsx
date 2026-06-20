@@ -318,6 +318,13 @@ export default function ReportPanel({
   const [comparedPriorDate, setComparedPriorDate] = useState<string | null>(
     null
   );
+  // Double lecture (2 modèles) : case + verdict du 2e modèle.
+  const [doubleRead, setDoubleRead] = useState(false);
+  const [secondOpinion, setSecondOpinion] = useState<{
+    abnormal: boolean | null;
+    agree: boolean;
+    model: string;
+  } | null>(null);
 
   const runPreanalysis = async (
     antecedentsArg = antecedents,
@@ -345,8 +352,10 @@ export default function ReportPanel({
       antecedents: antecedentsArg || undefined,
       includeSegmentation: override?.includeSegmentation,
       highResSegmentation: override?.highResSegmentation,
+      doubleRead,
     });
     setAnalyzedSeriesId(sid);
+    setSecondOpinion(res.secondOpinion ?? null);
     // On ne pré-remplit que les champs vides pour ne pas écraser le médecin.
     setSections(s => ({
       indication: s.indication,
@@ -793,7 +802,29 @@ export default function ReportPanel({
             />
             haute précision
           </label>
+          <label
+            className="flex items-center gap-1 text-[10px] text-muted-foreground"
+            title="Double lecture : un 2e modèle donne un avis indépendant ; un désaccord signale une incertitude à vérifier."
+          >
+            <input
+              type="checkbox"
+              checked={doubleRead}
+              onChange={e => setDoubleRead(e.target.checked)}
+            />
+            double lecture
+          </label>
         </div>
+      )}
+      {!isSigned && secondOpinion && (
+        <p
+          className={`text-[11px] ${
+            secondOpinion.agree ? "text-green-500" : "text-amber-500"
+          }`}
+        >
+          {secondOpinion.agree
+            ? "✓ 2e modèle d'accord avec le 1er"
+            : "⚠ Désaccord entre les 2 modèles IA — à vérifier de près"}
+        </p>
       )}
 
       {/* --- Analyse exhaustive (toutes les coupes) ----------------------- */}

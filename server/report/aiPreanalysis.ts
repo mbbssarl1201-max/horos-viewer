@@ -276,6 +276,59 @@ export async function locateAnomaly(
   }
 }
 
+/**
+ * Double lecture : 2e modèle vision (indépendant) qui dit juste si une anomalie
+ * nette est présente (oui/non). Sert à détecter les désaccords (signal d'incertitude).
+ */
+export async function secondOpinionAbnormal(
+  images: PreanalysisKeyImage[],
+  modality?: string
+): Promise<boolean | null> {
+  const pics = images
+    .slice(0, 16)
+    .map(k => downscalePngBase64(k.pngBase64, VISION_MAX_DIM));
+  if (pics.length === 0) return null;
+  const sys =
+    "Tu es un SECOND lecteur en imagerie. On te montre des coupes d'un même examen. " +
+    "Y a-t-il une anomalie NETTE (fracture, lésion, masse, hémorragie, asymétrie franche) ? " +
+    "Réponds par UN SEUL mot : oui ou non.";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: ENV.ollamaVisionModel2,
+        stream: false,
+        keep_alive: -1,
+        options: { num_ctx: 8192, num_predict: 8 },
+        messages: [
+          { role: "system", content: sys },
+          {
+            role: "user",
+            content: modality
+              ? `Modalité : ${modality}. Anomalie ?`
+              : "Anomalie ?",
+            images: pics,
+          },
+        ],
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const txt = (data?.message?.content ?? "").toLowerCase();
+    if (/\b(oui|yes)\b/.test(txt)) return true;
+    if (/\b(non|no)\b/.test(txt)) return false;
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /** Dessine un cadre (rectangle) sur une image PNG aux coords fractionnaires. */
 export function drawAnomalyBox(
   pngBase64: string,
@@ -442,6 +495,8 @@ export interface RunAiPreanalysisInput {
   includeSegmentation?: boolean;
   // Segmentation en pleine résolution (1.5mm) — plus précise, ~2x plus lente.
   highResSegmentation?: boolean;
+  // Double lecture : avis d'un 2e modèle (détecte les désaccords).
+  doubleRead?: boolean;
 }
 
 export interface RunAiPreanalysisResult extends PreanalysisResult {
@@ -450,6 +505,12 @@ export interface RunAiPreanalysisResult extends PreanalysisResult {
   keyImage?: { pngBase64: string; sliceIndex: number } | null;
   // Date (DICOM DA, brute) de l'antériorité réellement comparée, ou null.
   comparedPriorDate?: string | null;
+  // Double lecture : verdict du 2e modèle + accord avec le 1er.
+  secondOpinion?: {
+    abnormal: boolean | null;
+    model: string;
+    agree: boolean;
+  } | null;
 }
 
 export async function runAiPreanalysis(
@@ -649,6 +710,24 @@ export async function runAiPreanalysis(
     }
   }
 
+  // Double lecture : avis d'un 2e modèle (détecte les désaccords = incertitude).
+  let secondOpinion: RunAiPreanalysisResult["secondOpinion"] = null;
+  if (input.doubleRead) {
+    try {
+      const ab2 = await secondOpinionAbnormal(
+        images,
+        (study as any).modality ?? undefined
+      );
+      secondOpinion = {
+        abnormal: ab2,
+        model: ENV.ollamaVisionModel2,
+        agree: ab2 === (result.abnormal ?? null),
+      };
+    } catch (e) {
+      console.warn("[aiPreanalysis] 2e lecture échouée:", e);
+    }
+  }
+
   await recordAccess({
     userId: ctx.user.id,
     action: "study.ai.preanalysis",
@@ -672,7 +751,7 @@ export async function runAiPreanalysis(
     console.warn("[aiPreanalysis] snapshot évaluation échoué:", e);
   }
 
-  return { ...result, keyImage, comparedPriorDate };
+  return { ...result, keyImage, comparedPriorDate, secondOpinion };
 }
 
 // Extrait l'anomalie (oui/non) et le numéro de coupe-clé renvoyés par l'IA.

@@ -198,6 +198,60 @@ export default function ReportPanel({
   const gpuReady = !gpuManaged || gpuState === "ready";
   const gpuBusy = gpuState === "waking" || gpuState === "starting";
 
+  // --- Dictée vocale (Whisper GPU, PHI-safe) -------------------------------
+  const transcribe = trpc.ai.transcribe.useMutation();
+  const [recording, setRecording] = useState(false);
+  const mediaRecRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const u8ToBase64 = (u8: Uint8Array) => {
+    let s = "";
+    const CH = 0x8000;
+    for (let i = 0; i < u8.length; i += CH)
+      s += String.fromCharCode.apply(null, Array.from(u8.subarray(i, i + CH)));
+    return btoa(s);
+  };
+  const toggleDictation = async () => {
+    if (recording) {
+      mediaRecRef.current?.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      chunksRef.current = [];
+      mr.ondataavailable = e => {
+        if (e.data.size) chunksRef.current.push(e.data);
+      };
+      mr.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        setRecording(false);
+        const blob = new Blob(chunksRef.current, {
+          type: mr.mimeType || "audio/webm",
+        });
+        const buf = new Uint8Array(await blob.arrayBuffer());
+        if (buf.length === 0) return;
+        try {
+          const r = await transcribe.mutateAsync({
+            audioBase64: u8ToBase64(buf),
+            mimeType: blob.type,
+          });
+          if (r.text)
+            setSections(s => ({
+              ...s,
+              resultats: s.resultats ? `${s.resultats} ${r.text}` : r.text,
+            }));
+        } catch {
+          /* erreur transcription : silencieux, l'utilisateur réessaie */
+        }
+      };
+      mediaRecRef.current = mr;
+      mr.start();
+      setRecording(true);
+    } catch {
+      /* micro refusé/indispo */
+    }
+  };
+
   // --- Mode validation IA : verdict du médecin + stats d'accord -------------
   const aiEval = trpc.ai.evaluation.useQuery({ studyId });
   const aiEvalStats = trpc.ai.evaluationStats.useQuery();
@@ -523,6 +577,27 @@ export default function ReportPanel({
             </>
           )}
         </div>
+      )}
+
+      {/* --- Dictée vocale (Whisper GPU, ajoute aux Résultats) ----------- */}
+      {!isSigned && (
+        <button
+          type="button"
+          onClick={toggleDictation}
+          disabled={transcribe.isPending}
+          className={`text-[11px] rounded px-2 py-1 disabled:opacity-50 ${
+            recording
+              ? "bg-red-500/20 text-red-400 animate-pulse"
+              : "bg-sky-500/15 text-sky-400"
+          }`}
+          title="Dicter le compte rendu (transcription locale en Suisse). Le texte est ajouté aux Résultats."
+        >
+          {recording
+            ? "⏺ Enregistrement… (cliquer pour arrêter)"
+            : transcribe.isPending
+              ? "Transcription…"
+              : "🎤 Dicter"}
+        </button>
       )}
 
       {/* --- Actions brouillon -------------------------------------------- */}

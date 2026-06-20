@@ -40,6 +40,10 @@ export const ENV = {
   // Vide = fonctionnalité désactivée. PHI-safe : tourne sur le GPU suisse.
   segServiceUrl: process.env.SEG_SERVICE_URL ?? "",
   segToken: process.env.SEG_TOKEN ?? "",
+  // Service de transcription vocale (Whisper) sur le GPU. PHI-safe (Suisse).
+  // Vide = dictée désactivée.
+  whisperUrl: process.env.WHISPER_URL ?? "",
+  whisperToken: process.env.WHISPER_TOKEN ?? "",
   // Modèle de texte Ollama pour le chat Hermès (instruction-following). Présent
   // sur ollama-hermes. PHI-safe (local).
   ollamaTextModel: process.env.OLLAMA_TEXT_MODEL ?? "qwen2.5:3b",

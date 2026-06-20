@@ -691,6 +691,30 @@ export default function ReportPanel({
               </div>
             ))}
           </div>
+          {segmentCt.data.overlays && segmentCt.data.overlays.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-[10px] text-muted-foreground">
+                Organes colorés sur l'image (coupes réparties) :
+              </p>
+              <div className="grid grid-cols-3 gap-1">
+                {segmentCt.data.overlays.map(o => (
+                  <a
+                    key={o.sliceIndex}
+                    href={`data:image/png;base64,${o.pngBase64}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={`Coupe ${o.sliceIndex} — cliquer pour agrandir`}
+                  >
+                    <img
+                      src={`data:image/png;base64,${o.pngBase64}`}
+                      alt={`coupe ${o.sliceIndex}`}
+                      className="w-full rounded border border-purple-500/30"
+                    />
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

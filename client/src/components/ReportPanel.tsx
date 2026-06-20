@@ -818,12 +818,18 @@ export default function ReportPanel({
       {!isSigned && secondOpinion && (
         <p
           className={`text-[11px] ${
-            secondOpinion.agree ? "text-green-500" : "text-amber-500"
+            secondOpinion.abnormal == null
+              ? "text-muted-foreground"
+              : secondOpinion.agree
+                ? "text-green-500"
+                : "text-amber-500"
           }`}
         >
-          {secondOpinion.agree
-            ? "✓ 2e modèle d'accord avec le 1er"
-            : "⚠ Désaccord entre les 2 modèles IA — à vérifier de près"}
+          {secondOpinion.abnormal == null
+            ? "2e modèle : avis non concluant"
+            : secondOpinion.agree
+              ? "✓ 2e modèle d'accord avec le 1er"
+              : "⚠ Désaccord entre les 2 modèles IA — à vérifier de près"}
         </p>
       )}
 

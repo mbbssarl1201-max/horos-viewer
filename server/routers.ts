@@ -2074,6 +2074,54 @@ export const appRouter = router({
           overlayCount: 6,
         });
       }),
+    // Analyse EXHAUSTIVE (toutes les coupes) — tâche de fond longue (~10-15 min).
+    // Retourne un jobId à sonder via exhaustiveStatus. Anti-IDOR (série ∈ étude).
+    startExhaustive: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          seriesId: z.number().int(),
+          windowCenter: z.number().optional(),
+          windowWidth: z.number().optional(),
+          indication: z.string().max(5000).optional(),
+          antecedents: z.string().max(5000).optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { getStudyById, listSeriesByStudy } = await import("./db");
+        const study = await getStudyById(input.studyId);
+        if (!study)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
+        const series = await listSeriesByStudy(input.studyId);
+        if (!series.some((s: any) => s.id === input.seriesId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Série inconnue pour cette étude",
+          });
+        }
+        const { startExhaustiveJob } = await import(
+          "./report/exhaustivePreanalysis"
+        );
+        return startExhaustiveJob({
+          studyId: input.studyId,
+          seriesId: input.seriesId,
+          windowCenter: input.windowCenter ?? 40,
+          windowWidth: input.windowWidth ?? 400,
+          indication: input.indication,
+          antecedents: input.antecedents,
+        });
+      }),
+    exhaustiveStatus: medicalProcedure
+      .input(z.object({ jobId: z.string() }))
+      .query(async ({ input }) => {
+        const { getExhaustiveJob } = await import(
+          "./report/exhaustivePreanalysis"
+        );
+        return getExhaustiveJob(input.jobId);
+      }),
   }),
   knowledge: router({
     // Ingestion de fichiers .md (coffre Obsidian) → chunks + embeddings locaux + stockage.

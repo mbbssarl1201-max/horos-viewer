@@ -206,6 +206,36 @@ export default function ReportPanel({
   const segmentCt = trpc.ai.segmentCt.useMutation();
   // Haute précision (1.5mm) : plus précis, ~2x plus lent. Rapide par défaut.
   const [highResSeg, setHighResSeg] = useState(false);
+  // Analyse exhaustive (toutes les coupes) — tâche de fond longue, sondée.
+  const startExhaustive = trpc.ai.startExhaustive.useMutation();
+  const [exhaustiveJob, setExhaustiveJob] = useState<string | null>(null);
+  const exhaustiveDone = useRef(false);
+  const exhaustiveStatus = trpc.ai.exhaustiveStatus.useQuery(
+    { jobId: exhaustiveJob ?? "" },
+    {
+      enabled: !!exhaustiveJob,
+      refetchInterval: q =>
+        (q.state.data as { status?: string } | undefined)?.status === "running"
+          ? 4000
+          : false,
+    }
+  );
+  useEffect(() => {
+    const d = exhaustiveStatus.data as any;
+    if (d?.status === "done" && d.result && !exhaustiveDone.current) {
+      exhaustiveDone.current = true;
+      const r = d.result;
+      setSections(s => ({
+        indication: s.indication,
+        technique: s.technique || r.technique || "",
+        resultats: s.resultats || r.resultats,
+        conclusion: s.conclusion || r.conclusion,
+      }));
+      setAiAbnormal(r.abnormal ?? null);
+      setAiKeySlice(r.keySliceNumber ?? null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exhaustiveStatus.data]);
   const [missedFinding, setMissedFinding] = useState(false);
   useEffect(() => {
     if (aiEval.data) setMissedFinding(aiEval.data.missedFinding);
@@ -663,6 +693,57 @@ export default function ReportPanel({
             />
             haute précision
           </label>
+        </div>
+      )}
+
+      {/* --- Analyse exhaustive (toutes les coupes) ----------------------- */}
+      {!isSigned && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={async () => {
+              exhaustiveDone.current = false;
+              const r = await startExhaustive.mutateAsync({
+                studyId,
+                seriesId: analyzedSeriesId ?? seriesId,
+                windowCenter,
+                windowWidth,
+                antecedents: antecedents || undefined,
+              });
+              setExhaustiveJob(r.jobId);
+            }}
+            disabled={
+              startExhaustive.isPending ||
+              (gpuManaged && !gpuReady) ||
+              exhaustiveStatus.data?.status === "running"
+            }
+            className="text-[11px] rounded bg-blue-500/15 text-blue-400 px-2 py-1 disabled:opacity-50"
+            title="Balaye TOUTES les coupes du volume (couverture 100 %). Long (~10-15 min). Non certifié, à valider."
+          >
+            Analyse exhaustive (tout le volume)
+          </button>
+          {exhaustiveStatus.data?.status === "running" && (
+            <span className="text-[11px] text-blue-400">
+              Balayage… {exhaustiveStatus.data.progress?.done ?? 0}/
+              {exhaustiveStatus.data.progress?.total ?? "?"} coupes
+            </span>
+          )}
+          {exhaustiveStatus.data?.status === "done" &&
+            exhaustiveStatus.data.result && (
+              <span className="text-[11px] text-green-500">
+                ✓ {exhaustiveStatus.data.result.screenedSlices} coupes analysées
+                · {exhaustiveStatus.data.result.flaggedSlices.length}{" "}
+                suspecte(s)
+                {exhaustiveStatus.data.result.flaggedSlices.length > 0
+                  ? ` (n° ${exhaustiveStatus.data.result.flaggedSlices.slice(0, 10).join(", ")})`
+                  : ""}
+              </span>
+            )}
+          {exhaustiveStatus.data?.status === "error" && (
+            <span className="text-[11px] text-destructive">
+              Analyse exhaustive échouée
+            </span>
+          )}
         </div>
       )}
 

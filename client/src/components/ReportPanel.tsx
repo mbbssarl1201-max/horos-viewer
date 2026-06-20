@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { findBoneSeries, BONE_WINDOW } from "@/lib/boneSeries";
+import { REPORT_TEMPLATES } from "@/lib/reportTemplates";
 
 export interface ReportKeyImage {
   pngBase64: string;
@@ -435,6 +436,32 @@ export default function ReportPanel({
           Fermer
         </button>
       </div>
+
+      {!isSigned && (
+        <select
+          className={field}
+          defaultValue=""
+          title="Insère un modèle structuré (remplit les sections vides). N'écrase pas ton texte."
+          onChange={e => {
+            const t = REPORT_TEMPLATES.find(x => x.id === e.target.value);
+            e.currentTarget.selectedIndex = 0;
+            if (!t) return;
+            setSections(s => ({
+              indication: s.indication,
+              technique: s.technique || t.sections.technique,
+              resultats: s.resultats || t.sections.resultats,
+              conclusion: s.conclusion || t.sections.conclusion,
+            }));
+          }}
+        >
+          <option value="">Modèle de compte rendu…</option>
+          {REPORT_TEMPLATES.map(t => (
+            <option key={t.id} value={t.id}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+      )}
 
       <input
         className={field}

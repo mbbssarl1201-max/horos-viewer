@@ -78,6 +78,39 @@ export const REPORT_TEMPLATES: ReportTemplate[] = [
     },
   },
   {
+    id: "us_abdomen",
+    label: "Échographie abdominale",
+    sections: {
+      technique:
+        "Échographie abdominale par voie sus-costale et sous-costale, patient à jeun.",
+      resultats:
+        "Foie : flèche hépatique [mm], échostructure [homogène / hétérogène], contours réguliers, pas de lésion focale / lésion [décrire].\nVésicule biliaire : paroi [fine < 3 mm], contenu [anéchogène / calcul mobile avec cône d'ombre / sludge].\nVoies biliaires : VBP [mm, < 7 mm], pas de dilatation des voies intra-hépatiques.\nPancréas : [vu / gêné par les gaz digestifs], canal de Wirsung fin, pas de masse.\nRein droit : grand axe [mm], différenciation cortico-médullaire conservée, pas de dilatation, pas de lithiase.\nRein gauche : grand axe [mm], idem.\nRate : grand axe [mm, < 12 cm].\nAorte abdominale : diamètre [mm, < 30 mm].\nÉpanchement intra-péritonéal : absent / présent.",
+      conclusion: "",
+    },
+  },
+  {
+    id: "us_thyroide",
+    label: "Échographie thyroïdienne (EU-TIRADS)",
+    sections: {
+      technique:
+        "Échographie cervicale, sonde haute fréquence, exploration de la thyroïde et des aires ganglionnaires.",
+      resultats:
+        "Lobe droit : dimensions [mm], échostructure.\nLobe gauche : dimensions [mm], échostructure.\nIsthme : épaisseur [mm].\nNodule(s) : localisation, taille (3 axes [mm]), échogénicité, forme (ovale / plus épais que large), contours, calcifications.\nAires ganglionnaires cervicales : ",
+      conclusion:
+        "Classification EU-TIRADS [1 à 5] par nodule.\nConduite à tenir (cytoponction selon la catégorie et la taille) : ",
+    },
+  },
+  {
+    id: "us_renal",
+    label: "Échographie réno-vésicale",
+    sections: {
+      technique: "Échographie de l'appareil urinaire (reins et vessie).",
+      resultats:
+        "Rein droit : grand axe [mm], cortex, différenciation cortico-médullaire, pas de dilatation pyélocalicielle / dilatation [grade], pas de lithiase / lithiase [mm avec cône d'ombre], kyste [Bosniak].\nRein gauche : [idem].\nVessie : réplétion, paroi, contenu, résidu post-mictionnel [mL].",
+      conclusion: "",
+    },
+  },
+  {
     id: "irm_cerebrale",
     label: "IRM cérébrale",
     sections: {

@@ -182,6 +182,9 @@ export async function generatePreanalysis(
     // Connaissances de référence (RAG) injectées comme DONNÉES : critères ACR/
     // TI-RADS/Fleischner, valeurs normales, sémiologie. Récupérées localement.
     references?: string;
+    // Texte/mesures INCRUSTÉS lus par OCR (organe, valeurs cm/mm, curseurs).
+    // Donnée « à vérifier » pour ancrer le rapport dans des valeurs RÉELLES.
+    screenText?: string;
     prior?: {
       images: PreanalysisKeyImage[];
       date?: string;
@@ -271,6 +274,16 @@ export async function generatePreanalysis(
         `- Ne CONTREDIS JAMAIS ces volumes ; signale toute valeur qui te paraît anormale pour l'âge/le contexte.\n` +
         `- N'invente AUCUNE autre mesure que celles fournies ici.\n` +
         `Mesures :\n${opts.measurements}`
+    );
+  }
+  // Texte/mesures lus à l'écran (OCR) : DONNÉES factuelles à utiliser pour
+  // citer les VRAIES valeurs, jamais à réinterpréter ni compléter.
+  if (opts.screenText) {
+    ctxLines.push("");
+    ctxLines.push(
+      "TEXTE ET MESURES LUS À L'ÉCRAN (transcription automatique — À VÉRIFIER, " +
+        "ne pas réinterpréter ni inventer au-delà de ceci) :\n" +
+        opts.screenText
     );
   }
   // Références de connaissances (RAG) : injectées comme DONNÉES, après le
@@ -395,6 +408,66 @@ export async function secondOpinionAbnormal(
     const mo = txt.match(/\b(oui|yes|non|no)\b/);
     if (mo) return mo[1] === "oui" || mo[1] === "yes";
     return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * OCR des repères INCRUSTÉS : transcrit VERBATIM le texte et les chiffres
+ * affichés/gravés sur les images (étiquette d'organe, mesures en cm/mm,
+ * paramètres machine) — surtout utile en échographie où les mesures sont
+ * brûlées dans l'image. Tâche de pure transcription (température 0, « n'invente
+ * RIEN ») → bien plus sûre qu'une déduction. Le résultat est injecté comme
+ * DONNÉE « à vérifier », jamais comme vérité. Best-effort, null si rien.
+ */
+export async function extractBurnedInText(
+  images: PreanalysisKeyImage[]
+): Promise<string | null> {
+  // Quelques frames réparties suffisent (les mesures sont sur les coupes
+  // pertinentes) ; on borne à 6 pour ne pas saturer le contexte ni la latence.
+  const picks: string[] = [];
+  const n = images.length;
+  if (n === 0) return null;
+  const step = Math.max(1, Math.floor(n / 6));
+  for (let i = 0; i < n && picks.length < 6; i += step) {
+    picks.push(downscalePngBase64(images[i].pngBase64, 512));
+  }
+  const sys =
+    "Tu fais de l'OCR sur des images médicales. Transcris EXACTEMENT le texte et " +
+    "les chiffres AFFICHÉS/INCRUSTÉS (étiquette d'organe ex. FOIE, latéralité, " +
+    "mesures en cm/mm, valeurs près des curseurs « + », paramètres machine). " +
+    "RÈGLE ABSOLUE : n'invente RIEN, ne déduis RIEN, ne décris pas l'anatomie. " +
+    "Recopie uniquement ce qui est ÉCRIT. Si rien n'est lisible, réponds exactement « aucun ».";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: ENV.ollamaVisionModel,
+        stream: false,
+        keep_alive: -1,
+        options: { num_ctx: 8192, num_predict: 200, temperature: 0 },
+        messages: [
+          { role: "system", content: sys },
+          {
+            role: "user",
+            content: "Transcris le texte/les mesures affichés.",
+            images: picks,
+          },
+        ],
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const txt = (data?.message?.content ?? "").trim();
+    if (!txt || /^aucun\.?$/i.test(txt)) return null;
+    return txt;
   } catch {
     return null;
   } finally {
@@ -753,6 +826,15 @@ export async function runAiPreanalysis(
     console.warn("[aiPreanalysis] RAG références indisponible:", e);
   }
 
+  // OCR des repères incrustés (organe, mesures, curseurs) → ancre le rapport
+  // dans les VRAIES valeurs affichées. Fail-soft, PHI-safe (vision GPU CH).
+  let screenText: string | undefined;
+  try {
+    screenText = (await extractBurnedInText(images)) ?? undefined;
+  } catch (e) {
+    console.warn("[aiPreanalysis] OCR repères incrustés échoué:", e);
+  }
+
   const result = await _internal.generatePreanalysis(images, {
     indication: input.indication,
     antecedents: input.antecedents,
@@ -761,6 +843,7 @@ export async function runAiPreanalysis(
     totalSlices,
     measurements,
     references,
+    screenText,
     prior,
   });
 

@@ -260,6 +260,13 @@ export default function ReportPanel({
   const segmentCt = trpc.ai.segmentCt.useMutation();
   // Haute précision (1.5mm) : plus précis, ~2x plus lent. Rapide par défaut.
   const [highResSeg, setHighResSeg] = useState(false);
+  // Région à segmenter (corps par défaut ; tête/cou pour scanners de face/crâne).
+  const [segTask, setSegTask] = useState<
+    | "total"
+    | "head_glands_cavities"
+    | "headneck_bones_vessels"
+    | "brain_structures"
+  >("total");
   // Analyse exhaustive (toutes les coupes) — tâche de fond longue, sondée.
   const startExhaustive = trpc.ai.startExhaustive.useMutation();
   const [exhaustiveJob, setExhaustiveJob] = useState<string | null>(null);
@@ -724,6 +731,21 @@ export default function ReportPanel({
           >
             {preanalyze.isPending ? "Analyse en cours…" : "Pré-analyse IA"}
           </button>
+          <select
+            value={segTask}
+            onChange={e => setSegTask(e.target.value as typeof segTask)}
+            className="text-[11px] rounded bg-purple-500/10 text-purple-300 px-1 py-1 border border-purple-500/30"
+            title="Région à segmenter (choisis tête/cou pour un scanner de face ou de crâne)"
+          >
+            <option value="total">Corps</option>
+            <option value="head_glands_cavities">
+              Tête : yeux/sinus/glandes
+            </option>
+            <option value="headneck_bones_vessels">
+              Tête-cou : os/vaisseaux
+            </option>
+            <option value="brain_structures">Cerveau (ventricules)</option>
+          </select>
           <button
             type="button"
             onClick={() =>
@@ -731,6 +753,7 @@ export default function ReportPanel({
                 studyId,
                 seriesId: analyzedSeriesId ?? seriesId,
                 highRes: highResSeg,
+                task: segTask,
               })
             }
             disabled={segmentCt.isPending || (gpuManaged && !gpuReady)}

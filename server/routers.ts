@@ -2051,6 +2051,14 @@ export const appRouter = router({
           studyId: z.number().int(),
           seriesId: z.number().int(),
           highRes: z.boolean().optional(),
+          task: z
+            .enum([
+              "total",
+              "head_glands_cavities",
+              "headneck_bones_vessels",
+              "brain_structures",
+            ])
+            .optional(),
         })
       )
       .mutation(async ({ input }) => {
@@ -2072,6 +2080,7 @@ export const appRouter = router({
         return segmentCtSeries(input.seriesId, {
           highRes: input.highRes,
           overlayCount: 6,
+          task: input.task,
         });
       }),
     // Analyse EXHAUSTIVE (toutes les coupes) — tâche de fond longue (~10-15 min).

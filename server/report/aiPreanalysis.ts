@@ -783,7 +783,11 @@ async function generateViaOllama(
         // GPU dédié : on garde le modèle chargé en VRAM (évite le warm-up ~67 s
         // au premier compte rendu). -1 = pas de déchargement.
         keep_alive: -1,
-        options: { num_ctx: numCtx, num_predict: 512 },
+        // 512 tokens tronquaient les CR multi-séries (Conclusion/Anomalie/
+        // Coupe-clé coupées en fin de sortie → parsing incomplet, brouillon
+        // amputé). 1024 couvre un CR structuré complet ; le GPU L4 l'encaisse
+        // sans surcoût de latence notable.
+        options: { num_ctx: numCtx, num_predict: 1024 },
         messages: [
           { role: "system", content: system },
           {
@@ -1363,7 +1367,29 @@ export function parseKeySlice(text: string): {
   abnormal: boolean | null;
   keySliceNumber: number | null;
 } {
-  const abn = text.match(/Anomalie\s*:?\s*(oui|non|yes|no)/i);
+  // Capture la VALEUR qui suit l'étiquette de section "Anomalie:" — l'étiquette
+  // DOIT être en début de ligne, avec deux-points, et suivie d'un mot complet
+  // (\b) pour NE PAS matcher "anomalie(s)" employé dans une phrase (ex.
+  // "sans anomalies visibles" en Conclusion, qui inverserait le verdict !).
+  // Le modèle local répond rarement par un strict "oui/non" : il écrit
+  // "présente", "oui, kyste de 3 cm", "non visible", "absence d'anomalie"…
+  // On lit donc oui/non explicite (prioritaire), puis un vocabulaire
+  // positif/négatif. Une fausse réassurance étant le pire risque, en cas de
+  // doute (formulation positive trouvée) on conclut abnormal=true.
+  const line = text.match(/(?:^|\n)\s*Anomalie\b\s*:\s*([^\n]*)/i);
+  let abnormal: boolean | null = null;
+  if (line) {
+    const v = line[1].toLowerCase();
+    // Négations explicites d'abord ("non", "aucune", "absence de", "pas d'").
+    const neg =
+      /\b(non|no)\b|aucune?\b|absence\b|\bpas d|sans anomalie|\bnormal/.test(v);
+    const pos =
+      /\b(oui|yes)\b|pr[ée]sen(t|te|ce)|anormal|l[ée]sion|\bvisible/.test(v);
+    // "non" l'emporte si présent (le modèle écrit parfois "non, RAS visible").
+    if (neg) abnormal = false;
+    else if (pos) abnormal = true;
+    // ni l'un ni l'autre → null (on ne devine pas).
+  }
   // Robuste aux formats du modèle : "Coupe-clé: 47", "Coupe-clé : coupe n° 47",
   // ou le numéro sur la ligne SUIVANTE. On prend le 1er entier dans les ~80
   // caractères qui suivent l'étiquette (newlines incluses) ; "aucune" → null.
@@ -1373,10 +1399,7 @@ export function parseKeySlice(text: string): {
     const num = after.slice(0, 80).match(/\d+/);
     if (num) keySliceNumber = parseInt(num[0], 10);
   }
-  return {
-    abnormal: abn ? /oui|yes/i.test(abn[1]) : null,
-    keySliceNumber,
-  };
+  return { abnormal, keySliceNumber };
 }
 
 // Extrait le verdict d'évolution comparative (ligne « Évolution: stable |
@@ -1462,9 +1485,23 @@ export function parseSections(text: string): {
     /\n\s*(Anomalie|Coupe[-\s]?cl[ée]|[EÉeé]volution)\s*:/i
   );
   if (cut >= 0) text = text.slice(0, cut);
+  // Étiquettes de section TOLÉRANTES : un modèle local (qwen 7b) ne respecte
+  // pas toujours l'accent ni le pluriel ("Resultats", "Résultat",
+  // "Constatations", "RÉSULTATS"). On accepte ces variantes pour ne JAMAIS
+  // perdre silencieusement la Conclusion (sinon le médecin reçoit un brouillon
+  // amputé). Les classes [eé]/[ée] couvrent les formes sans accent.
+  // Technique : "Technique"
+  const T = "Technique";
+  // Résultats : "Résultats"/"Resultats"/"Résultat"/"Constatations"/"Constatation"
+  const R = "(?:R[ée]sultats?|Constatations?)";
+  // Conclusion : "Conclusion"/"Conclusions"
+  const C = "Conclusions?";
   // Format attendu : Technique / Résultats / Conclusion.
   const m3 = text.match(
-    /Technique\s*:?\s*([\s\S]*?)\n\s*Résultats\s*:?\s*([\s\S]*?)\n\s*Conclusion\s*:?\s*([\s\S]*)$/i
+    new RegExp(
+      `${T}\\s*:?\\s*([\\s\\S]*?)\\n\\s*${R}\\s*:?\\s*([\\s\\S]*?)\\n\\s*${C}\\s*:?\\s*([\\s\\S]*)$`,
+      "i"
+    )
   );
   if (m3)
     return {
@@ -1474,7 +1511,10 @@ export function parseSections(text: string): {
     };
   // Repli : ancien format à 2 sections (Résultats / Conclusion), technique vide.
   const m2 = text.match(
-    /Résultats\s*:?\s*([\s\S]*?)\n\s*Conclusion\s*:?\s*([\s\S]*)$/i
+    new RegExp(
+      `${R}\\s*:?\\s*([\\s\\S]*?)\\n\\s*${C}\\s*:?\\s*([\\s\\S]*)$`,
+      "i"
+    )
   );
   if (m2)
     return { technique: "", resultats: m2[1].trim(), conclusion: m2[2].trim() };

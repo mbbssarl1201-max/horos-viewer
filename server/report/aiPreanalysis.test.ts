@@ -569,4 +569,73 @@ describe("buildSystemPrompt (prompt adapté à la modalité)", () => {
       expect(p).toMatch(/Anomalie:/);
     }
   });
+
+  // --- Non-régression : robustesse du parsing aux variantes du modèle local ---
+  it("parseSections : tolère 'Resultats' sans accent + 'Conclusion' (modèle local)", async () => {
+    const { parseSections } = await import("./aiPreanalysis");
+    const r = parseSections(
+      "Technique:\nScanner.\n\nResultats:\nFoie normal.\n\nConclusion:\nRAS."
+    );
+    expect(r.technique).toBe("Scanner.");
+    expect(r.resultats).toBe("Foie normal.");
+    expect(r.conclusion).toBe("RAS.");
+  });
+
+  it("parseSections : tolère 'Résultat' singulier et 'Constatations' (synonyme)", async () => {
+    const { parseSections } = await import("./aiPreanalysis");
+    const a = parseSections("Constatations:\nx\nConclusion:\ny");
+    expect(a.resultats).toBe("x");
+    expect(a.conclusion).toBe("y");
+    const b = parseSections("Résultat:\nx\nConclusions:\ny");
+    expect(b.resultats).toBe("x");
+    expect(b.conclusion).toBe("y");
+  });
+
+  it("parseSections : la Conclusion n'est PAS perdue (pas de repli ultime) sur variante", async () => {
+    const { parseSections } = await import("./aiPreanalysis");
+    // Sans la correction, "Resultats" sans accent tombait dans le repli ultime
+    // → conclusion vide (fausse réassurance silencieuse côté médecin).
+    const r = parseSections("Resultats:\nNodule.\nConclusion:\nA confirmer.");
+    expect(r.conclusion).toBe("A confirmer.");
+    expect(r.conclusion).not.toBe("");
+  });
+
+  it("parseKeySlice : 'Anomalie: oui' / 'non' (cas de base)", async () => {
+    const { parseKeySlice } = await import("./aiPreanalysis");
+    expect(parseKeySlice("Anomalie: oui\nCoupe-clé: 12").abnormal).toBe(true);
+    expect(parseKeySlice("Anomalie: non\nCoupe-clé: 12").abnormal).toBe(false);
+    expect(parseKeySlice("Coupe-clé: 12").abnormal).toBe(null);
+  });
+
+  it("parseKeySlice : formulations libres (présente/absence) lues correctement", async () => {
+    const { parseKeySlice } = await import("./aiPreanalysis");
+    expect(parseKeySlice("Anomalie: présente (kyste)").abnormal).toBe(true);
+    expect(parseKeySlice("Anomalie : présence d'un nodule").abnormal).toBe(
+      true
+    );
+    expect(parseKeySlice("Anomalie: absence d'anomalie").abnormal).toBe(false);
+    expect(parseKeySlice("Anomalie: aucune").abnormal).toBe(false);
+  });
+
+  it("parseKeySlice : extrait le numéro de coupe-clé malgré du texte", async () => {
+    const { parseKeySlice } = await import("./aiPreanalysis");
+    expect(parseKeySlice("Coupe-clé : coupe n° 47").keySliceNumber).toBe(47);
+    expect(parseKeySlice("Anomalie: oui\nCoupe-clé:\n23").keySliceNumber).toBe(
+      23
+    );
+  });
+
+  it("parseKeySlice : NE confond PAS 'anomalies' (en phrase) avec l'étiquette 'Anomalie:' (anti fausse réassurance)", async () => {
+    const { parseKeySlice } = await import("./aiPreanalysis");
+    // Sortie réelle observée sur qwen2.5vl:7b : le mot "anomalies" apparaît dans
+    // la Conclusion AVANT la vraie ligne d'étiquette. L'ancien regex matchait
+    // "anomalies visibles" → abnormal=true à tort sur un examen NORMAL.
+    const real =
+      "Conclusion: Cette image semble être normale, sans anomalies visibles.\n\nAnomalie: non\n\nCoupe-clé: 1";
+    expect(parseKeySlice(real).abnormal).toBe(false);
+    // Inverse : une vraie anomalie reste détectée même si "normal" est mentionné ailleurs.
+    const ab =
+      "Conclusion: Parenchyme normal par ailleurs.\n\nAnomalie: oui\n\nCoupe-clé: 8";
+    expect(parseKeySlice(ab).abnormal).toBe(true);
+  });
 });

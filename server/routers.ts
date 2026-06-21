@@ -1790,14 +1790,19 @@ export const appRouter = router({
           wholeStudy: z.boolean().optional(),
           // Analyse approfondie : beaucoup plus de coupes (cas douteux).
           deepAnalysis: z.boolean().optional(),
+          // Double lecture (2e modèle) — activée par défaut côté UI simplifiée.
+          doubleRead: z.boolean().optional(),
+          // Comparaison auto avec TOUTES les antériorités du patient.
+          compareAllPriors: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
         // Antériorité explicite (mode comparatif du viewer) sinon la plus
         // récente du même patient (helper DB existant). Fail-soft : aucune
-        // antériorité → génération simple inchangée.
+        // antériorité → génération simple inchangée. En mode compareAllPriors,
+        // on NE fixe PAS une antériorité unique (runAiPreanalysis les gère toutes).
         let priorStudyId = input.priorStudyId;
-        if (!priorStudyId) {
+        if (!priorStudyId && !input.compareAllPriors) {
           const { listPriorStudiesForStudy } = await import("./db");
           const priors = await listPriorStudiesForStudy(input.studyId);
           priorStudyId = priors[0]?.id;
@@ -1815,6 +1820,8 @@ export const appRouter = router({
             priorSeriesId: input.priorSeriesId,
             wholeStudy: input.wholeStudy,
             deepAnalysis: input.deepAnalysis,
+            doubleRead: input.doubleRead,
+            compareAllPriors: input.compareAllPriors,
           },
           { user: { id: ctx.user.id }, req: { ip: ctx.req?.ip } }
         );

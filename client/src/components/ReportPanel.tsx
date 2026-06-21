@@ -197,6 +197,15 @@ export default function ReportPanel({
   const gpuState = gpuStatusQ.data?.state ?? "unknown";
   const gpuManaged = gpuState !== "unknown";
   const gpuReady = !gpuManaged || gpuState === "ready";
+
+  // --- IA CERTIFIÉE (dispositifs médicaux CE/FDA tiers) --------------------
+  // Inventaire des moteurs branchables (pour informer le médecin de ce qui est
+  // actif) + lancement d'une analyse certifiée. Tant qu'aucun contrat/clé n'est
+  // fourni, l'analyse renvoie « indisponible » et on reste sur l'aide interne.
+  const certifiedInventory = trpc.ai.certifiedAiInventory.useQuery();
+  const certifiedAnalysis = trpc.ai.certifiedAnalysis.useMutation();
+  const certifiedConfigured =
+    certifiedInventory.data?.some(p => p.configured && p.phiConsent) ?? false;
   const gpuBusy = gpuState === "waking" || gpuState === "starting";
 
   // --- Dictée vocale (Whisper GPU, PHI-safe) -------------------------------
@@ -944,6 +953,85 @@ export default function ReportPanel({
               : "✓ 2e modèle d'accord avec le 1er"}
           </p>
         )
+      )}
+
+      {/* --- IA CERTIFIÉE (dispositifs médicaux CE/FDA) -------------------- */}
+      {!isSigned && (
+        <div className="rounded-md border border-border/60 p-2 space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-medium">
+              IA certifiée (dispositif médical)
+            </span>
+            <span
+              className={`text-[10px] ${
+                certifiedConfigured ? "text-green-500" : "text-muted-foreground"
+              }`}
+            >
+              {certifiedConfigured ? "● branchée" : "○ non branchée"}
+            </span>
+          </div>
+          {certifiedConfigured ? (
+            <button
+              type="button"
+              disabled={certifiedAnalysis.isPending}
+              onClick={() =>
+                certifiedAnalysis.mutate({
+                  studyId,
+                  seriesId: analyzedSeriesId ?? seriesId,
+                })
+              }
+              className="text-[11px] rounded bg-emerald-500/15 text-emerald-400 px-2 py-1 disabled:opacity-50"
+            >
+              {certifiedAnalysis.isPending
+                ? "Analyse certifiée…"
+                : "Lancer l'analyse certifiée"}
+            </button>
+          ) : (
+            <p className="text-[10px] text-muted-foreground">
+              Aucun moteur certifié branché. Le compte rendu IA ci-dessus est une
+              aide NON certifiée, à valider et signer par le médecin. Moteurs
+              intégrables :{" "}
+              {(certifiedInventory.data ?? [])
+                .map(p => p.name)
+                .join(", ") || "—"}
+              .
+            </p>
+          )}
+          {certifiedAnalysis.data?.available === false && (
+            <p className="text-[10px] text-amber-500">
+              Aucun moteur certifié disponible pour cette modalité (
+              {certifiedAnalysis.data.modality}).
+            </p>
+          )}
+          {certifiedAnalysis.data?.available === true && (
+            <div className="text-[11px] space-y-1">
+              <p className="font-medium text-emerald-400">
+                {certifiedAnalysis.data.result.provider} —{" "}
+                {certifiedAnalysis.data.result.regulatory}
+              </p>
+              {certifiedAnalysis.data.result.findings.length === 0 ? (
+                <p className="text-muted-foreground">
+                  Aucune anomalie signalée par le moteur certifié.
+                </p>
+              ) : (
+                <ul className="list-disc pl-4 space-y-0.5">
+                  {certifiedAnalysis.data.result.findings.map((f, i) => (
+                    <li key={i}>
+                      {f.category ? <b>[{f.category}] </b> : null}
+                      {f.label}
+                      {f.confidence != null
+                        ? ` (${Math.round(f.confidence * 100)}%)`
+                        : ""}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-[9px] text-muted-foreground italic">
+                {certifiedAnalysis.data.result.disclaimer}
+              </p>
+            </div>
+          )}
+        </div>
       )}
 
       {/* --- Analyse exhaustive (toutes les coupes) ----------------------- */}

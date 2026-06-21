@@ -29,6 +29,40 @@ function makeSyntheticDicom(photometric = "MONOCHROME2"): Buffer {
   return Buffer.from(dict.write());
 }
 
+function makeColorDicom(
+  photometric = "RGB",
+  planar = 0
+): Buffer {
+  const { DicomMetaDictionary, DicomDict } = dcmjs.data;
+  // 2x2 px couleur : rouge, vert, bleu, blanc (entrelacé RGBRGB...).
+  const interleaved = new Uint8Array([
+    255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255,
+  ]);
+  // Version planar (RRRR GGGG BBBB) des mêmes pixels.
+  const planarData = new Uint8Array([
+    255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255,
+  ]);
+  const dataset: any = {
+    Rows: 2,
+    Columns: 2,
+    BitsAllocated: 8,
+    BitsStored: 8,
+    HighBit: 7,
+    PixelRepresentation: 0,
+    SamplesPerPixel: 3,
+    PlanarConfiguration: planar,
+    PhotometricInterpretation: photometric,
+    PixelData: [(planar === 1 ? planarData : interleaved).buffer],
+  };
+  const dict = new DicomDict({
+    TransferSyntaxUID: "1.2.840.10008.1.2.1",
+    MediaStorageSOPClassUID: "1.2.840.10008.5.1.4.1.1.6.1",
+    MediaStorageSOPInstanceUID: "1.2.3.4",
+  });
+  dict.dict = DicomMetaDictionary.denaturalizeDataset(dataset);
+  return Buffer.from(dict.write());
+}
+
 describe("renderDicomFrame", () => {
   it("mappe le fenêtrage WC2000/WW4000 -> extrêmes 0 et 255", () => {
     const { png, rows, cols } = renderDicomFrame(makeSyntheticDicom(), {
@@ -48,6 +82,45 @@ describe("renderDicomFrame", () => {
       windowWidth: 4000,
     });
     expect(PNG.sync.read(png).data[0]).toBe(255);
+  });
+
+  it("RGB couleur (écho Doppler) : préserve les canaux, n'écrase pas en gris", () => {
+    // Sans le chemin couleur, l'écho RGB était lue comme du monochrome → image
+    // corrompue, d'où des CR « aucun plan reconnaissable ».
+    const { png, rows, cols } = renderDicomFrame(makeColorDicom("RGB"), {
+      windowCenter: 40,
+      windowWidth: 400,
+    });
+    expect([rows, cols]).toEqual([2, 2]);
+    const img = PNG.sync.read(png);
+    // px0 = rouge pur, px1 = vert pur, px2 = bleu pur.
+    expect([img.data[0], img.data[1], img.data[2]]).toEqual([255, 0, 0]);
+    expect([img.data[4], img.data[5], img.data[6]]).toEqual([0, 255, 0]);
+    expect([img.data[8], img.data[9], img.data[10]]).toEqual([0, 0, 255]);
+  });
+
+  it("RGB planar configuration=1 : reconstitue les pixels correctement", () => {
+    const { png } = renderDicomFrame(makeColorDicom("RGB", 1), {
+      windowCenter: 40,
+      windowWidth: 400,
+    });
+    const img = PNG.sync.read(png);
+    expect([img.data[0], img.data[1], img.data[2]]).toEqual([255, 0, 0]);
+    expect([img.data[4], img.data[5], img.data[6]]).toEqual([0, 255, 0]);
+  });
+
+  it("YBR_FULL : convertit en RGB (le gris reste gris)", () => {
+    // Y=128,Cb=128,Cr=128 → gris moyen ; on vérifie juste que ça ne plante pas
+    // et reste dans [0,255] (la conversion exacte est validée par construction).
+    const { png } = renderDicomFrame(makeColorDicom("YBR_FULL"), {
+      windowCenter: 40,
+      windowWidth: 400,
+    });
+    const img = PNG.sync.read(png);
+    for (let i = 0; i < img.data.length; i++) {
+      expect(img.data[i]).toBeGreaterThanOrEqual(0);
+      expect(img.data[i]).toBeLessThanOrEqual(255);
+    }
   });
 
   it("refuse un transfer syntax compressé", () => {

@@ -915,21 +915,35 @@ export default function ReportPanel({
         </div>
       )}
       {!isSigned && secondOpinion && (
-        <p
-          className={`text-[11px] ${
-            secondOpinion.abnormal == null
-              ? "text-muted-foreground"
-              : secondOpinion.agree
-                ? "text-green-500"
-                : "text-amber-500"
-          }`}
-        >
-          {secondOpinion.abnormal == null
-            ? "2e modèle : avis non concluant"
-            : secondOpinion.agree
-              ? "✓ 2e modèle d'accord avec le 1er"
-              : "⚠ Désaccord entre les 2 modèles IA — à vérifier de près"}
-        </p>
+        secondOpinion.abnormal != null && !secondOpinion.agree ? (
+          // DÉSACCORD entre les 2 modèles = signal d'incertitude le plus
+          // important : on le rend SAILLANT (bandeau encadré) pour qu'il ne
+          // passe pas inaperçu, contrairement à l'accord/non-concluant discrets.
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-md border border-amber-500/60 bg-amber-500/10 px-2.5 py-2 text-[12px] font-medium text-amber-600 dark:text-amber-400"
+          >
+            <span aria-hidden className="mt-px text-base leading-none">
+              ⚠
+            </span>
+            <span>
+              Désaccord entre les 2 modèles IA sur la présence d'une anomalie —
+              relire les images attentivement avant de conclure.
+            </span>
+          </div>
+        ) : (
+          <p
+            className={`text-[11px] ${
+              secondOpinion.abnormal == null
+                ? "text-muted-foreground"
+                : "text-green-500"
+            }`}
+          >
+            {secondOpinion.abnormal == null
+              ? "2e modèle : avis non concluant"
+              : "✓ 2e modèle d'accord avec le 1er"}
+          </p>
+        )
       )}
 
       {/* --- Analyse exhaustive (toutes les coupes) ----------------------- */}

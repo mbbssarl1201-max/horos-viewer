@@ -1788,6 +1788,8 @@ export const appRouter = router({
           priorSeriesId: z.number().int().optional(),
           // Analyser TOUTES les séries du dossier (pas seulement la série vue).
           wholeStudy: z.boolean().optional(),
+          // Analyse approfondie : beaucoup plus de coupes (cas douteux).
+          deepAnalysis: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -1812,6 +1814,7 @@ export const appRouter = router({
             priorStudyId,
             priorSeriesId: input.priorSeriesId,
             wholeStudy: input.wholeStudy,
+            deepAnalysis: input.deepAnalysis,
           },
           { user: { id: ctx.user.id }, req: { ip: ctx.req?.ip } }
         );

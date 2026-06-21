@@ -694,6 +694,48 @@ export default function ReportPanel({
           <Button
             size="sm"
             variant="outline"
+            title="Analyse approfondie : beaucoup plus de coupes (plus lent, cas douteux)"
+            disabled={aiGenerate.isPending || (gpuManaged && !gpuReady)}
+            onClick={async () => {
+              const r = await aiGenerate.mutateAsync({
+                studyId,
+                seriesId: analyzedSeriesId ?? seriesId,
+                indication: sections.indication || undefined,
+                antecedents: antecedents || undefined,
+                keyImages: keyImages.map(k => ({
+                  pngBase64: k.pngBase64,
+                  sliceIndex: k.sliceIndex,
+                })),
+                priorStudyId: comparePriorStudyId ?? undefined,
+                priorSeriesId: comparePriorSeriesId ?? undefined,
+                wholeStudy: comparePriorStudyId == null,
+                deepAnalysis: true,
+              });
+              setSections(s => ({
+                indication: s.indication || r.sections.indication,
+                technique: s.technique || r.sections.technique,
+                resultats: s.resultats || r.sections.resultats,
+                conclusion: s.conclusion || r.sections.conclusion,
+              }));
+              setEvolution(r.evolution ?? null);
+              setComparedPriorDate(r.comparedPriorDate ?? null);
+              if (
+                r.keyImage &&
+                onAddKeyImage &&
+                !keyImages.some(k => k.sliceIndex === r.keyImage!.sliceIndex)
+              ) {
+                onAddKeyImage({
+                  pngBase64: r.keyImage.pngBase64,
+                  sliceIndex: r.keyImage.sliceIndex,
+                });
+              }
+            }}
+          >
+            {aiGenerate.isPending ? "Analyse…" : "Analyse approfondie"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             disabled={upsertDraft.isPending}
             onClick={async () => {
               await upsertDraft.mutateAsync({

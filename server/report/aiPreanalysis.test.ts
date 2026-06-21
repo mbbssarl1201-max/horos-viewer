@@ -638,4 +638,35 @@ describe("buildSystemPrompt (prompt adapté à la modalité)", () => {
       "Conclusion: Parenchyme normal par ailleurs.\n\nAnomalie: oui\n\nCoupe-clé: 8";
     expect(parseKeySlice(ab).abnormal).toBe(true);
   });
+
+  // --- Filtrage des séries non diagnostiques (scanogramme/SUMMARY/dose) ------
+  it("isDiagnosticSeries : exclut scano/localizer/SUMMARY/dose report, garde les coupes", async () => {
+    const { isDiagnosticSeries } = await import("./aiPreanalysis");
+    expect(isDiagnosticSeries({ seriesDescription: "Scano   Scano   2.0 FL03", modality: "CT" })).toBe(false);
+    expect(isDiagnosticSeries({ seriesDescription: "Topogramme", modality: "CT" })).toBe(false);
+    expect(isDiagnosticSeries({ seriesDescription: "Localizer", modality: "CT" })).toBe(false);
+    expect(isDiagnosticSeries({ seriesDescription: "SUMMARY  Natif 4", modality: "CT" })).toBe(false);
+    expect(isDiagnosticSeries({ seriesDescription: "Dose Report", modality: "SR" })).toBe(false);
+    expect(isDiagnosticSeries({ seriesDescription: "OS Dur Vol.   0.5 FC30", modality: "CT" })).toBe(true);
+    expect(isDiagnosticSeries({ seriesDescription: "Tissu Mou Standard Vol.", modality: "CT" })).toBe(true);
+  });
+
+  it("selectDiagnosticSeries : filtre l'étude 64 (scano+summary retirés), repli si tout exclu", async () => {
+    const { selectDiagnosticSeries } = await import("./aiPreanalysis");
+    const study64 = [
+      { id: 185, seriesDescription: "Scano   Scano   2.0 FL03", modality: "CT", numberOfInstances: 2 },
+      { id: 188, seriesDescription: "OS Dur Vol.   0.5 FC30", modality: "CT", numberOfInstances: 567 },
+      { id: 189, seriesDescription: "Tissu Mou Standard Vol.", modality: "CT", numberOfInstances: 567 },
+      { id: 190, seriesDescription: "Abdo Std. Volume Vol.  Natif", modality: "CT", numberOfInstances: 496 },
+      { id: 187, seriesDescription: "SUMMARY  Natif 4", modality: "CT", numberOfInstances: 2 },
+    ];
+    const kept = selectDiagnosticSeries(study64);
+    expect(kept.map(s => s.id).sort()).toEqual([188, 189, 190]);
+    // Repli : si TOUT est technique, on garde la liste d'origine (jamais zéro).
+    const allTech = [
+      { id: 1, seriesDescription: "Scano", modality: "CT", numberOfInstances: 2 },
+      { id: 2, seriesDescription: "Dose Report", modality: "SR", numberOfInstances: 1 },
+    ];
+    expect(selectDiagnosticSeries(allTech)).toHaveLength(2);
+  });
 });

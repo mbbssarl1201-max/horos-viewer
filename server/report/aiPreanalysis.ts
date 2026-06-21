@@ -308,8 +308,12 @@ export async function generatePreanalysis(
   // Budget d'images adapté au modèle : Claude (grand contexte, cloud) encaisse
   // PLUS de coupes en PLEINE résolution → meilleure lecture de l'examen. Le
   // modèle local (GPU L4) reste à 16/768 px pour ne pas le saturer.
-  const maxImages = opts.maxImages ?? (useClaude ? 24 : 16);
-  const visionDim = useClaude ? 1024 : VISION_MAX_DIM;
+  const maxImages = opts.maxImages ?? (useClaude ? 32 : 16);
+  // Résolution d'envoi : Claude lit mieux les PETITS signes (microcalcifications,
+  // trait de fracture fin, micronodule) en haute déf. 1568 px = côté optimal
+  // recommandé par Anthropic (au-delà l'image est redimensionnée côté serveur
+  // sans gain). Le modèle local reste à VISION_MAX_DIM (768) — au-delà il sature.
+  const visionDim = useClaude ? 1568 : VISION_MAX_DIM;
   const perStudy = comparing
     ? Math.max(1, Math.floor(maxImages / 2))
     : maxImages;
@@ -469,10 +473,10 @@ export async function secondOpinionAbnormal(
   modality?: string,
   cloud = false
 ): Promise<boolean | null> {
-  // Cloud Opus : 8 coupes en 1024px (lit les petits signes) ; local : 512px.
+  // Cloud Opus : 8 coupes en 1568px (lit les petits signes) ; local : 512px.
   const pics = images
     .slice(0, 8)
-    .map(k => downscalePngBase64(k.pngBase64, cloud ? 1024 : 512));
+    .map(k => downscalePngBase64(k.pngBase64, cloud ? 1568 : 512));
   if (pics.length === 0) return null;
   const sys =
     "Tu es un SECOND lecteur en imagerie. On te montre des images d'un même examen. " +
@@ -513,12 +517,12 @@ export async function extractBurnedInText(
 ): Promise<string | null> {
   const n = images.length;
   if (n === 0) return null;
-  // PLEINE résolution (1024) — un curseur fin « + » et un petit chiffre sont
+  // PLEINE résolution (1568) — un curseur fin « + » et un petit chiffre sont
   // illisibles en 512 px. On prend jusqu'à 6 frames réparties.
   const picks: string[] = [];
   const step = Math.max(1, Math.floor(n / 6));
   for (let i = 0; i < n && picks.length < 6; i += step) {
-    picks.push(downscalePngBase64(images[i].pngBase64, 1024));
+    picks.push(downscalePngBase64(images[i].pngBase64, 1568));
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000);
@@ -1044,7 +1048,7 @@ export async function runAiPreanalysis(
             windowCenter: wc,
             windowWidth: ww,
             count: cnt,
-            maxDim: cloudVision ? 1024 : 768,
+            maxDim: cloudVision ? 1568 : 768,
           });
           const label = `${s.seriesDescription || `Série ${s.seriesNumber ?? s.id}`} — ${s.modality || "?"}`;
           for (const x of sampled.images) {
@@ -1073,7 +1077,7 @@ export async function runAiPreanalysis(
         // comparaison) ; local : 16 (8 en comparaison).
         count: input.sampleCount ?? currentBudget,
         // Pleine résolution pour Claude (lit plus de détail) ; 768 en local.
-        maxDim: cloudVision ? 1024 : 768,
+        maxDim: cloudVision ? 1568 : 768,
       });
       images = sampled.images.map(s => ({
         pngBase64: s.pngBase64,
@@ -1088,6 +1092,72 @@ export async function runAiPreanalysis(
     input.keyImages.forEach(k => assertPng(k.pngBase64));
     images = input.keyImages;
     totalSlices = images.length;
+  }
+
+  // --- MULTI-FENÊTRAGE CT (levier précision) --------------------------------
+  // Un même scanner doit être lu sous PLUSIEURS fenêtres : un nodule pulmonaire
+  // n'est visible qu'en fenêtre PARENCHYMATEUSE, un trait de fracture qu'en
+  // fenêtre OSSEUSE, etc. La fenêtre W/L par défaut (parties molles 40/400) les
+  // masque. On ré-échantillonne donc quelques coupes clés en fenêtre OSSEUSE et
+  // PULMONAIRE, étiquetées, et on les ajoute au lot envoyé à l'IA. Cloud Claude
+  // uniquement (grand contexte) ; CT/CTA seulement ; jamais en comparaison
+  // d'antériorité (budget réservé à l'évolution).
+  const isCT = modalityUpper === "CT" || modalityUpper === "CTA";
+  if (
+    cloudVision &&
+    isCT &&
+    !comparingPriors &&
+    images.length > 0 &&
+    (input.seriesId || input.wholeStudy)
+  ) {
+    try {
+      const { sampleSeriesPngs } = await import("./aiSampling");
+      // Série diagnostique de référence pour le re-fenêtrage.
+      let refSeriesId: number | undefined = input.seriesId ?? undefined;
+      if (!refSeriesId && input.wholeStudy) {
+        const allSeriesRaw = await listSeriesByStudy(input.studyId);
+        const diag = selectDiagnosticSeries(allSeriesRaw as any);
+        // La plus grosse série diagnostique (le vrai volume) porte le signal.
+        const biggest = [...(diag as any[])].sort(
+          (a: any, b: any) =>
+            (b.numberOfInstances ?? 0) - (a.numberOfInstances ?? 0)
+        )[0];
+        refSeriesId = biggest?.id;
+      }
+      if (refSeriesId) {
+        // Fenêtres standard radiologiques. On évite de redonner la fenêtre déjà
+        // envoyée (parties molles ~40/400) pour ne pas gaspiller le budget.
+        const extraWindows: Array<{
+          label: string;
+          wc: number;
+          ww: number;
+        }> = [
+          { label: "fenêtre OSSEUSE", wc: 400, ww: 1800 },
+          { label: "fenêtre PULMONAIRE", wc: -550, ww: 1600 },
+        ];
+        for (const win of extraWindows) {
+          try {
+            const s = await sampleSeriesPngs(refSeriesId, {
+              windowCenter: win.wc,
+              windowWidth: win.ww,
+              count: 4,
+              maxDim: 1568,
+            });
+            for (const x of s.images) {
+              images.push({
+                pngBase64: x.pngBase64,
+                sliceIndex: x.sliceNumber,
+                seriesLabel: `${win.label} (WC ${win.wc} / WW ${win.ww})`,
+              });
+            }
+          } catch {
+            // fenêtre non rendable → on continue
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[aiPreanalysis] multi-fenêtrage CT échoué:", e);
+    }
   }
 
   // --- Antériorité (mesure d'évolution) : fail-soft de bout en bout. ---------
@@ -1164,7 +1234,7 @@ export async function runAiPreanalysis(
             windowCenter: wc,
             windowWidth: ww,
             count: perPrior,
-            maxDim: cloudVision ? 1024 : 768,
+            maxDim: cloudVision ? 1568 : 768,
           });
           const d = p.studyDate ?? undefined;
           for (const x of sp.images) {
@@ -1332,8 +1402,11 @@ export async function runAiPreanalysis(
   }
 
   // Double lecture : avis d'un 2e modèle (détecte les désaccords = incertitude).
+  // SYSTÉMATIQUE en cloud (Claude) — le 2e regard rattrape les ratés, et le coût
+  // est négligeable face au risque clinique (Règle #1). Reste optionnel en local
+  // (GPU L4 : éviter de doubler la charge sur chaque examen).
   let secondOpinion: RunAiPreanalysisResult["secondOpinion"] = null;
-  if (input.doubleRead) {
+  if (input.doubleRead || cloudVision) {
     try {
       const ab2 = await secondOpinionAbnormal(
         images,
@@ -1352,13 +1425,19 @@ export async function runAiPreanalysis(
   }
 
   // Vérification critique : relecture CONTRADICTOIRE de la conclusion (anti
-  // sur-/sous-diagnostic) quand une anomalie est signalée. Annexée au CR (à
-  // valider). Fail-soft.
-  if (result.abnormal === true && result.conclusion) {
+  // sur-/sous-diagnostic). Annexée au CR (à valider). Fail-soft.
+  //  - Anomalie signalée → on challenge le sur-diagnostic (« est-ce vraiment
+  //    pathologique ? »).
+  //  - Examen déclaré NORMAL en cloud → on challenge la FAUSSE RÉASSURANCE
+  //    (Règle #1 : « a-t-on manqué quelque chose ? »), le raté le plus grave.
+  const shouldVerify =
+    !!result.conclusion &&
+    (result.abnormal === true || (cloudVision && result.abnormal === false));
+  if (shouldVerify) {
     try {
       const verifyImgs = images
         .slice(0, cloudVision ? 6 : 4)
-        .map(k => downscalePngBase64(k.pngBase64, cloudVision ? 1024 : 768));
+        .map(k => downscalePngBase64(k.pngBase64, cloudVision ? 1568 : 768));
       const v = await verifyConclusion(
         verifyImgs,
         result.conclusion,

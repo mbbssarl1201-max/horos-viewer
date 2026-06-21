@@ -224,6 +224,23 @@ describe("generatePreanalysis", () => {
     expect(b.reduce((x, y) => x + y, 0)).toBeLessThanOrEqual(16);
   });
 
+  it("cropPngBase64 : recadre sur la boîte + agrandit (zoom HD)", async () => {
+    const { PNG } = await import("pngjs");
+    const { cropPngBase64 } = await import("./aiPreanalysis");
+    const img = new PNG({ width: 200, height: 200 });
+    const b64 = PNG.sync.write(img).toString("base64");
+    // petite boîte centrale → recadrage agrandi (plus grand côté ~1024)
+    const out = cropPngBase64(
+      b64,
+      { x1: 0.4, y1: 0.4, x2: 0.6, y2: 0.6 },
+      0.1,
+      1024
+    );
+    const dec = PNG.sync.read(Buffer.from(out, "base64"));
+    expect(Math.max(dec.width, dec.height)).toBeGreaterThan(200);
+    expect(Math.max(dec.width, dec.height)).toBeLessThanOrEqual(1024);
+  });
+
   it("downscalePngBase64 réduit une grande image au plus grand côté = maxDim", async () => {
     const { PNG } = await import("pngjs");
     const { downscalePngBase64 } = await import("./aiPreanalysis");

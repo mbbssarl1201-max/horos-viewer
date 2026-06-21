@@ -222,6 +222,8 @@ export async function generatePreanalysis(
     studyDescription?: string;
     antecedents?: string;
     totalSlices?: number;
+    // Plafond d'images (mode approfondi) ; défaut 24 (cloud) / 16 (local).
+    maxImages?: number;
     // Mesures objectives (segmentation TotalSegmentator) injectées pour ancrer le
     // rapport dans des volumes RÉELS — précision accrue, moins d'invention.
     measurements?: string;
@@ -252,7 +254,7 @@ export async function generatePreanalysis(
   // Budget d'images adapté au modèle : Claude (grand contexte, cloud) encaisse
   // PLUS de coupes en PLEINE résolution → meilleure lecture de l'examen. Le
   // modèle local (GPU L4) reste à 16/768 px pour ne pas le saturer.
-  const maxImages = useClaude ? 24 : 16;
+  const maxImages = opts.maxImages ?? (useClaude ? 24 : 16);
   const visionDim = useClaude ? 1024 : VISION_MAX_DIM;
   const perStudy = comparing
     ? Math.max(1, Math.floor(maxImages / 2))
@@ -606,6 +608,157 @@ export function drawAnomalyBox(
   }
 }
 
+/** Recadre une image PNG sur une boîte (fractions 0-1) + marge, agrandie à
+ * `outDim` px (zoom haute-déf sur la zone suspecte). Renvoie le clair si échec. */
+export function cropPngBase64(
+  pngBase64: string,
+  box: { x1: number; y1: number; x2: number; y2: number },
+  pad = 0.1,
+  outDim = 1024
+): string {
+  try {
+    const img = PNG.sync.read(Buffer.from(pngBase64, "base64"));
+    const { width: w, height: h } = img;
+    const x1 = Math.max(0, Math.floor((box.x1 - pad) * w));
+    const y1 = Math.max(0, Math.floor((box.y1 - pad) * h));
+    const x2 = Math.min(w, Math.ceil((box.x2 + pad) * w));
+    const y2 = Math.min(h, Math.ceil((box.y2 + pad) * h));
+    const cw = Math.max(1, x2 - x1);
+    const ch = Math.max(1, y2 - y1);
+    const scale = Math.max(1, Math.min(outDim / cw, outDim / ch));
+    const ow = Math.round(cw * scale);
+    const oh = Math.round(ch * scale);
+    const out = new PNG({ width: ow, height: oh });
+    for (let y = 0; y < oh; y++) {
+      const sy = Math.min(ch - 1, Math.floor(y / scale)) + y1;
+      for (let x = 0; x < ow; x++) {
+        const sx = Math.min(cw - 1, Math.floor(x / scale)) + x1;
+        const si = (sy * w + sx) * 4;
+        const di = (y * ow + x) * 4;
+        out.data[di] = img.data[si];
+        out.data[di + 1] = img.data[si + 1];
+        out.data[di + 2] = img.data[si + 2];
+        out.data[di + 3] = 255;
+      }
+    }
+    return PNG.sync.write(out).toString("base64");
+  } catch {
+    return pngBase64;
+  }
+}
+
+/** Lecture vision FOCALISÉE (1 tâche, texte court). Cloud Opus si actif (lit
+ * mieux les petits signes), sinon modèle local. null si échec. Best-effort. */
+async function focusedVisionRead(
+  imagesB64: string[],
+  system: string,
+  userText: string,
+  cloud: boolean,
+  maxTokens = 350
+): Promise<string | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  try {
+    if (cloud && ENV.anthropicApiKey) {
+      const content: any[] = imagesB64.map(b64 => ({
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: b64 },
+      }));
+      content.push({ type: "text", text: userText });
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": ENV.anthropicApiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: ENV.anthropicModel,
+          max_tokens: maxTokens,
+          system,
+          messages: [{ role: "user", content }],
+        }),
+      });
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      const t = (Array.isArray(data?.content) ? data.content : [])
+        .filter((b: any) => b.type === "text")
+        .map((b: any) => b.text)
+        .join("\n")
+        .trim();
+      return t || null;
+    }
+    const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: ENV.ollamaVisionModel,
+        stream: false,
+        keep_alive: -1,
+        options: { num_ctx: 8192, num_predict: maxTokens, temperature: 0.1 },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: userText, images: imagesB64 },
+        ],
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const t = (data?.message?.content ?? "").trim();
+    return t || null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Lecture en 2 temps : re-zoom HAUTE-DÉF sur la zone suspecte (box) d'une coupe
+ * et description fine. Renvoie le détail, ou null. */
+export async function zoomReadAnomaly(
+  fullSliceB64: string,
+  box: { x1: number; y1: number; x2: number; y2: number },
+  modality: string | undefined,
+  cloud: boolean
+): Promise<string | null> {
+  const crop = cropPngBase64(fullSliceB64, box, 0.12, 1024);
+  const sys =
+    "Tu es un radiologue senior. On te montre un AGRANDISSEMENT (zoom) de la zone " +
+    "suspecte d'une coupe. Décris FINEMENT ce que tu vois dans cette zone (taille " +
+    "apparente, contours, échostructure/densité, signes pertinents) de façon prudente. " +
+    "N'invente aucune mesure chiffrée non lisible. 2-3 phrases maximum.";
+  return focusedVisionRead(
+    [crop],
+    sys,
+    `Modalité : ${modality || "?"}. Décris finement la zone suspecte agrandie.`,
+    cloud,
+    300
+  );
+}
+
+/** Vérification critique (2e lecture contradictoire) de la conclusion proposée. */
+export async function verifyConclusion(
+  imagesB64: string[],
+  conclusion: string,
+  modality: string | undefined,
+  cloud: boolean
+): Promise<string | null> {
+  const sys =
+    "Tu es un radiologue senior qui RELIT de façon CRITIQUE et CONTRADICTOIRE un " +
+    "brouillon. On te donne une conclusion proposée et les images. Confirme, NUANCE " +
+    "ou CORRIGE-la d'après ce que tu vois réellement. Signale tout sur-diagnostic ou " +
+    "élément manqué. Reste prudent et bref (2-3 phrases). Si tu es d'accord, dis-le simplement.";
+  return focusedVisionRead(
+    imagesB64,
+    sys,
+    `Modalité : ${modality || "?"}.\nConclusion proposée : « ${conclusion} »\nTon avis critique ?`,
+    cloud,
+    300
+  );
+}
+
 async function generateViaOllama(
   images: string[],
   userText: string,
@@ -729,6 +882,8 @@ export interface RunAiPreanalysisInput {
   // Analyse de TOUTE l'étude : échantillonne sur toutes les séries du dossier
   // (pas seulement `seriesId`), chaque image étiquetée de sa série.
   wholeStudy?: boolean;
+  // Analyse approfondie : beaucoup plus de coupes (cas douteux). Plus lent/coûteux.
+  deepAnalysis?: boolean;
   // Antériorité à comparer (mesure d'évolution) ; absente → pas de comparaison.
   priorStudyId?: number;
   priorSeriesId?: number;
@@ -806,7 +961,15 @@ export async function runAiPreanalysis(
     ENV.aiBackend === "claude" &&
     !!ENV.anthropicApiKey &&
     ENV.cloudAiPhiConsent;
-  const imgBudget = cloudVision ? 24 : 16;
+  // Budget d'images. Mode « analyse approfondie » → bien plus de coupes (cas
+  // douteux, plus lent/coûteux mais exhaustif).
+  const imgBudget = input.deepAnalysis
+    ? cloudVision
+      ? 40
+      : 24
+    : cloudVision
+      ? 24
+      : 16;
   // Mode « toute l'étude » : échantillonne sur TOUTES les séries du dossier
   // (budget réparti par taille), chaque image étiquetée de sa série → l'IA lit
   // l'examen complet et structure le CR par série. Anti-IDOR implicite : toutes
@@ -857,7 +1020,9 @@ export async function runAiPreanalysis(
         // comparaison) ; local : 16 (8 en comparaison).
         count:
           input.sampleCount ??
-          (input.priorStudyId ? (cloudVision ? 12 : 8) : cloudVision ? 24 : 16),
+          (input.priorStudyId
+            ? Math.max(8, Math.floor(imgBudget / 2))
+            : imgBudget),
         // Pleine résolution pour Claude (lit plus de détail) ; 768 en local.
         maxDim: cloudVision ? 1024 : 768,
       });
@@ -989,6 +1154,7 @@ export async function runAiPreanalysis(
     modality: (study as any).modality ?? undefined,
     studyDescription: (study as any).studyDescription ?? undefined,
     totalSlices,
+    maxImages: imgBudget,
     measurements,
     references,
     screenText,
@@ -1033,12 +1199,29 @@ export async function runAiPreanalysis(
   // et on dessine un cadre sur l'image clé (approximatif, à valider). Best-effort.
   if (keyImage && result.abnormal === true) {
     try {
-      const box = await locateAnomaly(keyImage.pngBase64);
+      const original = keyImage.pngBase64;
+      const box = await locateAnomaly(original);
       if (box) {
         keyImage = {
-          pngBase64: drawAnomalyBox(keyImage.pngBase64, box),
+          pngBase64: drawAnomalyBox(original, box),
           sliceIndex: keyImage.sliceIndex,
         };
+        // Lecture en 2 temps : re-zoom HAUTE-DÉF sur la zone localisée pour une
+        // description fine des petits signes. Annexé au CR (à valider).
+        try {
+          const zoom = await zoomReadAnomaly(
+            original,
+            box,
+            (study as any).modality ?? undefined,
+            cloudVision
+          );
+          if (zoom) {
+            result.resultats =
+              `${result.resultats}\n\nAnalyse ciblée (zoom haute résolution sur la zone suspecte, à valider) : ${zoom}`.trim();
+          }
+        } catch (e) {
+          console.warn("[aiPreanalysis] zoom ciblé échoué:", e);
+        }
       }
     } catch (e) {
       console.warn("[aiPreanalysis] annotation anomalie échouée:", e);
@@ -1061,6 +1244,29 @@ export async function runAiPreanalysis(
       };
     } catch (e) {
       console.warn("[aiPreanalysis] 2e lecture échouée:", e);
+    }
+  }
+
+  // Vérification critique : relecture CONTRADICTOIRE de la conclusion (anti
+  // sur-/sous-diagnostic) quand une anomalie est signalée. Annexée au CR (à
+  // valider). Fail-soft.
+  if (result.abnormal === true && result.conclusion) {
+    try {
+      const verifyImgs = images
+        .slice(0, cloudVision ? 6 : 4)
+        .map(k => downscalePngBase64(k.pngBase64, cloudVision ? 1024 : 768));
+      const v = await verifyConclusion(
+        verifyImgs,
+        result.conclusion,
+        (study as any).modality ?? undefined,
+        cloudVision
+      );
+      if (v) {
+        result.resultats =
+          `${result.resultats}\n\nVérification (2e lecture critique indépendante, à valider) : ${v}`.trim();
+      }
+    } catch (e) {
+      console.warn("[aiPreanalysis] vérification conclusion échouée:", e);
     }
   }
 

@@ -356,6 +356,10 @@ export default function ReportPanel({
       includeSegmentation: override?.includeSegmentation,
       highResSegmentation: override?.highResSegmentation,
       doubleRead,
+      // Auto (sans override) → analyse TOUTE l'étude + compare les antériorités.
+      // Les boutons ciblés (segmentation CT d'une série) restent mono-série.
+      wholeStudy: !override,
+      compareAllPriors: !override,
     });
     setAnalyzedSeriesId(sid);
     setSecondOpinion(res.secondOpinion ?? null);

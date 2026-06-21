@@ -1575,6 +1575,10 @@ export const appRouter = router({
           highResSegmentation: z.boolean().optional(),
           // Double lecture : avis d'un 2e modèle (détecte les désaccords).
           doubleRead: z.boolean().optional(),
+          // Analyser TOUTES les séries du dossier (auto à l'ouverture).
+          wholeStudy: z.boolean().optional(),
+          // Comparaison auto avec toutes les antériorités du patient.
+          compareAllPriors: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {

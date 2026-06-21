@@ -3056,7 +3056,7 @@ export default function Viewer() {
               Series ({seriesList?.length || 0})
             </h3>
           </div>
-          <ScrollArea className="flex-1">
+          <ScrollArea className="flex-1 min-h-0">
             <div className="p-2 space-y-2">
               {seriesList?.map((s: any) => (
                 <button

@@ -427,7 +427,8 @@ export async function generatePreanalysis(
  * Best-effort, APPROXIMATIF : à valider par le médecin.
  */
 export async function locateAnomaly(
-  pngBase64: string
+  pngBase64: string,
+  opts: { cloud?: boolean } = {}
 ): Promise<{ x1: number; y1: number; x2: number; y2: number } | null> {
   const sys =
     "Tu localises l'anomalie PRINCIPALE sur une coupe d'imagerie médicale. " +
@@ -435,32 +436,18 @@ export async function locateAnomaly(
     '{"x1":,"y1":,"x2":,"y2":} où chaque valeur est une FRACTION entre 0.0 et 1.0 ' +
     "(x = horizontal depuis la gauche, y = vertical depuis le haut) délimitant la zone anormale. " +
     "Si aucune anomalie nette, réponds {}. Aucun autre texte.";
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
+  // Cloud Opus si actif (localisation bien plus précise que le local), sinon GPU.
+  const txt = await focusedVisionRead(
+    [pngBase64],
+    sys,
+    "Boîte de l'anomalie ?",
+    !!opts.cloud,
+    120
+  );
+  if (!txt) return null;
+  const m = txt.match(/\{[^}]*\}/);
+  if (!m) return null;
   try {
-    const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: ENV.ollamaVisionModel,
-        stream: false,
-        keep_alive: -1,
-        options: { num_ctx: 4096, num_predict: 80 },
-        messages: [
-          { role: "system", content: sys },
-          {
-            role: "user",
-            content: "Boîte de l'anomalie ?",
-            images: [pngBase64],
-          },
-        ],
-      }),
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    const m = (data?.message?.content ?? "").match(/\{[^}]*\}/);
-    if (!m) return null;
     const o = JSON.parse(m[0]);
     const f = (v: any) =>
       typeof v === "number" ? Math.max(0, Math.min(1, v)) : NaN;
@@ -470,8 +457,6 @@ export async function locateAnomaly(
     return box;
   } catch {
     return null;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -481,13 +466,13 @@ export async function locateAnomaly(
  */
 export async function secondOpinionAbnormal(
   images: PreanalysisKeyImage[],
-  modality?: string
+  modality?: string,
+  cloud = false
 ): Promise<boolean | null> {
-  // 8 coupes à 512px : assez pour un avis global, sans saturer le contexte du 2e
-  // modèle (16 grandes images débordaient le num_ctx → sortie incohérente).
+  // Cloud Opus : 8 coupes en 1024px (lit les petits signes) ; local : 512px.
   const pics = images
     .slice(0, 8)
-    .map(k => downscalePngBase64(k.pngBase64, 512));
+    .map(k => downscalePngBase64(k.pngBase64, cloud ? 1024 : 512));
   if (pics.length === 0) return null;
   const sys =
     "Tu es un SECOND lecteur en imagerie. On te montre des images d'un même examen. " +
@@ -495,42 +480,17 @@ export async function secondOpinionAbnormal(
     "Y a-t-il une anomalie NETTE (lésion focale, kyste, nodule, masse, épanchement, dilatation, " +
     "fracture, hémorragie, asymétrie franche, OU une structure entourée de curseurs de mesure) ? " +
     "Réponds par UN SEUL mot : oui ou non.";
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120_000);
-  try {
-    const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: ENV.ollamaVisionModel2,
-        stream: false,
-        keep_alive: -1,
-        options: { num_ctx: 16384, num_predict: 24 },
-        messages: [
-          { role: "system", content: sys },
-          {
-            role: "user",
-            content: modality
-              ? `Modalité : ${modality}. Anomalie ?`
-              : "Anomalie ?",
-            images: pics,
-          },
-        ],
-      }),
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    const txt = (data?.message?.content ?? "").toLowerCase();
-    // 1re occurrence de oui/non (tolère un peu de texte autour).
-    const mo = txt.match(/\b(oui|yes|non|no)\b/);
-    if (mo) return mo[1] === "oui" || mo[1] === "yes";
-    return null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
+  const txt = await focusedVisionRead(
+    pics,
+    sys,
+    modality ? `Modalité : ${modality}. Anomalie ?` : "Anomalie ?",
+    cloud,
+    24
+  );
+  if (!txt) return null;
+  const mo = txt.toLowerCase().match(/\b(oui|yes|non|no)\b/);
+  if (mo) return mo[1] === "oui" || mo[1] === "yes";
+  return null;
 }
 
 /**
@@ -1343,7 +1303,7 @@ export async function runAiPreanalysis(
   if (keyImage && result.abnormal === true) {
     try {
       const original = keyImage.pngBase64;
-      const box = await locateAnomaly(original);
+      const box = await locateAnomaly(original, { cloud: cloudVision });
       if (box) {
         keyImage = {
           pngBase64: drawAnomalyBox(original, box),
@@ -1377,11 +1337,12 @@ export async function runAiPreanalysis(
     try {
       const ab2 = await secondOpinionAbnormal(
         images,
-        (study as any).modality ?? undefined
+        (study as any).modality ?? undefined,
+        cloudVision
       );
       secondOpinion = {
         abnormal: ab2,
-        model: ENV.ollamaVisionModel2,
+        model: cloudVision ? ENV.anthropicModel : ENV.ollamaVisionModel2,
         // accord seulement si le 2e modèle a donné un avis NET (non null).
         agree: ab2 !== null && ab2 === (result.abnormal ?? null),
       };

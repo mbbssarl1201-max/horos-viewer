@@ -12,7 +12,10 @@ import type {
   ClipAxis,
   ObliqueClipConfig,
 } from "@/lib/clipPlanes";
-import { shouldReselectSeries } from "@/lib/seriesSelection";
+import {
+  shouldReselectSeries,
+  pickDefaultSeries,
+} from "@/lib/seriesSelection";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -841,11 +844,14 @@ export default function Viewer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studyId]);
 
-  // Auto-select first series — re-sélectionne aussi si la série courante
-  // n'appartient pas à l'étude affichée (anti-fuite inter-patients, cf. audit C1).
+  // Auto-select series — re-sélectionne aussi si la série courante n'appartient
+  // pas à l'étude affichée (anti-fuite inter-patients, cf. audit C1). On choisit
+  // la série DIAGNOSTIQUE la plus volumineuse (pas le scanogramme de repérage de
+  // 2 images souvent en tête de liste), via pickDefaultSeries.
   useEffect(() => {
     if (shouldReselectSeries(selectedSeries, seriesList)) {
-      setSelectedSeries(seriesList![0].id);
+      const id = pickDefaultSeries(seriesList as any) ?? seriesList![0].id;
+      setSelectedSeries(id);
     }
   }, [seriesList, selectedSeries]);
 

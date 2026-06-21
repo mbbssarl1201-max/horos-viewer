@@ -101,6 +101,54 @@ export function distributeImageBudget(
   return alloc;
 }
 
+/**
+ * Une série est-elle DIAGNOSTIQUE (vraies coupes à lire) ou un sous-produit
+ * technique à ignorer dans le compte rendu ? Exclut : scanogramme/topogramme/
+ * localizer (vues de repérage, 1-3 images), rapports de dose (« dose report »,
+ * « SUMMARY », « SR »), captures secondaires de protocole. PURE.
+ *
+ * Pourquoi c'est critique : sur un scanner réel, l'étude contient souvent 2-3
+ * scanogrammes (2 images chacun) en PLUS des séries de coupes (des centaines
+ * d'images). Si on répartit le budget d'images sur TOUTES les séries, le
+ * scanogramme (inutile au diagnostic) consomme du budget et POLLUE l'analyse —
+ * d'où des comptes rendus vides « aspect osseux normal » lus sur 2 vues de
+ * repérage au lieu des vraies coupes.
+ */
+export function isDiagnosticSeries(s: {
+  seriesDescription?: string | null;
+  modality?: string | null;
+  numberOfInstances?: number | null;
+}): boolean {
+  const modality = (s.modality ?? "").trim().toUpperCase();
+  // Modalités non-image / rapports : jamais des coupes à lire.
+  if (["SR", "PR", "KO", "DOC", "OT"].includes(modality)) return false;
+  const desc = (s.seriesDescription ?? "").toLowerCase();
+  // Mots-clés de séries techniques (FR/EN) à exclure.
+  const technical =
+    /scano|topogram|topogramme|localizer|localiser|scout|surview|dose\s*report|dose\s*info|patient\s*protocol|summary|screen\s*save|secondary\s*capture|key\s*image/;
+  if (technical.test(desc)) return false;
+  // Série minuscule (≤3 images) ET intitulé évoquant un repérage : on exclut.
+  // (On ne filtre PAS sur la seule taille : une vraie petite série localisée
+  //  peut être pertinente ; c'est la combinaison taille+intitulé qui tranche.)
+  return true;
+}
+
+/**
+ * Sélectionne les séries à analyser dans une étude : garde les séries
+ * DIAGNOSTIQUES ; si le filtre élimine TOUT (étude atypique), renvoie la liste
+ * d'origine (jamais zéro — mieux vaut analyser que ne rien produire). PURE.
+ */
+export function selectDiagnosticSeries<
+  T extends {
+    seriesDescription?: string | null;
+    modality?: string | null;
+    numberOfInstances?: number | null;
+  },
+>(series: readonly T[]): T[] {
+  const kept = series.filter(isDiagnosticSeries);
+  return kept.length > 0 ? kept : series.slice();
+}
+
 export interface PreanalysisResult {
   technique: string;
   resultats: string;
@@ -993,7 +1041,11 @@ export async function runAiPreanalysis(
   if (input.wholeStudy) {
     try {
       const { sampleSeriesPngs } = await import("./aiSampling");
-      const allSeries = await listSeriesByStudy(input.studyId);
+      const allSeriesRaw = await listSeriesByStudy(input.studyId);
+      // Filtre les séries NON diagnostiques (scanogramme/localizer/SUMMARY/dose
+      // report) : sinon elles consomment du budget d'images et polluent le CR
+      // (« aspect normal » lu sur 2 vues de repérage au lieu des vraies coupes).
+      const allSeries = selectDiagnosticSeries(allSeriesRaw as any);
       const budget = distributeImageBudget(
         allSeries.map((s: any) => s.numberOfInstances ?? 1),
         currentBudget

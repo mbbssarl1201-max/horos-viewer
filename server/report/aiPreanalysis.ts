@@ -215,9 +215,12 @@ export function modalityBlock(modality?: string): string {
   if (m === "US")
     return [
       "MODALITÉ : ÉCHOGRAPHIE (ultrasons). N'emploie JAMAIS « structures osseuses » ni « fenêtre osseuse » : l'échographie ne montre pas l'os.",
-      "- Identifie l'organe exploré d'après le TEXTE incrusté (ex. FOIE, REIN, VÉSICULE, VOIES BILIAIRES, PANCRÉAS, RATE, VESSIE, AORTE, THYROÏDE, « REG PANC »…) et la latéralité.",
-      "- Pour chaque organe visible, décris : taille, échostructure (homogène/hétérogène), contours, et toute LÉSION FOCALE — en particulier un KYSTE (image ANÉCHOGÈNE, arrondie, à paroi fine, avec RENFORCEMENT POSTÉRIEUR), un nodule, une masse, un calcul (hyperéchogène avec cône d'ombre), une dilatation des voies/cavités, un épanchement.",
-      "- Des CURSEURS de mesure (« + », « 1 », « 2 », pointillés) posés sur une structure signalent une LÉSION MESURÉE : décris-la et indique Anomalie = oui.",
+      "- ÉTAPE 1 OBLIGATOIRE : IDENTIFIE LA RÉGION EXPLORÉE d'après le TEXTE INCRUSTÉ en haut/bas de l'image (nom de sonde + région), AVANT toute interprétation. Exemples de régions : SEIN/MAMMAIRE (sonde linéaire haute fréquence « 11L », « L »), THYROÏDE/COU, ABDOMEN (foie, rein, vésicule, pancréas, rate, aorte), PELVIS, VASCULAIRE/DOPPLER, PARTIES MOLLES, TESTICULE, MUSCULO-SQUELETTIQUE. NE PRÉSUME JAMAIS l'abdomen par défaut : adapte les organes recherchés à la région LUE.",
+      "- Si la région est le SEIN : décris le tissu fibroglandulaire, recherche masses/nodules (forme, contours réguliers/irréguliers, orientation, échostructure, atténuation postérieure), kystes, microcalcifications, ganglions axillaires ; classe en BI-RADS si pertinent. NE cherche PAS de foie/rein.",
+      "- Si la région est la THYROÏDE : lobes (taille, échostructure), nodules (composition, échogénicité, forme, contours, calcifications → EU-TIRADS si pertinent).",
+      "- DOPPLER COULEUR : si des plages de COULEUR (rouge/bleu) sont présentes, c'est un Doppler de FLUX — décris la vascularisation (présente/absente, intra/périlésionnelle) ; ne confonds pas la couleur avec une lésion.",
+      "- Pour chaque structure visible, décris : taille, échostructure (homogène/hétérogène), contours, et toute LÉSION FOCALE — KYSTE (anéchogène, arrondi, paroi fine, renforcement postérieur), nodule, masse, calcul (hyperéchogène + cône d'ombre), dilatation, épanchement.",
+      "- Des CURSEURS de mesure (« + », « 1 », « 2 », pointillés, valeurs en mm/cm) posés sur une structure signalent une LÉSION/STRUCTURE MESURÉE : décris-la, REPORTE la valeur si lisible, et indique Anomalie = oui.",
     ].join("\n");
   if (m === "MR" || m === "MRI")
     return [
@@ -323,7 +326,12 @@ export async function generatePreanalysis(
   const priorDate = opts.prior?.date;
 
   const images = [...curImages, ...priorImages];
-  const numCtx = Math.min(16384, 4096 + 4500 * Math.max(1, images.length));
+  // Budget de contexte du modèle vision. MESURÉ sur qwen2.5vl:7b : ~500 tokens
+  // par image (768 px) + overhead prompt. 16 images ≈ 8 k, 32 images ≈ 16,5 k.
+  // L'ancien plafond de 16384 FAISAIT ÉCHOUER l'analyse US (32 clichés → 16460
+  // tokens > 16384 → HTTP 400 « exceed_context_size », CR vide). Le L4 24 Go
+  // encaisse 32768 sans souci (validé). On dimensionne large avec marge.
+  const numCtx = Math.min(32768, 6144 + 700 * Math.max(1, images.length));
 
   // Étiquette de CHAQUE image (parallèle à `images`), utilisée par le backend
   // Claude (bloc texte avant chaque image) pour distinguer actuel / antérieur.
@@ -1021,13 +1029,30 @@ export async function runAiPreanalysis(
     ENV.cloudAiPhiConsent;
   // Budget d'images. Mode « analyse approfondie » → bien plus de coupes (cas
   // douteux, plus lent/coûteux mais exhaustif).
-  const imgBudget = input.deepAnalysis
-    ? cloudVision
-      ? 40
-      : 24
-    : cloudVision
-      ? 24
-      : 16;
+  //
+  // ADAPTATIF À LA MODALITÉ : en ÉCHOGRAPHIE (US), il n'y a pas un « volume »
+  // continu mais un PETIT NOMBRE de clichés DISTINCTS, chacun documentant une
+  // structure/mesure précise — il faut donc les voir (presque) TOUS, pas un
+  // échantillon de 16 qui en manquerait la moitié (d'où des CR vagues). Sur un
+  // CT/MR (centaines de coupes redondantes), l'échantillon réparti reste le bon
+  // compromis vitesse/couverture.
+  const modalityUpper = ((study as any).modality ?? "").trim().toUpperCase();
+  const isUltrasound = modalityUpper === "US";
+  const imgBudget = isUltrasound
+    ? input.deepAnalysis
+      ? cloudVision
+        ? 48
+        : 40
+      : cloudVision
+        ? 40
+        : 32
+    : input.deepAnalysis
+      ? cloudVision
+        ? 40
+        : 24
+      : cloudVision
+        ? 24
+        : 16;
   // Comparaison d'antériorité(s) → on réduit le budget de l'étude courante pour
   // laisser de la place aux images antérieures (sans exploser le total/coût).
   const comparingPriors = !!input.priorStudyId || !!input.compareAllPriors;

@@ -41,11 +41,59 @@ export function renderDicomFrame(
   const signed: boolean = (ds.PixelRepresentation ?? 0) === 1;
   const slope: number = Number(ds.RescaleSlope ?? 1) || 1;
   const intercept: number = Number(ds.RescaleIntercept ?? 0) || 0;
-  const mono1: boolean = ds.PhotometricInterpretation === "MONOCHROME1";
+  const photometric: string = ds.PhotometricInterpretation ?? "";
+  const mono1: boolean = photometric === "MONOCHROME1";
+  const samplesPerPixel: number = ds.SamplesPerPixel ?? 1;
+  const planar: number = ds.PlanarConfiguration ?? 0;
   const pdRaw = Array.isArray(ds.PixelData) ? ds.PixelData[0] : ds.PixelData;
   const pixelBuffer = (
     pdRaw instanceof ArrayBuffer ? pdRaw : pdRaw.buffer
   ) as ArrayBuffer;
+
+  // --- IMAGES COULEUR (échographie Doppler, captures secondaires…) ----------
+  // Indispensable : sans ce chemin, une écho RGB/YBR était lue comme du
+  // monochrome (octets RGB interprétés comme des pixels gris séquentiels) →
+  // image CORROMPUE envoyée à l'IA, d'où des CR « aucun plan reconnaissable ».
+  // Le Doppler couleur (flux rouge/bleu) porte de l'information diagnostique :
+  // on la PRÉSERVE.
+  if (samplesPerPixel === 3) {
+    const u8 = new Uint8Array(pixelBuffer);
+    const isYbr = photometric.startsWith("YBR");
+    const png = new PNG({ width: cols, height: rows });
+    const n = rows * cols;
+    for (let i = 0; i < n; i++) {
+      let r: number, g: number, b: number;
+      if (planar === 1) {
+        // R plane, puis G plane, puis B plane.
+        r = u8[i] ?? 0;
+        g = u8[n + i] ?? 0;
+        b = u8[2 * n + i] ?? 0;
+      } else {
+        // Entrelacé : R,G,B,R,G,B…
+        r = u8[i * 3] ?? 0;
+        g = u8[i * 3 + 1] ?? 0;
+        b = u8[i * 3 + 2] ?? 0;
+      }
+      if (isYbr) {
+        // YBR_FULL → RGB (ITU-R BT.601). YBR_FULL_422 est déjà sur-échantillonné
+        // à l'identique par la plupart des modalités US ; on traite en FULL.
+        const Y = r,
+          Cb = g - 128,
+          Cr = b - 128;
+        r = Y + 1.402 * Cr;
+        g = Y - 0.344136 * Cb - 0.714136 * Cr;
+        b = Y + 1.772 * Cb;
+      }
+      const o = i * 4;
+      png.data[o] = Math.max(0, Math.min(255, Math.round(r)));
+      png.data[o + 1] = Math.max(0, Math.min(255, Math.round(g)));
+      png.data[o + 2] = Math.max(0, Math.min(255, Math.round(b)));
+      png.data[o + 3] = 255;
+    }
+    return { png: PNG.sync.write(png), rows, cols };
+  }
+
+  // --- IMAGES MONOCHROMES (CT/MR/CR/US niveaux de gris) ----------------------
   let samples: ArrayLike<number>;
   if (bits === 16)
     samples = signed

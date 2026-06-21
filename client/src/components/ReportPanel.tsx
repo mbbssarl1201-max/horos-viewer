@@ -261,8 +261,8 @@ export default function ReportPanel({
   const segmentCt = trpc.ai.segmentCt.useMutation();
   // Suggestion de codes CIM-10 (LLM texte) — à valider, facturation = MediAdmin.
   const suggestCodes = trpc.ai.suggestCodes.useMutation();
-  // Haute précision (1.5mm) : plus précis, ~2x plus lent. Rapide par défaut.
-  const [highResSeg, setHighResSeg] = useState(false);
+  // Haute précision (1.5mm) : toujours active (UI simplifiée — plus de case).
+  const highResSeg = true;
   // Région à segmenter (corps par défaut ; tête/cou pour scanners de face/crâne).
   const [segTask, setSegTask] = useState<
     | "total"
@@ -321,8 +321,8 @@ export default function ReportPanel({
   const [comparedPriorDate, setComparedPriorDate] = useState<string | null>(
     null
   );
-  // Double lecture (2 modèles) : case + verdict du 2e modèle.
-  const [doubleRead, setDoubleRead] = useState(false);
+  // Double lecture (2 modèles) : toujours active (UI simplifiée — plus de case).
+  const doubleRead = true;
   const [secondOpinion, setSecondOpinion] = useState<{
     abnormal: boolean | null;
     agree: boolean;
@@ -667,6 +667,10 @@ export default function ReportPanel({
                 // Analyse de TOUT le dossier : couvre toutes les séries de
                 // l'étude (sauf en mode comparaison d'antériorité).
                 wholeStudy: comparePriorStudyId == null,
+                // Double lecture toujours active (UI simplifiée).
+                doubleRead: true,
+                // Comparaison auto avec les antériorités (hors mode compare explicite).
+                compareAllPriors: comparePriorStudyId == null,
               });
               // Ne pré-remplit QUE les champs vides.
               setSections(s => ({
@@ -710,6 +714,8 @@ export default function ReportPanel({
                 priorSeriesId: comparePriorSeriesId ?? undefined,
                 wholeStudy: comparePriorStudyId == null,
                 deepAnalysis: true,
+                doubleRead: true,
+                compareAllPriors: comparePriorStudyId == null,
               });
               setSections(s => ({
                 indication: s.indication || r.sections.indication,
@@ -902,28 +908,6 @@ export default function ReportPanel({
               ? "Analyse précise…"
               : "Compte rendu IA précis (CT)"}
           </button>
-          <label
-            className="flex items-center gap-1 text-[10px] text-muted-foreground"
-            title="Segmentation 1.5mm au lieu de 3mm : plus précise sur les petites structures, ~2x plus lente."
-          >
-            <input
-              type="checkbox"
-              checked={highResSeg}
-              onChange={e => setHighResSeg(e.target.checked)}
-            />
-            haute précision
-          </label>
-          <label
-            className="flex items-center gap-1 text-[10px] text-muted-foreground"
-            title="Double lecture : un 2e modèle donne un avis indépendant ; un désaccord signale une incertitude à vérifier."
-          >
-            <input
-              type="checkbox"
-              checked={doubleRead}
-              onChange={e => setDoubleRead(e.target.checked)}
-            />
-            double lecture
-          </label>
         </div>
       )}
       {!isSigned && secondOpinion && (

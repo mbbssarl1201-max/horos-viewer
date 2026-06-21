@@ -53,6 +53,9 @@ export interface PreanalysisKeyImage {
   // Étiquette de la série d'origine (mode « toute l'étude ») : ex.
   // « OS Dur Vol — CT ». Permet à l'IA de structurer le CR par série.
   seriesLabel?: string;
+  // Date de l'examen antérieur (mode comparaison multi-antériorités) : permet
+  // d'étiqueter chaque image antérieure par sa date.
+  dateLabel?: string;
 }
 
 /**
@@ -284,10 +287,10 @@ export async function generatePreanalysis(
         ? `EXAMEN ACTUEL — ${tag}Coupe n° ${k.sliceIndex} :`
         : `${tag}Coupe n° ${k.sliceIndex} :`;
     }),
-    ...priorSlices.map(
-      n =>
-        `EXAMEN ANTÉRIEUR${priorDate ? ` du ${priorDate}` : ""} — Coupe n° ${n} :`
-    ),
+    ...priorChosen.map(k => {
+      const d = k.dateLabel ?? priorDate;
+      return `EXAMEN ANTÉRIEUR${d ? ` du ${d}` : ""} — Coupe n° ${k.sliceIndex} :`;
+    }),
   ];
 
   // Contexte de l'étude injecté pour ancrer le modèle.
@@ -887,6 +890,9 @@ export interface RunAiPreanalysisInput {
   // Antériorité à comparer (mesure d'évolution) ; absente → pas de comparaison.
   priorStudyId?: number;
   priorSeriesId?: number;
+  // Comparaison AUTOMATIQUE avec TOUTES les antériorités du patient (jusqu'aux
+  // 3 plus récentes), sans antériorité explicite. Évolution dans le temps.
+  compareAllPriors?: boolean;
   // Mode précis (CT) : segmenter d'abord le volume (TotalSegmentator) et ancrer
   // le rapport vision dans les volumes mesurés.
   includeSegmentation?: boolean;
@@ -970,6 +976,12 @@ export async function runAiPreanalysis(
     : cloudVision
       ? 24
       : 16;
+  // Comparaison d'antériorité(s) → on réduit le budget de l'étude courante pour
+  // laisser de la place aux images antérieures (sans exploser le total/coût).
+  const comparingPriors = !!input.priorStudyId || !!input.compareAllPriors;
+  const currentBudget = comparingPriors
+    ? Math.max(8, Math.floor(imgBudget / 2))
+    : imgBudget;
   // Mode « toute l'étude » : échantillonne sur TOUTES les séries du dossier
   // (budget réparti par taille), chaque image étiquetée de sa série → l'IA lit
   // l'examen complet et structure le CR par série. Anti-IDOR implicite : toutes
@@ -980,7 +992,7 @@ export async function runAiPreanalysis(
       const allSeries = await listSeriesByStudy(input.studyId);
       const budget = distributeImageBudget(
         allSeries.map((s: any) => s.numberOfInstances ?? 1),
-        imgBudget
+        currentBudget
       );
       for (let i = 0; i < allSeries.length; i++) {
         const cnt = budget[i];
@@ -1018,11 +1030,7 @@ export async function runAiPreanalysis(
         windowWidth: ww,
         // Coupes réparties sur tout le volume. Cloud Claude : 24 (12 en
         // comparaison) ; local : 16 (8 en comparaison).
-        count:
-          input.sampleCount ??
-          (input.priorStudyId
-            ? Math.max(8, Math.floor(imgBudget / 2))
-            : imgBudget),
+        count: input.sampleCount ?? currentBudget,
         // Pleine résolution pour Claude (lit plus de détail) ; 768 en local.
         maxDim: cloudVision ? 1024 : 768,
       });
@@ -1085,6 +1093,60 @@ export async function runAiPreanalysis(
       // FORBIDDEN (patient différent) doit remonter ; le reste est fail-soft.
       if (e instanceof TRPCError && e.code === "FORBIDDEN") throw e;
       console.warn("[aiPreanalysis] comparaison antériorité échouée:", e);
+    }
+  }
+
+  // Comparaison AUTOMATIQUE avec TOUTES les antériorités (jusqu'aux 3 plus
+  // récentes du MÊME patient — listPriorStudiesForStudy est résolu par patient,
+  // donc anti-IDOR par construction). Chaque image antérieure est étiquetée de
+  // sa date. Fail-soft. N'écrase pas une antériorité explicite déjà choisie.
+  if (!prior && input.compareAllPriors) {
+    try {
+      const { listPriorStudiesForStudy } = await import("../db");
+      const { sampleSeriesPngs } = await import("./aiSampling");
+      const priors = (await listPriorStudiesForStudy(input.studyId)).slice(
+        0,
+        3
+      );
+      const priorImgs: PreanalysisKeyImage[] = [];
+      let mostRecent: string | null = null;
+      const perPrior = Math.max(2, Math.floor(currentBudget / 3));
+      for (const p of priors as any[]) {
+        try {
+          const sl = await listSeriesByStudy(p.id);
+          const sid = pickPriorSeriesId(
+            sl as any,
+            (study as any).modality ?? null
+          );
+          if (!sid) continue;
+          const sp = await sampleSeriesPngs(sid, {
+            windowCenter: wc,
+            windowWidth: ww,
+            count: perPrior,
+            maxDim: cloudVision ? 1024 : 768,
+          });
+          const d = p.studyDate ?? undefined;
+          for (const x of sp.images) {
+            priorImgs.push({
+              pngBase64: x.pngBase64,
+              sliceIndex: x.sliceNumber,
+              dateLabel: d,
+            });
+          }
+          if (d && !mostRecent) mostRecent = d;
+        } catch {
+          // antériorité non rendable → on continue
+        }
+      }
+      if (priorImgs.length > 0) {
+        prior = { images: priorImgs, date: mostRecent ?? undefined };
+        comparedPriorDate = mostRecent;
+      }
+    } catch (e) {
+      console.warn(
+        "[aiPreanalysis] comparaison multi-antériorités échouée:",
+        e
+      );
     }
   }
 

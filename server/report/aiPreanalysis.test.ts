@@ -209,6 +209,21 @@ describe("generatePreanalysis", () => {
     ).toBeNull();
   });
 
+  it("distributeImageBudget : réparti par taille, somme ≤ total, min 1", async () => {
+    const { distributeImageBudget } = await import("./aiPreanalysis");
+    // grosse série prend plus, petites au moins 1
+    const a = distributeImageBudget([674, 2, 2], 24);
+    expect(a.reduce((x, y) => x + y, 0)).toBe(24);
+    expect(a.every(n => n >= 1)).toBe(true);
+    expect(a[0]).toBeGreaterThan(a[1]);
+    // plus de séries que d'images → 1 pour les `total` premières
+    expect(distributeImageBudget([1, 1, 1, 1, 1], 3)).toEqual([1, 1, 1, 0, 0]);
+    // bornes
+    expect(distributeImageBudget([], 10)).toEqual([]);
+    const b = distributeImageBudget([5, 5, 5], 16);
+    expect(b.reduce((x, y) => x + y, 0)).toBeLessThanOrEqual(16);
+  });
+
   it("downscalePngBase64 réduit une grande image au plus grand côté = maxDim", async () => {
     const { PNG } = await import("pngjs");
     const { downscalePngBase64 } = await import("./aiPreanalysis");

@@ -1786,6 +1786,8 @@ export const appRouter = router({
             .default([]),
           priorStudyId: z.number().int().optional(),
           priorSeriesId: z.number().int().optional(),
+          // Analyser TOUTES les séries du dossier (pas seulement la série vue).
+          wholeStudy: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -1809,6 +1811,7 @@ export const appRouter = router({
             keyImages: input.keyImages,
             priorStudyId,
             priorSeriesId: input.priorSeriesId,
+            wholeStudy: input.wholeStudy,
           },
           { user: { id: ctx.user.id }, req: { ip: ctx.req?.ip } }
         );

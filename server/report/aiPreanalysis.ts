@@ -50,6 +50,52 @@ const VISION_MAX_DIM = 768;
 export interface PreanalysisKeyImage {
   pngBase64: string;
   sliceIndex: number;
+  // Étiquette de la série d'origine (mode « toute l'étude ») : ex.
+  // « OS Dur Vol — CT ». Permet à l'IA de structurer le CR par série.
+  seriesLabel?: string;
+}
+
+/**
+ * Répartit un budget total d'images sur N séries, pondéré par leur taille
+ * (nombre de coupes), avec au moins 1 image par série tant que le budget le
+ * permet. Renvoie un tableau parallèle aux poids (somme ≤ total). PUR.
+ */
+export function distributeImageBudget(
+  weights: readonly number[],
+  total: number
+): number[] {
+  const n = weights.length;
+  if (n === 0 || total <= 0) return weights.map(() => 0);
+  // Plus de séries que d'images : 1 image pour les `total` premières séries.
+  if (total <= n) return weights.map((_, i) => (i < total ? 1 : 0));
+  const w = weights.map(x => Math.max(1, x || 0));
+  const sum = w.reduce((a, b) => a + b, 0);
+  const alloc = w.map(x => Math.max(1, Math.floor((total * x) / sum)));
+  let used = alloc.reduce((a, b) => a + b, 0);
+  // Distribue le reliquat aux plus grosses séries d'abord.
+  const order = w
+    .map((x, i) => [x, i] as const)
+    .sort((a, b) => b[0] - a[0])
+    .map(([, i]) => i);
+  let k = 0;
+  while (used < total) {
+    alloc[order[k % n]]++;
+    used++;
+    k++;
+  }
+  // Si l'allocation dépasse (arrondis), rogne les plus grosses.
+  let over = used - total;
+  let j = 0;
+  while (over > 0) {
+    const idx = order[j % n];
+    if (alloc[idx] > 1) {
+      alloc[idx]--;
+      over--;
+    }
+    j++;
+    if (j > n * total) break; // garde-fou
+  }
+  return alloc;
 }
 
 export interface PreanalysisResult {
@@ -228,10 +274,14 @@ export async function generatePreanalysis(
 
   // Étiquette de CHAQUE image (parallèle à `images`), utilisée par le backend
   // Claude (bloc texte avant chaque image) pour distinguer actuel / antérieur.
+  const multiSeries = chosen.some(k => k.seriesLabel);
   const labels = [
-    ...curSlices.map(n =>
-      comparing ? `EXAMEN ACTUEL — Coupe n° ${n} :` : `Coupe n° ${n} :`
-    ),
+    ...chosen.map(k => {
+      const tag = k.seriesLabel ? `[${k.seriesLabel}] ` : "";
+      return comparing
+        ? `EXAMEN ACTUEL — ${tag}Coupe n° ${k.sliceIndex} :`
+        : `${tag}Coupe n° ${k.sliceIndex} :`;
+    }),
     ...priorSlices.map(
       n =>
         `EXAMEN ANTÉRIEUR${priorDate ? ` du ${priorDate}` : ""} — Coupe n° ${n} :`
@@ -257,6 +307,13 @@ export async function generatePreanalysis(
     );
     ctxLines.push(
       `Compare les deux examens, rédige Technique / Résultats (avec un paragraphe « Comparaison à l'examen du ${priorDate ?? "précédent"} : … ») / Conclusion, puis Anomalie (oui/non), Coupe-clé, et enfin Évolution (stable/progression/régression).`
+    );
+  } else if (multiSeries) {
+    ctxLines.push(
+      `Cet examen comporte PLUSIEURS SÉRIES (chaque image est étiquetée « [description — modalité] »). On te fournit ${images.length} image(s) réparties sur l'ENSEMBLE des séries du dossier.`
+    );
+    ctxLines.push(
+      "Passe TOUTES les séries en revue. Structure les Résultats PAR SÉRIE / région anatomique (un paragraphe par série, en reprenant son intitulé), puis fais une Conclusion de SYNTHÈSE de l'examen complet. Indique Anomalie (oui/non) globale et le numéro de la Coupe-clé la plus pertinente."
     );
   } else {
     const total = opts.totalSlices ?? images.length;
@@ -423,49 +480,85 @@ export async function secondOpinionAbnormal(
  * RIEN ») → bien plus sûre qu'une déduction. Le résultat est injecté comme
  * DONNÉE « à vérifier », jamais comme vérité. Best-effort, null si rien.
  */
+const OCR_SYSTEM =
+  "Tu fais de l'OCR et le REPÉRAGE DES MESURES sur des images d'imagerie (souvent échographie). DEUX tâches :\n" +
+  "(1) Transcris EXACTEMENT le texte/les chiffres incrustés : organe (ex. « REIN G », « FOIE »), latéralité, valeurs en cm/mm, paramètres machine.\n" +
+  "(2) Repère TOUT curseur/marqueur de mesure : croix « + », repères « 1 »/« 2 », lignes en POINTILLÉS ou TIRETS reliant deux points. Signale leur présence et l'organe concerné, MÊME si aucune valeur chiffrée n'est lisible (ex. « Curseur de mesure (croix +) présent sur le rein gauche, valeur non lisible »).\n" +
+  "RÈGLE ABSOLUE : n'invente AUCUNE valeur chiffrée ; recopie ce qui est écrit et décris FACTUELLEMENT les curseurs visibles. Ne décris pas l'anatomie. Si vraiment rien (ni texte ni curseur), réponds exactement « aucun ».";
+
 export async function extractBurnedInText(
-  images: PreanalysisKeyImage[]
+  images: PreanalysisKeyImage[],
+  opts: { cloud?: boolean } = {}
 ): Promise<string | null> {
-  // Quelques frames réparties suffisent (les mesures sont sur les coupes
-  // pertinentes) ; on borne à 6 pour ne pas saturer le contexte ni la latence.
-  const picks: string[] = [];
   const n = images.length;
   if (n === 0) return null;
+  // PLEINE résolution (1024) — un curseur fin « + » et un petit chiffre sont
+  // illisibles en 512 px. On prend jusqu'à 6 frames réparties.
+  const picks: string[] = [];
   const step = Math.max(1, Math.floor(n / 6));
   for (let i = 0; i < n && picks.length < 6; i += step) {
-    picks.push(downscalePngBase64(images[i].pngBase64, 512));
+    picks.push(downscalePngBase64(images[i].pngBase64, 1024));
   }
-  const sys =
-    "Tu fais de l'OCR sur des images médicales. Transcris EXACTEMENT le texte et " +
-    "les chiffres AFFICHÉS/INCRUSTÉS (étiquette d'organe ex. FOIE, latéralité, " +
-    "mesures en cm/mm, valeurs près des curseurs « + », paramètres machine). " +
-    "RÈGLE ABSOLUE : n'invente RIEN, ne déduis RIEN, ne décris pas l'anatomie. " +
-    "Recopie uniquement ce qui est ÉCRIT. Si rien n'est lisible, réponds exactement « aucun ».";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000);
   try {
-    const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: ENV.ollamaVisionModel,
-        stream: false,
-        keep_alive: -1,
-        options: { num_ctx: 8192, num_predict: 200, temperature: 0 },
-        messages: [
-          { role: "system", content: sys },
-          {
-            role: "user",
-            content: "Transcris le texte/les mesures affichés.",
-            images: picks,
-          },
-        ],
-      }),
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    const txt = (data?.message?.content ?? "").trim();
+    let txt = "";
+    // Cloud (Opus) : lit les petits curseurs/chiffres bien mieux que le local.
+    if (opts.cloud && ENV.anthropicApiKey) {
+      const content: any[] = picks.map(b64 => ({
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: b64 },
+      }));
+      content.push({
+        type: "text",
+        text: "Transcris le texte incrusté et signale tout curseur de mesure (croix +, pointillés), par organe.",
+      });
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": ENV.anthropicApiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: ENV.anthropicModel,
+          max_tokens: 400,
+          system: OCR_SYSTEM,
+          messages: [{ role: "user", content }],
+        }),
+      });
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      txt = (Array.isArray(data?.content) ? data.content : [])
+        .filter((b: any) => b.type === "text")
+        .map((b: any) => b.text)
+        .join("\n")
+        .trim();
+    } else {
+      const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: ENV.ollamaVisionModel,
+          stream: false,
+          keep_alive: -1,
+          options: { num_ctx: 8192, num_predict: 250, temperature: 0 },
+          messages: [
+            { role: "system", content: OCR_SYSTEM },
+            {
+              role: "user",
+              content: "Transcris le texte/les mesures affichés.",
+              images: picks,
+            },
+          ],
+        }),
+      });
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      txt = (data?.message?.content ?? "").trim();
+    }
     if (!txt || /^aucun\.?$/i.test(txt)) return null;
     return txt;
   } catch {
@@ -633,6 +726,9 @@ export interface RunAiPreanalysisInput {
   windowCenter?: number;
   windowWidth?: number;
   sampleCount?: number;
+  // Analyse de TOUTE l'étude : échantillonne sur toutes les séries du dossier
+  // (pas seulement `seriesId`), chaque image étiquetée de sa série.
+  wholeStudy?: boolean;
   // Antériorité à comparer (mesure d'évolution) ; absente → pas de comparaison.
   priorStudyId?: number;
   priorSeriesId?: number;
@@ -710,7 +806,48 @@ export async function runAiPreanalysis(
     ENV.aiBackend === "claude" &&
     !!ENV.anthropicApiKey &&
     ENV.cloudAiPhiConsent;
-  if (input.seriesId) {
+  const imgBudget = cloudVision ? 24 : 16;
+  // Mode « toute l'étude » : échantillonne sur TOUTES les séries du dossier
+  // (budget réparti par taille), chaque image étiquetée de sa série → l'IA lit
+  // l'examen complet et structure le CR par série. Anti-IDOR implicite : toutes
+  // les séries appartiennent à l'étude demandée.
+  if (input.wholeStudy) {
+    try {
+      const { sampleSeriesPngs } = await import("./aiSampling");
+      const allSeries = await listSeriesByStudy(input.studyId);
+      const budget = distributeImageBudget(
+        allSeries.map((s: any) => s.numberOfInstances ?? 1),
+        imgBudget
+      );
+      for (let i = 0; i < allSeries.length; i++) {
+        const cnt = budget[i];
+        if (!cnt) continue;
+        const s: any = allSeries[i];
+        try {
+          const sampled = await sampleSeriesPngs(s.id, {
+            windowCenter: wc,
+            windowWidth: ww,
+            count: cnt,
+            maxDim: cloudVision ? 1024 : 768,
+          });
+          const label = `${s.seriesDescription || `Série ${s.seriesNumber ?? s.id}`} — ${s.modality || "?"}`;
+          for (const x of sampled.images) {
+            images.push({
+              pngBase64: x.pngBase64,
+              sliceIndex: x.sliceNumber,
+              seriesLabel: label,
+            });
+          }
+          totalSlices += sampled.totalSlices;
+        } catch {
+          // série non rendable → on continue avec les autres
+        }
+      }
+    } catch (e) {
+      console.warn("[aiPreanalysis] échantillonnage multi-séries échoué:", e);
+    }
+  }
+  if (input.seriesId && images.length === 0) {
     try {
       const { sampleSeriesPngs } = await import("./aiSampling");
       const sampled = await sampleSeriesPngs(input.seriesId, {
@@ -840,7 +977,8 @@ export async function runAiPreanalysis(
   // dans les VRAIES valeurs affichées. Fail-soft, PHI-safe (vision GPU CH).
   let screenText: string | undefined;
   try {
-    screenText = (await extractBurnedInText(images)) ?? undefined;
+    screenText =
+      (await extractBurnedInText(images, { cloud: cloudVision })) ?? undefined;
   } catch (e) {
     console.warn("[aiPreanalysis] OCR repères incrustés échoué:", e);
   }

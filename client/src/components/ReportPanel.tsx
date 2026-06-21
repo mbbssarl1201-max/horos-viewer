@@ -664,6 +664,9 @@ export default function ReportPanel({
                 })),
                 priorStudyId: comparePriorStudyId ?? undefined,
                 priorSeriesId: comparePriorSeriesId ?? undefined,
+                // Analyse de TOUT le dossier : couvre toutes les séries de
+                // l'étude (sauf en mode comparaison d'antériorité).
+                wholeStudy: comparePriorStudyId == null,
               });
               // Ne pré-remplit QUE les champs vides.
               setSections(s => ({

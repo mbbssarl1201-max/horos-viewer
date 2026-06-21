@@ -67,6 +67,33 @@ export const ENV = {
   // même si AI_BACKEND=claude, on retombe sur Ollama local (PHI-safe).
   cloudAiPhiConsent:
     (process.env.MEDIVIEW_CLOUD_AI_PHI_CONSENT ?? "false") === "true",
+
+  // --- Moteurs d'IA CERTIFIÉS tiers (dispositifs médicaux CE/FDA/Swissmedic) --
+  // Chacun est INACTIF tant que son URL+clé ne sont pas fournies (contrat requis).
+  // Le flag *_PHI_CONSENT garde l'envoi de PHI vers le cloud du fournisseur
+  // (DPA + nLPD + enregistrement Swissmedic obligatoires avant activation).
+  // CARPL.ai — marketplace vendor-neutral (recommandé pour démarrer/évaluer).
+  carplUrl: process.env.CARPL_URL ?? "",
+  carplApiKey: process.env.CARPL_API_KEY ?? "",
+  carplPhiConsent: (process.env.CARPL_PHI_CONSENT ?? "false") === "true",
+  // Blackford — plateforme 90+ apps multi-vendeurs.
+  blackfordUrl: process.env.BLACKFORD_URL ?? "",
+  blackfordApiKey: process.env.BLACKFORD_API_KEY ?? "",
+  blackfordPhiConsent:
+    (process.env.BLACKFORD_PHI_CONSENT ?? "false") === "true",
+  // Gleamer BoneView — radio (fractures/MSK).
+  gleamerUrl: process.env.GLEAMER_URL ?? "",
+  gleamerApiKey: process.env.GLEAMER_API_KEY ?? "",
+  gleamerPhiConsent: (process.env.GLEAMER_PHI_CONSENT ?? "false") === "true",
+  // Koios DS Breast — échographie/mammo mammaire (BI-RADS).
+  koiosUrl: process.env.KOIOS_URL ?? "",
+  koiosApiKey: process.env.KOIOS_API_KEY ?? "",
+  koiosPhiConsent: (process.env.KOIOS_PHI_CONSENT ?? "false") === "true",
+  // Aidoc — CT/urgences (AVC, EP, hémorragie).
+  aidocUrl: process.env.AIDOC_URL ?? "",
+  aidocApiKey: process.env.AIDOC_API_KEY ?? "",
+  aidocPhiConsent: (process.env.AIDOC_PHI_CONSENT ?? "false") === "true",
+
   // SMTP Email
   smtpHost: process.env.SMTP_HOST ?? "",
   smtpPort: parseInt(process.env.SMTP_PORT ?? "587"),

@@ -2036,6 +2036,52 @@ export const appRouter = router({
       const { gpuWake } = await import("./report/gpuControl");
       return gpuWake();
     }),
+
+    // --- IA CERTIFIÉE (dispositifs médicaux CE/FDA tiers) -------------------
+    // Inventaire des moteurs certifiés branchables (configurés ou non) — pour
+    // afficher dans l'UI ce qui est disponible et ce qui est actif.
+    certifiedAiInventory: medicalProcedure.query(async () => {
+      const { certifiedAiInventory } = await import("./report/externalAI");
+      return certifiedAiInventory();
+    }),
+    // Lance une analyse par un moteur CERTIFIÉ pour la modalité de l'étude.
+    // Renvoie { available:false } si aucun fournisseur certifié n'est branché
+    // (cas par défaut tant qu'aucun contrat n'est signé) → l'UI propose alors
+    // uniquement l'aide interne (Claude/Ollama, non certifiée). La modalité et
+    // le StudyInstanceUID sont résolus SERVEUR (la DB les a déjà) pour ne pas
+    // dépendre du client.
+    certifiedAnalysis: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          seriesId: z.number().int().optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { runCertifiedAnalysis } = await import("./report/externalAI");
+        const { getStudyById } = await import("./db");
+        const study: any = await getStudyById(input.studyId);
+        if (!study) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Étude introuvable" });
+        }
+        const rawMod = (study.modality ?? "").trim().toUpperCase();
+        // Normalise les modalités DICOM radio vers notre enum XR.
+        const modality = (["CR", "DX", "DR", "RX"].includes(rawMod)
+          ? "XR"
+          : rawMod) as
+          | "XR" | "CT" | "MR" | "US" | "MG" | "PT" | "NM";
+        const studyInstanceUid =
+          study.studyInstanceUid ?? study.studyInstanceUID ?? "";
+        const result = await runCertifiedAnalysis({
+          studyId: input.studyId,
+          seriesId: input.seriesId,
+          modality,
+          studyInstanceUid,
+        });
+        return result
+          ? { available: true as const, result }
+          : { available: false as const, modality };
+      }),
     // --- Mode validation IA -------------------------------------------------
     // Verdict du médecin sur le brouillon IA d'une étude (juste/partielle/fausse
     // + anomalie ratée). La lecture humaine = vérité ; sert à mesurer l'accord.

@@ -203,22 +203,22 @@ export async function generatePreanalysis(
     );
   }
   const comparing = !!opts.prior && opts.prior.images.length > 0;
-  // Vision portée par le GPU L4 (24 Go VRAM) → 16 coupes pleine résolution,
-  // comme Claude. En mode comparatif, le budget est partagé entre les deux examens.
-  const maxImages = 16;
+  // Budget d'images adapté au modèle : Claude (grand contexte, cloud) encaisse
+  // PLUS de coupes en PLEINE résolution → meilleure lecture de l'examen. Le
+  // modèle local (GPU L4) reste à 16/768 px pour ne pas le saturer.
+  const maxImages = useClaude ? 24 : 16;
+  const visionDim = useClaude ? 1024 : VISION_MAX_DIM;
   const perStudy = comparing
     ? Math.max(1, Math.floor(maxImages / 2))
     : maxImages;
 
   const chosen = keyImages.slice(0, perStudy);
-  const curImages = chosen.map(k =>
-    downscalePngBase64(k.pngBase64, VISION_MAX_DIM)
-  );
+  const curImages = chosen.map(k => downscalePngBase64(k.pngBase64, visionDim));
   const curSlices = chosen.map(k => k.sliceIndex);
 
   const priorChosen = comparing ? opts.prior!.images.slice(0, perStudy) : [];
   const priorImages = priorChosen.map(k =>
-    downscalePngBase64(k.pngBase64, VISION_MAX_DIM)
+    downscalePngBase64(k.pngBase64, visionDim)
   );
   const priorSlices = priorChosen.map(k => k.sliceIndex);
   const priorDate = opts.prior?.date;
@@ -704,15 +704,25 @@ export async function runAiPreanalysis(
   // sur les images clés capturées côté client si l'échantillonnage échoue.
   let images: PreanalysisKeyImage[] = [];
   let totalSlices = 0;
+  // Vision cloud (Claude) active → on échantillonne PLUS de coupes (grand
+  // contexte) pour une meilleure couverture du volume ; sinon budget local.
+  const cloudVision =
+    ENV.aiBackend === "claude" &&
+    !!ENV.anthropicApiKey &&
+    ENV.cloudAiPhiConsent;
   if (input.seriesId) {
     try {
       const { sampleSeriesPngs } = await import("./aiSampling");
       const sampled = await sampleSeriesPngs(input.seriesId, {
         windowCenter: wc,
         windowWidth: ww,
-        // Vision sur GPU : on analyse 16 coupes réparties sur tout le volume
-        // (8 quand on compare une antériorité, pour partager le budget).
-        count: input.sampleCount ?? (input.priorStudyId ? 8 : 16),
+        // Coupes réparties sur tout le volume. Cloud Claude : 24 (12 en
+        // comparaison) ; local : 16 (8 en comparaison).
+        count:
+          input.sampleCount ??
+          (input.priorStudyId ? (cloudVision ? 12 : 8) : cloudVision ? 24 : 16),
+        // Pleine résolution pour Claude (lit plus de détail) ; 768 en local.
+        maxDim: cloudVision ? 1024 : 768,
       });
       images = sampled.images.map(s => ({
         pngBase64: s.pngBase64,

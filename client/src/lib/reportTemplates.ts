@@ -121,4 +121,15 @@ export const REPORT_TEMPLATES: ReportTemplate[] = [
       conclusion: "",
     },
   },
+  {
+    id: "irm_pelvienne_feminine",
+    label: "IRM pelvienne (féminine)",
+    sections: {
+      technique:
+        "IRM pelvienne, séquences T2 FSE (axial, sagittal, coronal), T1 SE ± saturation de graisse, ± injection de gadolinium.",
+      resultats:
+        "Utérus [antéversé / rétroversé] mesurant environ [L × l × ép] cm.\nZone jonctionnelle d'épaisseur maximale [..] mm, contours [réguliers/irréguliers].\nMyomètre : [pas de myome individualisable / myome FIGO ..].\nEndomètre fin mesurant environ [..] mm.\nCol utérin : [sans particularité / kyste de Naboth sans caractère suspect].\nOvaires de morphologie conservée, sans masse annexielle significative. Absence d'endométriome identifié.\nPas d'argument en faveur d'une endométriose profonde (compartiments antérieur, postérieur, ligaments utéro-sacrés).\nAbsence d'épanchement pelvien significatif.\nVessie et rectosigmoïde sans anomalie notable.",
+      conclusion: "",
+    },
+  },
 ];

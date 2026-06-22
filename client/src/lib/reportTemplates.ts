@@ -47,9 +47,22 @@ export const REPORT_TEMPLATES: ReportTemplate[] = [
     id: "ct_crane",
     label: "Scanner cérébral",
     sections: {
-      technique: "Acquisition tomodensitométrique cérébrale sans injection.",
+      technique:
+        "Acquisition tomodensitométrique cérébrale sans injection [± sinus / rochers / orbites].",
       resultats:
-        "Pas d'hémorragie intra- ou extra-axiale.\nParenchyme : pas de lésion focale, différenciation substance grise/blanche conservée.\nSystème ventriculaire : de taille et de morphologie normales.\nPas d'effet de masse ni d'engagement.\nStructures osseuses / sinus : ",
+        "Pas d'hémorragie intra- ou extra-axiale.\nParenchyme : pas de lésion focale, différenciation substance grise/blanche conservée.\nSystème ventriculaire et espaces sous-arachnoïdiens : de taille et de morphologie normales.\nPas d'effet de masse, de déviation de la ligne médiane ni d'engagement.\nStructures osseuses (voûte/base) / sinus de la face : sans particularité.",
+      conclusion:
+        "[Examen dans les limites de l'examen natif ; l'ischémie aiguë récente et les lésions de fosse postérieure peuvent échapper au CT — IRM si forte suspicion clinique.]",
+    },
+  },
+  {
+    id: "ct_rachis_lombaire",
+    label: "Scanner du rachis lombaire",
+    sections: {
+      technique:
+        "Acquisition tomodensitométrique du rachis lombaire sans injection, reconstructions multiplanaires.",
+      resultats:
+        "Alignement / statique : [conservé / antélisthésis ..].\nIsthmes vertébraux : [intègres / lyse isthmique uni- ou bilatérale de L..].\nDisques : [pas de hernie compressive / discopathie .., hernie ..].\nCanal rachidien et foramens : [calibre conservé / sténose ..].\nCorps vertébraux et articulaires : pas de tassement, pas de lésion lytique ou condensante.\nParties molles para-vertébrales : sans particularité.",
       conclusion: "",
     },
   },

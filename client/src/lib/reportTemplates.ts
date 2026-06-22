@@ -156,4 +156,15 @@ export const REPORT_TEMPLATES: ReportTemplate[] = [
       conclusion: "",
     },
   },
+  {
+    id: "irm_rachis_lombaire",
+    label: "IRM du rachis lombaire",
+    sections: {
+      technique:
+        "IRM du rachis lombaire, séquences T1, T2 et T2 FS (sagittal, axial, coronal), sans injection.",
+      resultats:
+        "Alignement / statique : [conservé / listhésis ..].\nCorps vertébraux : hauteur conservée, pas de tassement ni d'œdème (T2 FS). [Modic .. si présent].\nDisques (par niveau) : [hydratation, hauteur, fissuration annulaire / HIZ].\nHernie : [niveau, protrusion/extrusion, sous- ou trans-ligamentaire, médiane/para-médiane/récessale/foraminale, côté].\nConflit radiculaire : [racine concernée, contact / refoulement / compression].\nCanal, récessus latéraux et foramens : [calibre / sténose ..].\nCône terminal : en place, de signal normal.\nArticulations sacro-iliaques / bassin (si inclus) : sans particularité.",
+      conclusion: "",
+    },
+  },
 ];

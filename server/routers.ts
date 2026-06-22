@@ -2184,6 +2184,8 @@ export const appRouter = router({
           windowWidth: z.number().optional(),
           indication: z.string().max(5000).optional(),
           antecedents: z.string().max(5000).optional(),
+          // Balayer TOUTES les séries diagnostiques du dossier (pas qu'une).
+          wholeStudy: z.boolean().optional(),
         })
       )
       .mutation(async ({ input }) => {
@@ -2211,6 +2213,7 @@ export const appRouter = router({
           windowWidth: input.windowWidth ?? 400,
           indication: input.indication,
           antecedents: input.antecedents,
+          wholeStudy: input.wholeStudy,
         });
       }),
     exhaustiveStatus: medicalProcedure

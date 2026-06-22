@@ -1050,6 +1050,8 @@ export default function ReportPanel({
                 windowCenter,
                 windowWidth,
                 antecedents: antecedents || undefined,
+                // Balaye TOUT le dossier (toutes les séries diagnostiques).
+                wholeStudy: true,
               });
               setExhaustiveJob(r.jobId);
             }}
@@ -1059,9 +1061,9 @@ export default function ReportPanel({
               exhaustiveStatus.data?.status === "running"
             }
             className="text-[11px] rounded bg-blue-500/15 text-blue-400 px-2 py-1 disabled:opacity-50"
-            title="Balaye TOUTES les coupes du volume (couverture 100 %). Long (~10-15 min). Non certifié, à valider."
+            title="Balaye CHAQUE coupe de TOUTES les séries diagnostiques du dossier (couverture 100 %) + mesures (CT), puis lecture experte Opus. Long (plusieurs minutes selon le nombre d'images). Non certifié, à valider."
           >
-            Analyse exhaustive (tout le volume)
+            Analyse exhaustive (tout le dossier)
           </button>
           {exhaustiveStatus.data?.status === "running" && (
             <span className="text-[11px] text-blue-400">

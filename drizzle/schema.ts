@@ -354,3 +354,29 @@ export const aiEvaluations = mysqlTable("ai_evaluations", {
 });
 export type AiEvaluation = typeof aiEvaluations.$inferSelect;
 export type InsertAiEvaluation = typeof aiEvaluations.$inferInsert;
+
+/**
+ * Jobs d'analyse EXHAUSTIVE (tâche de fond, longue).
+ * Persistés en base pour SURVIVRE à un redémarrage : au boot, tout job resté
+ * « running » est marqué « error » (interrompu) → le client voit « relancez »
+ * au lieu d'un « 0/N » figé ou d'un « Job inconnu ». (Pas de reprise auto.)
+ */
+export const aiJobs = mysqlTable(
+  "ai_jobs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    studyId: int("studyId").notNull(),
+    status: mysqlEnum("status", ["running", "done", "error"])
+      .notNull()
+      .default("running"),
+    progressDone: int("progressDone").notNull().default(0),
+    progressTotal: int("progressTotal").notNull().default(0),
+    result: json("result"),
+    error: varchar("error", { length: 512 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => ({ studyIdx: index("ai_jobs_study_idx").on(t.studyId) })
+);
+export type AiJob = typeof aiJobs.$inferSelect;
+export type InsertAiJob = typeof aiJobs.$inferInsert;

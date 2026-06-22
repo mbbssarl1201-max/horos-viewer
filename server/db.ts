@@ -1,4 +1,15 @@
-import { eq, desc, and, like, sql, gte, ne, asc, inArray } from "drizzle-orm";
+import {
+  eq,
+  desc,
+  and,
+  like,
+  sql,
+  gte,
+  lt,
+  ne,
+  asc,
+  inArray,
+} from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -15,6 +26,7 @@ import {
   reports,
   reportAddenda,
   aiEvaluations,
+  aiJobs,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import {
@@ -771,4 +783,119 @@ export async function getAiEvaluationStats() {
     fausse: count("fausse"),
     missed: evaluated.filter(r => r.missed).length,
   };
+}
+
+// ============ AI EXHAUSTIVE JOBS (persistés, survivent au redémarrage) ============
+
+export interface AiJobState {
+  status: "running" | "done" | "error";
+  progress: { done: number; total: number };
+  result?: unknown;
+  error?: string;
+}
+
+export async function createAiJob(id: string, studyId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.insert(aiJobs).values({ id, studyId, status: "running" });
+  } catch (e) {
+    console.warn("[AiJob] create failed:", e);
+  }
+}
+
+export async function updateAiJobProgress(
+  id: string,
+  done: number,
+  total: number
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db
+      .update(aiJobs)
+      .set({ progressDone: done, progressTotal: total, updatedAt: new Date() })
+      .where(eq(aiJobs.id, id));
+  } catch {
+    /* best-effort */
+  }
+}
+
+export async function finishAiJob(id: string, result: unknown): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db
+      .update(aiJobs)
+      .set({ status: "done", result: result as any, updatedAt: new Date() })
+      .where(eq(aiJobs.id, id));
+  } catch (e) {
+    console.warn("[AiJob] finish failed:", e);
+  }
+}
+
+export async function failAiJob(id: string, error: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db
+      .update(aiJobs)
+      .set({
+        status: "error",
+        error: error.slice(0, 512),
+        updatedAt: new Date(),
+      })
+      .where(eq(aiJobs.id, id));
+  } catch {
+    /* best-effort */
+  }
+}
+
+export async function getAiJob(id: string): Promise<AiJobState | null> {
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    const rows = await db
+      .select()
+      .from(aiJobs)
+      .where(eq(aiJobs.id, id))
+      .limit(1);
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      status: r.status,
+      progress: { done: r.progressDone, total: r.progressTotal },
+      result: r.result ?? undefined,
+      error: r.error ?? undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Au boot : tout job resté « running » provient d'un crash/redémarrage (le
+ * calcul en mémoire est perdu) → on le marque « error » pour que le client
+ * affiche « interrompu, relancez » au lieu d'un avancement figé.
+ * Purge aussi les jobs de plus de 24 h (évite l'accumulation).
+ */
+export async function recoverStaleAiJobs(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  try {
+    await db
+      .update(aiJobs)
+      .set({
+        status: "error",
+        error: "Analyse interrompue par un redémarrage du serveur — relancez.",
+        updatedAt: new Date(),
+      })
+      .where(eq(aiJobs.status, "running"));
+    const cutoff = new Date(Date.now() - 24 * 3600_000);
+    await db.delete(aiJobs).where(lt(aiJobs.createdAt, cutoff));
+    return 1;
+  } catch (e) {
+    console.warn("[AiJob] recover failed:", e);
+    return 0;
+  }
 }

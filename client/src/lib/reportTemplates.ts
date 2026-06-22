@@ -26,9 +26,20 @@ export const REPORT_TEMPLATES: ReportTemplate[] = [
     label: "Scanner abdomino-pelvien",
     sections: {
       technique:
-        "Acquisition tomodensitométrique abdomino-pelvienne, [temps portal / sans injection].",
+        "Acquisition tomodensitométrique abdomino-pelvienne, [temps portal / sans injection]. Reconstructions multiplanaires.",
       resultats:
-        "Foie : taille et contours normaux, pas de lésion focale.\nVésicule / voies biliaires : \nPancréas : \nRate : \nReins et voies urinaires : \nDigestif : \nPéritoine / adénopathies : \nStructures osseuses : ",
+        "Bases pulmonaires : sans particularité.\nFoie : taille et contours normaux, parenchyme homogène, pas de lésion focale. Voies biliaires non dilatées.\nVésicule biliaire : paroi fine, sans lithiase dense.\nPancréas : morphologie conservée.\nRate : taille normale, homogène.\nSurrénales : fines.\nReins et voies urinaires : taille et morphologie conservées, pas de dilatation des cavités, pas de lithiase. Uretères non dilatés.\nVessie : paroi fine.\nTube digestif : pas d'épaississement pariétal suspect.\nPéritoine / adénopathies : pas d'épanchement, pas d'adénopathie significative.\nVaisseaux : aorte et axes iliaques de calibre conservé.\nStructures osseuses : pas de lésion lytique ou condensante.",
+      conclusion: "",
+    },
+  },
+  {
+    id: "ct_pan_trauma",
+    label: "Pan-scanner post-traumatique (natif)",
+    sections: {
+      technique:
+        "CT hélicoïdal sans injection, acquisitions cérébrale, cervicale, thoraco-abdomino-pelvienne et ostéo-articulaire, reconstructions multiplanaires.",
+      resultats:
+        "Crâne / encéphale : absence d'hémorragie intra- ou extra-axiale. Système ventriculaire normal. Structures osseuses de la voûte et de la base intactes.\nMassif facial / sinus / rochers : bonne pneumatisation, sans niveau hydro-aérique.\nRachis cervical et lombaire : alignement conservé, sans fracture, tassement ni lésion agressive.\nThorax : absence de pneumothorax ou d'hémothorax. Bases pulmonaires sans contusion.\nAbdomen : foie, rate, pancréas, reins et surrénales sans lésion traumatique. Absence d'hémopéritoine, de pneumopéritoine ou de collection.\nPelvis / vessie : vessie à paroi fine. Pas de fracture du bassin.\nMembres / articulations : absence de fracture, luxation ou diastasis [épaule / hanche / genou / cheville].",
       conclusion: "",
     },
   },

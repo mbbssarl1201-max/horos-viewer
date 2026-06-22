@@ -1579,6 +1579,8 @@ export const appRouter = router({
           wholeStudy: z.boolean().optional(),
           // Comparaison auto avec toutes les antériorités du patient.
           compareAllPriors: z.boolean().optional(),
+          // Analyse approfondie (beaucoup plus de coupes) — toujours active.
+          deepAnalysis: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -1798,6 +1800,9 @@ export const appRouter = router({
           doubleRead: z.boolean().optional(),
           // Comparaison auto avec TOUTES les antériorités du patient.
           compareAllPriors: z.boolean().optional(),
+          // Segmentation/mesures (CT) ancrées dans le rapport.
+          includeSegmentation: z.boolean().optional(),
+          highResSegmentation: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -1826,6 +1831,8 @@ export const appRouter = router({
             deepAnalysis: input.deepAnalysis,
             doubleRead: input.doubleRead,
             compareAllPriors: input.compareAllPriors,
+            includeSegmentation: input.includeSegmentation,
+            highResSegmentation: input.highResSegmentation,
           },
           { user: { id: ctx.user.id }, req: { ip: ctx.req?.ip } }
         );
@@ -2062,14 +2069,16 @@ export const appRouter = router({
         const { getStudyById } = await import("./db");
         const study: any = await getStudyById(input.studyId);
         if (!study) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Étude introuvable" });
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
         }
         const rawMod = (study.modality ?? "").trim().toUpperCase();
         // Normalise les modalités DICOM radio vers notre enum XR.
-        const modality = (["CR", "DX", "DR", "RX"].includes(rawMod)
-          ? "XR"
-          : rawMod) as
-          | "XR" | "CT" | "MR" | "US" | "MG" | "PT" | "NM";
+        const modality = (
+          ["CR", "DX", "DR", "RX"].includes(rawMod) ? "XR" : rawMod
+        ) as "XR" | "CT" | "MR" | "US" | "MG" | "PT" | "NM";
         const studyInstanceUid =
           study.studyInstanceUid ?? study.studyInstanceUID ?? "";
         const result = await runCertifiedAnalysis({

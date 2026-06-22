@@ -362,13 +362,15 @@ export default function ReportPanel({
       })),
       indication: sections.indication || undefined,
       antecedents: antecedentsArg || undefined,
-      includeSegmentation: override?.includeSegmentation,
-      highResSegmentation: override?.highResSegmentation,
+      // Analyse AUTO (sans override) = MAXIMUM systématique : toute l'étude +
+      // approfondie + mesures (segmentation CT) + double lecture + vérif +
+      // comparaison antériorités. Les boutons ciblés gardent leur réglage.
+      includeSegmentation: override?.includeSegmentation ?? true,
+      highResSegmentation: override?.highResSegmentation ?? true,
       doubleRead,
-      // Auto (sans override) → analyse TOUTE l'étude + compare les antériorités.
-      // Les boutons ciblés (segmentation CT d'une série) restent mono-série.
       wholeStudy: !override,
       compareAllPriors: !override,
+      deepAnalysis: !override,
     });
     setAnalyzedSeriesId(sid);
     setSecondOpinion(res.secondOpinion ?? null);
@@ -677,13 +679,15 @@ export default function ReportPanel({
                 })),
                 priorStudyId: comparePriorStudyId ?? undefined,
                 priorSeriesId: comparePriorSeriesId ?? undefined,
-                // Analyse de TOUT le dossier : couvre toutes les séries de
-                // l'étude (sauf en mode comparaison d'antériorité).
+                // MAXIMUM systématique (le médecin valide) : toute l'étude +
+                // approfondie + mesures (segmentation CT) + double lecture +
+                // vérification + comparaison antériorités.
                 wholeStudy: comparePriorStudyId == null,
-                // Double lecture toujours active (UI simplifiée).
                 doubleRead: true,
-                // Comparaison auto avec les antériorités (hors mode compare explicite).
                 compareAllPriors: comparePriorStudyId == null,
+                deepAnalysis: true,
+                includeSegmentation: true,
+                highResSegmentation: true,
               });
               // Ne pré-remplit QUE les champs vides.
               setSections(s => ({
@@ -923,8 +927,9 @@ export default function ReportPanel({
           </button>
         </div>
       )}
-      {!isSigned && secondOpinion && (
-        secondOpinion.abnormal != null && !secondOpinion.agree ? (
+      {!isSigned &&
+        secondOpinion &&
+        (secondOpinion.abnormal != null && !secondOpinion.agree ? (
           // DÉSACCORD entre les 2 modèles = signal d'incertitude le plus
           // important : on le rend SAILLANT (bandeau encadré) pour qu'il ne
           // passe pas inaperçu, contrairement à l'accord/non-concluant discrets.
@@ -952,8 +957,7 @@ export default function ReportPanel({
               ? "2e modèle : avis non concluant"
               : "✓ 2e modèle d'accord avec le 1er"}
           </p>
-        )
-      )}
+        ))}
 
       {/* --- IA CERTIFIÉE (dispositifs médicaux CE/FDA) -------------------- */}
       {!isSigned && (
@@ -988,12 +992,11 @@ export default function ReportPanel({
             </button>
           ) : (
             <p className="text-[10px] text-muted-foreground">
-              Aucun moteur certifié branché. Le compte rendu IA ci-dessus est une
-              aide NON certifiée, à valider et signer par le médecin. Moteurs
-              intégrables :{" "}
-              {(certifiedInventory.data ?? [])
-                .map(p => p.name)
-                .join(", ") || "—"}
+              Aucun moteur certifié branché. Le compte rendu IA ci-dessus est
+              une aide NON certifiée, à valider et signer par le médecin.
+              Moteurs intégrables :{" "}
+              {(certifiedInventory.data ?? []).map(p => p.name).join(", ") ||
+                "—"}
               .
             </p>
           )}

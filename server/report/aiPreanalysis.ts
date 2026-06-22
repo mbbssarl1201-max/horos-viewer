@@ -1264,7 +1264,15 @@ export async function runAiPreanalysis(
   // Mode précis : segmentation du volume entier → volumes objectifs injectés
   // dans le prompt vision. Fail-soft (si indispo, on garde le rapport vision seul).
   let measurements: string | undefined;
-  if (input.includeSegmentation && input.seriesId && ENV.segServiceUrl) {
+  // Segmentation = TotalSegmentator (CT uniquement, `isCT` défini plus haut). On
+  // la gate à la modalité CT pour qu'un includeSegmentation « toujours actif » ne
+  // perde pas de temps en écho/IRM (où elle ne s'applique pas).
+  if (
+    input.includeSegmentation &&
+    isCT &&
+    input.seriesId &&
+    ENV.segServiceUrl
+  ) {
     try {
       const { segmentCtSeries } = await import("./ctSegmentation");
       const seg = await segmentCtSeries(input.seriesId, {

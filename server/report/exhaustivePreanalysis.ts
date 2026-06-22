@@ -1,6 +1,12 @@
 import { randomUUID } from "crypto";
 import { ENV } from "../_core/env";
-import { getStudyById } from "../db";
+import {
+  getStudyById,
+  createAiJob,
+  finishAiJob,
+  failAiJob,
+  getAiJob,
+} from "../db";
 import {
   sampleSeriesPngs,
   renderSliceByNumber,
@@ -40,6 +46,7 @@ export interface ExhaustiveResult extends PreanalysisResult {
   } | null;
 }
 interface Job {
+  id: string;
   status: "running" | "done" | "error";
   progress: { done: number; total: number };
   result?: ExhaustiveResult;
@@ -312,9 +319,11 @@ async function runExhaustive(
     secondOpinion,
   };
   job.status = "done";
+  // Persiste le résultat final → survit à un redémarrage (le client le récupère).
+  await finishAiJob(job.id, job.result);
 }
 
-export function startExhaustiveJob(input: {
+export async function startExhaustiveJob(input: {
   studyId: number;
   seriesId: number;
   windowCenter: number;
@@ -322,30 +331,48 @@ export function startExhaustiveJob(input: {
   indication?: string;
   antecedents?: string;
   wholeStudy?: boolean;
-}): { jobId: string } {
+}): Promise<{ jobId: string }> {
   gc();
   const jobId = randomUUID();
   const job: Job = {
+    id: jobId,
     status: "running",
     progress: { done: 0, total: 0 },
     startedAt: Date.now(),
   };
   JOBS.set(jobId, job);
+  // Persiste l'état « running » AVANT de lancer → au redémarrage, le boot le
+  // marquera « error » (interrompu) au lieu d'un « Job inconnu » côté client.
+  await createAiJob(jobId, input.studyId);
   // Lancement en tâche de fond (pas d'await) ; le client sonde l'avancement.
   runExhaustive(job, input).catch(e => {
     job.status = "error";
     job.error = String(e?.message ?? e).slice(0, 300);
+    void failAiJob(jobId, job.error);
   });
   return { jobId };
 }
 
-export function getExhaustiveJob(jobId: string) {
+export async function getExhaustiveJob(jobId: string) {
+  // Mémoire d'abord (avancement live). Sinon base : un job lancé avant un
+  // redémarrage y est marqué « error » (interrompu) → le client peut relancer.
   const j = JOBS.get(jobId);
-  if (!j) return { status: "error" as const, error: "Job inconnu (expiré ?)" };
-  return {
-    status: j.status,
-    progress: j.progress,
-    result: j.result,
-    error: j.error,
-  };
+  if (j) {
+    return {
+      status: j.status,
+      progress: j.progress,
+      result: j.result,
+      error: j.error,
+    };
+  }
+  const persisted = await getAiJob(jobId);
+  if (persisted) {
+    return {
+      status: persisted.status,
+      progress: persisted.progress,
+      result: persisted.result as ExhaustiveResult | undefined,
+      error: persisted.error,
+    };
+  }
+  return { status: "error" as const, error: "Job inconnu (expiré ?)" };
 }

@@ -609,6 +609,11 @@ async function startServer() {
   // @sentry/node is installed (no-op otherwise). Never throws.
   await initSentry();
 
+  // Récupération : les analyses exhaustives en cours au moment d'un précédent
+  // arrêt sont marquées « interrompues » (leur calcul en mémoire est perdu),
+  // pour que le client affiche « relancez » au lieu d'un avancement figé.
+  void import("../db").then(m => m.recoverStaleAiJobs()).catch(() => {});
+
   server.listen(port, () => {
     logger.info("server.started", { port, env: process.env.NODE_ENV });
     console.log(`Server running on http://localhost:${port}/`);

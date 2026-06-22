@@ -1416,14 +1416,18 @@ export async function runAiPreanalysis(
   let secondOpinion: RunAiPreanalysisResult["secondOpinion"] = null;
   if (input.doubleRead || cloudVision) {
     try {
+      // 2e lecture INDÉPENDANTE : toujours le modèle LOCAL (qwen), distinct du
+      // rapport principal (Opus) → vrai 2e avis (rattrape les angles morts), et
+      // gratuit/local (pas d'appel Opus en plus). Un désaccord = vraie
+      // divergence inter-modèles = signal d'incertitude pertinent.
       const ab2 = await secondOpinionAbnormal(
         images,
         (study as any).modality ?? undefined,
-        cloudVision
+        false
       );
       secondOpinion = {
         abnormal: ab2,
-        model: cloudVision ? ENV.anthropicModel : ENV.ollamaVisionModel2,
+        model: ENV.ollamaVisionModel2,
         // accord seulement si le 2e modèle a donné un avis NET (non null).
         agree: ab2 !== null && ab2 === (result.abnormal ?? null),
       };

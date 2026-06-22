@@ -45,6 +45,13 @@ export const ENV = {
   // Vide = fonctionnalité désactivée. PHI-safe : tourne sur le GPU suisse.
   segServiceUrl: process.env.SEG_SERVICE_URL ?? "",
   segToken: process.env.SEG_TOKEN ?? "",
+  // Détecteur d'IA radiologique CERTIFIÉ CE (plateforme deepc/Incepto/Blackford).
+  // Aide à la détection (fractures, nodules, hémorragie…). Vide = désactivé.
+  // `mock` = démo sans clé. `http` = vraie plateforme (URL + clé + DPA nLPD requis).
+  // Brancher UNIQUEMENT un hébergement CH/UE (pas de cloud US pour le PHI).
+  detectorProvider: process.env.DETECTOR_PROVIDER ?? "", // "" | "mock" | "http"
+  detectorApiUrl: process.env.DETECTOR_API_URL ?? "",
+  detectorApiKey: process.env.DETECTOR_API_KEY ?? "",
   // Service de transcription vocale (Whisper) sur le GPU. PHI-safe (Suisse).
   // Vide = dictée désactivée.
   whisperUrl: process.env.WHISPER_URL ?? "",

@@ -2383,6 +2383,56 @@ export const appRouter = router({
       return result;
     }),
   }),
+  // Détecteur d'IA radiologique CERTIFIÉ CE (deepc/Incepto/Blackford) — aide à la
+  // détection (fracture, nodule, hémorragie). Désactivé tant que non configuré (ENV).
+  detectors: router({
+    status: medicalProcedure.query(async () => {
+      const { detectorConfigured } = await import("./report/detectors");
+      return {
+        configured: detectorConfigured(),
+        provider: ENV.detectorProvider || "",
+        certified: ENV.detectorProvider === "http",
+      };
+    }),
+    analyze: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          seriesId: z.number().int().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { getStudyById, listSeriesByStudy } = await import("./db");
+        const study = await getStudyById(input.studyId);
+        if (!study)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
+        if (input.seriesId !== undefined) {
+          const series = await listSeriesByStudy(input.studyId);
+          if (!series.some((s: any) => s.id === input.seriesId)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Série inconnue pour cette étude",
+            });
+          }
+        }
+        const { analyzeStudyWithDetector } = await import("./report/detectors");
+        const result = await analyzeStudyWithDetector(
+          input.studyId,
+          input.seriesId
+        );
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "detectors.analyze",
+          studyId: input.studyId,
+          detail: `provider=${result.provider} findings=${result.findings.length}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return result;
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

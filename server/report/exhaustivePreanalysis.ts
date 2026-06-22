@@ -104,6 +104,7 @@ async function runExhaustive(
     windowWidth: number;
     indication?: string;
     antecedents?: string;
+    wholeStudy?: boolean;
   }
 ) {
   const study = await getStudyById(input.studyId);
@@ -111,45 +112,105 @@ async function runExhaustive(
   const wc = input.windowCenter;
   const ww = input.windowWidth;
 
-  // Phase 1 : rendre TOUTES les coupes en basse résolution (dépistage).
-  const all = await sampleSeriesPngs(input.seriesId, {
-    windowCenter: wc,
-    windowWidth: ww,
-    count: 1_000_000, // ≥ total → toutes les coupes
-    maxDim: 256,
-  });
-  job.progress = { done: 0, total: all.images.length };
-  if (all.images.length === 0) throw new Error("Série non rendable");
+  // Séries à balayer : tout le dossier (séries DIAGNOSTIQUES) si wholeStudy,
+  // sinon la seule série demandée. Scanogramme/SUMMARY exclus en mode dossier.
+  const { listSeriesByStudy } = await import("../db");
+  const { isDiagnosticSeries } = await import("./aiPreanalysis");
+  let series: { id: number; label?: string; n: number }[];
+  if (input.wholeStudy) {
+    const allS = (await listSeriesByStudy(input.studyId)) as any[];
+    const diag = allS.filter(isDiagnosticSeries);
+    series = (diag.length ? diag : allS).map(s => ({
+      id: s.id,
+      label: `${s.seriesDescription || `Série ${s.seriesNumber ?? s.id}`} — ${s.modality || "?"}`,
+      n: s.numberOfInstances ?? 0,
+    }));
+  } else {
+    series = [{ id: input.seriesId, n: 0 }];
+  }
 
+  // Phase 1 : DÉPISTAGE — chaque coupe de CHAQUE série, basse résolution.
+  job.progress = {
+    done: 0,
+    total: series.reduce((a, s) => a + Math.max(1, s.n), 0),
+  };
   const BATCH = 20;
-  const flagged = new Set<number>();
-  for (let b = 0; b < all.images.length; b += BATCH) {
-    const batch = all.images.slice(b, b + BATCH);
-    (await screenBatch(batch, modality)).forEach(n => flagged.add(n));
-    job.progress.done = Math.min(b + BATCH, all.images.length);
-  }
-
-  // Phase 2 : coupes à détailler = suspectes (max 16) + représentatives si peu.
-  let reportNums = Array.from(flagged)
-    .sort((a, b) => a - b)
-    .slice(0, 16);
-  if (reportNums.length < 6) {
-    const repIdx = pickSampleIndices(all.images.length, 6);
-    for (const i of repIdx) {
-      const n = all.images[i].sliceNumber;
-      if (!reportNums.includes(n)) reportNums.push(n);
+  let screenedTotal = 0;
+  const flaggedBy = new Map<
+    number,
+    { label?: string; nums: Set<number>; total: number }
+  >();
+  for (const s of series) {
+    let all;
+    try {
+      all = await sampleSeriesPngs(s.id, {
+        windowCenter: wc,
+        windowWidth: ww,
+        count: 1_000_000,
+        maxDim: 256,
+      });
+    } catch {
+      continue;
     }
-    reportNums.sort((a, b) => a - b);
+    if (all.images.length === 0) continue;
+    screenedTotal += all.images.length;
+    const flagged = new Set<number>();
+    for (let b = 0; b < all.images.length; b += BATCH) {
+      const batch = all.images.slice(b, b + BATCH);
+      (await screenBatch(batch, modality)).forEach(n => flagged.add(n));
+      job.progress.done += batch.length;
+    }
+    flaggedBy.set(s.id, {
+      label: s.label,
+      nums: flagged,
+      total: all.images.length,
+    });
+  }
+  if (screenedTotal === 0) throw new Error("Aucune coupe rendable");
+
+  // Phase 2 : coupes suspectes de TOUTES les séries (réparties, total ≤ 30) ;
+  // représentatives si une série n'a rien de suspect. Pleine résolution.
+  const CAP = 30;
+  const entries = Array.from(flaggedBy.entries());
+  const perSeriesCap = Math.max(
+    4,
+    Math.floor(CAP / Math.max(1, entries.length))
+  );
+  const keyImgs: PreanalysisKeyImage[] = [];
+  for (const [sid, f] of entries) {
+    if (keyImgs.length >= CAP) break;
+    let nums = Array.from(f.nums)
+      .sort((a, b) => a - b)
+      .slice(0, perSeriesCap);
+    if (nums.length === 0) nums = pickSampleIndices(f.total, 3).map(i => i + 1);
+    for (const n of nums) {
+      if (keyImgs.length >= CAP) break;
+      const b64 = await renderSliceByNumber(sid, n, {
+        windowCenter: wc,
+        windowWidth: ww,
+      });
+      if (b64)
+        keyImgs.push({ pngBase64: b64, sliceIndex: n, seriesLabel: f.label });
+    }
   }
 
-  // Rendu pleine résolution des coupes retenues.
-  const keyImgs: PreanalysisKeyImage[] = [];
-  for (const n of reportNums) {
-    const b64 = await renderSliceByNumber(input.seriesId, n, {
-      windowCenter: wc,
-      windowWidth: ww,
-    });
-    if (b64) keyImgs.push({ pngBase64: b64, sliceIndex: n });
+  // Mesures : segmentation (volumes d'organes) de la série CT la plus grosse.
+  let measurements: string | undefined;
+  if ((modality ?? "").toUpperCase() === "CT" && ENV.segServiceUrl) {
+    const mainCt = entries.sort((a, b) => b[1].total - a[1].total)[0];
+    if (mainCt) {
+      try {
+        const { segmentCtSeries } = await import("./ctSegmentation");
+        const seg = await segmentCtSeries(mainCt[0], { highRes: true });
+        if (seg.structures.length)
+          measurements = seg.structures
+            .slice(0, 30)
+            .map((x: any) => `${x.name}: ${x.volumeMl} mL`)
+            .join(" ; ");
+      } catch {
+        /* fail-soft */
+      }
+    }
   }
 
   const result = await generatePreanalysis(keyImgs, {
@@ -157,13 +218,17 @@ async function runExhaustive(
     antecedents: input.antecedents,
     modality,
     studyDescription: (study as any)?.studyDescription ?? undefined,
-    totalSlices: all.totalSlices,
+    totalSlices: screenedTotal,
+    measurements,
+    maxImages: CAP,
   });
 
+  const allFlagged: number[] = [];
+  flaggedBy.forEach(f => f.nums.forEach(n => allFlagged.push(n)));
   job.result = {
     ...result,
-    screenedSlices: all.images.length,
-    flaggedSlices: Array.from(flagged).sort((a, b) => a - b),
+    screenedSlices: screenedTotal,
+    flaggedSlices: Array.from(new Set(allFlagged)).sort((a, b) => a - b),
   };
   job.status = "done";
 }
@@ -175,6 +240,7 @@ export function startExhaustiveJob(input: {
   windowWidth: number;
   indication?: string;
   antecedents?: string;
+  wholeStudy?: boolean;
 }): { jobId: string } {
   gc();
   const jobId = randomUUID();

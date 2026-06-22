@@ -307,6 +307,8 @@ export default function ReportPanel({
       }));
       setAiAbnormal(r.abnormal ?? null);
       setAiKeySlice(r.keySliceNumber ?? null);
+      setSecondOpinion(r.secondOpinion ?? null);
+      setEvolution(r.evolution ?? null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exhaustiveStatus.data]);
@@ -418,8 +420,10 @@ export default function ReportPanel({
       !preanalyze.isPending
     ) {
       autoRan.current = true;
-      const auto = history.data?.antecedents || "";
-      void runPreanalysis(auto).catch(() => {});
+      // Analyse auto à l'ouverture DÉSACTIVÉE : l'analyse est désormais
+      // EXHAUSTIVE et lancée à la demande via « Générer (IA) » (job long,
+      // plusieurs minutes — on ne la déclenche pas automatiquement à chaque
+      // ouverture de dossier).
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seriesId, history.isFetched, reportQuery.isFetched]);
@@ -666,95 +670,33 @@ export default function ReportPanel({
         <div className="flex gap-2 flex-wrap">
           <Button
             size="sm"
-            disabled={aiGenerate.isPending || (gpuManaged && !gpuReady)}
+            disabled={
+              startExhaustive.isPending ||
+              (gpuManaged && !gpuReady) ||
+              exhaustiveStatus.data?.status === "running"
+            }
             onClick={async () => {
-              const r = await aiGenerate.mutateAsync({
+              // « Générer (IA) » = analyse EXHAUSTIVE de TOUT le dossier : chaque
+              // coupe de chaque série diagnostique (couverture 100 %) + mesures +
+              // OCR + re-zoom + double lecture + vérification. Job de fond ; le
+              // suivi (barre) remplit le compte rendu à la fin.
+              exhaustiveDone.current = false;
+              const r = await startExhaustive.mutateAsync({
                 studyId,
                 seriesId: analyzedSeriesId ?? seriesId,
+                windowCenter,
+                windowWidth,
                 indication: sections.indication || undefined,
                 antecedents: antecedents || undefined,
-                keyImages: keyImages.map(k => ({
-                  pngBase64: k.pngBase64,
-                  sliceIndex: k.sliceIndex,
-                })),
-                priorStudyId: comparePriorStudyId ?? undefined,
-                priorSeriesId: comparePriorSeriesId ?? undefined,
-                // MAXIMUM systématique (le médecin valide) : toute l'étude +
-                // approfondie + mesures (segmentation CT) + double lecture +
-                // vérification + comparaison antériorités.
-                wholeStudy: comparePriorStudyId == null,
-                doubleRead: true,
-                compareAllPriors: comparePriorStudyId == null,
-                deepAnalysis: true,
-                includeSegmentation: true,
-                highResSegmentation: true,
+                wholeStudy: true,
               });
-              // Ne pré-remplit QUE les champs vides.
-              setSections(s => ({
-                indication: s.indication || r.sections.indication,
-                technique: s.technique || r.sections.technique,
-                resultats: s.resultats || r.sections.resultats,
-                conclusion: s.conclusion || r.sections.conclusion,
-              }));
-              setEvolution(r.evolution ?? null);
-              setComparedPriorDate(r.comparedPriorDate ?? null);
-              if (
-                r.keyImage &&
-                onAddKeyImage &&
-                !keyImages.some(k => k.sliceIndex === r.keyImage!.sliceIndex)
-              ) {
-                onAddKeyImage({
-                  pngBase64: r.keyImage.pngBase64,
-                  sliceIndex: r.keyImage.sliceIndex,
-                });
-              }
+              setExhaustiveJob(r.jobId);
             }}
+            title="Analyse exhaustive : balaye CHAQUE coupe de TOUTES les séries (100 %) + mesures + double lecture + vérification. Plusieurs minutes — ne quitte pas la page."
           >
-            {aiGenerate.isPending ? "Analyse…" : "Générer (IA)"}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            title="Analyse approfondie : beaucoup plus de coupes (plus lent, cas douteux)"
-            disabled={aiGenerate.isPending || (gpuManaged && !gpuReady)}
-            onClick={async () => {
-              const r = await aiGenerate.mutateAsync({
-                studyId,
-                seriesId: analyzedSeriesId ?? seriesId,
-                indication: sections.indication || undefined,
-                antecedents: antecedents || undefined,
-                keyImages: keyImages.map(k => ({
-                  pngBase64: k.pngBase64,
-                  sliceIndex: k.sliceIndex,
-                })),
-                priorStudyId: comparePriorStudyId ?? undefined,
-                priorSeriesId: comparePriorSeriesId ?? undefined,
-                wholeStudy: comparePriorStudyId == null,
-                deepAnalysis: true,
-                doubleRead: true,
-                compareAllPriors: comparePriorStudyId == null,
-              });
-              setSections(s => ({
-                indication: s.indication || r.sections.indication,
-                technique: s.technique || r.sections.technique,
-                resultats: s.resultats || r.sections.resultats,
-                conclusion: s.conclusion || r.sections.conclusion,
-              }));
-              setEvolution(r.evolution ?? null);
-              setComparedPriorDate(r.comparedPriorDate ?? null);
-              if (
-                r.keyImage &&
-                onAddKeyImage &&
-                !keyImages.some(k => k.sliceIndex === r.keyImage!.sliceIndex)
-              ) {
-                onAddKeyImage({
-                  pngBase64: r.keyImage.pngBase64,
-                  sliceIndex: r.keyImage.sliceIndex,
-                });
-              }
-            }}
-          >
-            {aiGenerate.isPending ? "Analyse…" : "Analyse approfondie"}
+            {exhaustiveStatus.data?.status === "running"
+              ? "Analyse en cours…"
+              : "Générer (IA)"}
           </Button>
           <Button
             size="sm"
@@ -1040,31 +982,8 @@ export default function ReportPanel({
       {/* --- Analyse exhaustive (toutes les coupes) ----------------------- */}
       {!isSigned && (
         <div className="flex items-center gap-2 flex-wrap">
-          <button
-            type="button"
-            onClick={async () => {
-              exhaustiveDone.current = false;
-              const r = await startExhaustive.mutateAsync({
-                studyId,
-                seriesId: analyzedSeriesId ?? seriesId,
-                windowCenter,
-                windowWidth,
-                antecedents: antecedents || undefined,
-                // Balaye TOUT le dossier (toutes les séries diagnostiques).
-                wholeStudy: true,
-              });
-              setExhaustiveJob(r.jobId);
-            }}
-            disabled={
-              startExhaustive.isPending ||
-              (gpuManaged && !gpuReady) ||
-              exhaustiveStatus.data?.status === "running"
-            }
-            className="text-[11px] rounded bg-blue-500/15 text-blue-400 px-2 py-1 disabled:opacity-50"
-            title="Balaye CHAQUE coupe de TOUTES les séries diagnostiques du dossier (couverture 100 %) + mesures (CT), puis lecture experte Opus. Long (plusieurs minutes selon le nombre d'images). Non certifié, à valider."
-          >
-            Analyse exhaustive (tout le dossier)
-          </button>
+          {/* L'analyse exhaustive est déclenchée par « Générer (IA) » ci-dessus ;
+              on garde ici la progression et le bilan du balayage. */}
           {exhaustiveStatus.data?.status === "running" && (
             <span className="text-[11px] text-blue-400">
               Balayage… {exhaustiveStatus.data.progress?.done ?? 0}/

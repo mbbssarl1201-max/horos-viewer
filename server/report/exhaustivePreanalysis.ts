@@ -8,6 +8,12 @@ import {
 } from "./aiSampling";
 import {
   generatePreanalysis,
+  extractBurnedInText,
+  locateAnomaly,
+  zoomReadAnomaly,
+  verifyConclusion,
+  secondOpinionAbnormal,
+  downscalePngBase64,
   type PreanalysisResult,
   type PreanalysisKeyImage,
 } from "./aiPreanalysis";
@@ -27,6 +33,11 @@ import {
 export interface ExhaustiveResult extends PreanalysisResult {
   screenedSlices: number;
   flaggedSlices: number[];
+  secondOpinion?: {
+    abnormal: boolean | null;
+    model: string;
+    agree: boolean;
+  } | null;
 }
 interface Job {
   status: "running" | "done" | "error";
@@ -134,7 +145,10 @@ async function runExhaustive(
     done: 0,
     total: series.reduce((a, s) => a + Math.max(1, s.n), 0),
   };
-  const BATCH = 20;
+  // Dépistage plus fin : 384 px (vs 256) pour mieux repérer les petites lésions ;
+  // lots de 12 (au lieu de 20) pour ne pas saturer le contexte du modèle local.
+  const SCREEN_DIM = 384;
+  const BATCH = 12;
   let screenedTotal = 0;
   const flaggedBy = new Map<
     number,
@@ -147,7 +161,7 @@ async function runExhaustive(
         windowCenter: wc,
         windowWidth: ww,
         count: 1_000_000,
-        maxDim: 256,
+        maxDim: SCREEN_DIM,
       });
     } catch {
       continue;
@@ -213,6 +227,20 @@ async function runExhaustive(
     }
   }
 
+  const cloudVision =
+    ENV.aiBackend === "claude" &&
+    !!ENV.anthropicApiKey &&
+    ENV.cloudAiPhiConsent;
+
+  // OCR des mesures/repères incrustés (comme le mode max) → ancré dans le CR.
+  let screenText: string | undefined;
+  try {
+    screenText =
+      (await extractBurnedInText(keyImgs, { cloud: cloudVision })) ?? undefined;
+  } catch {
+    /* fail-soft */
+  }
+
   const result = await generatePreanalysis(keyImgs, {
     indication: input.indication,
     antecedents: input.antecedents,
@@ -220,8 +248,60 @@ async function runExhaustive(
     studyDescription: (study as any)?.studyDescription ?? undefined,
     totalSlices: screenedTotal,
     measurements,
+    screenText,
     maxImages: CAP,
   });
+
+  // Re-zoom HD sur la zone suspecte + vérification critique (comme le mode max),
+  // quand une anomalie est signalée. Annexés au CR (à valider). Fail-soft.
+  if (result.abnormal === true && keyImgs.length > 0) {
+    const key =
+      keyImgs.find(k => k.sliceIndex === result.keySliceNumber) ?? keyImgs[0];
+    try {
+      const box = await locateAnomaly(key.pngBase64, { cloud: cloudVision });
+      if (box) {
+        const zoom = await zoomReadAnomaly(
+          key.pngBase64,
+          box,
+          modality,
+          cloudVision
+        );
+        if (zoom)
+          result.resultats =
+            `${result.resultats}\n\nAnalyse ciblée (zoom haute résolution sur la zone suspecte, à valider) : ${zoom}`.trim();
+      }
+    } catch {
+      /* fail-soft */
+    }
+    try {
+      const v = await verifyConclusion(
+        keyImgs
+          .slice(0, cloudVision ? 6 : 4)
+          .map(k => downscalePngBase64(k.pngBase64, cloudVision ? 1024 : 768)),
+        result.conclusion,
+        modality,
+        cloudVision
+      );
+      if (v)
+        result.resultats =
+          `${result.resultats}\n\nVérification (2e lecture critique indépendante, à valider) : ${v}`.trim();
+    } catch {
+      /* fail-soft */
+    }
+  }
+
+  // 2e lecture indépendante (modèle local) → signal de désaccord.
+  let secondOpinion: ExhaustiveResult["secondOpinion"] = null;
+  try {
+    const ab2 = await secondOpinionAbnormal(keyImgs, modality, false);
+    secondOpinion = {
+      abnormal: ab2,
+      model: ENV.ollamaVisionModel2,
+      agree: ab2 !== null && ab2 === (result.abnormal ?? null),
+    };
+  } catch {
+    /* fail-soft */
+  }
 
   const allFlagged: number[] = [];
   flaggedBy.forEach(f => f.nums.forEach(n => allFlagged.push(n)));
@@ -229,6 +309,7 @@ async function runExhaustive(
     ...result,
     screenedSlices: screenedTotal,
     flaggedSlices: Array.from(new Set(allFlagged)).sort((a, b) => a - b),
+    secondOpinion,
   };
   job.status = "done";
 }

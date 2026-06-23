@@ -1,6 +1,6 @@
 import { getDb } from "../db";
 import { knowledgeChunks } from "../../drizzle/schema";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, like } from "drizzle-orm";
 import { cosineSimilarity } from "./embeddings";
 
 export interface ChunkToInsert {
@@ -32,14 +32,15 @@ export interface SimilarChunk {
   score: number;
 }
 
-/** Charge les chunks, calcule le cosinus en JS, renvoie le top-k. */
+/** Charge les chunks (filtrés par sourcePrefix si fourni), calcule le cosinus en JS, renvoie le top-k. */
 export async function searchSimilar(
   queryEmbedding: number[],
-  k = 5
+  k = 5,
+  opts?: { sourcePrefix?: string }
 ): Promise<SimilarChunk[]> {
   const db = await getDb();
   if (!db) return [];
-  const rows = await db
+  const baseQuery = db
     .select({
       source: knowledgeChunks.source,
       heading: knowledgeChunks.heading,
@@ -47,6 +48,11 @@ export async function searchSimilar(
       embedding: knowledgeChunks.embedding,
     })
     .from(knowledgeChunks);
+  const rows = opts?.sourcePrefix
+    ? await baseQuery.where(
+        like(knowledgeChunks.source, `${opts.sourcePrefix}%`)
+      )
+    : await baseQuery;
   const scored: SimilarChunk[] = [];
   for (const r of rows) {
     let emb: number[];

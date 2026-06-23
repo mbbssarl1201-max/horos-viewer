@@ -1925,6 +1925,118 @@ export const appRouter = router({
         return { success: true, pdfStorageKey: key };
       }),
 
+    // Signature + envoi automatique au référent. Garde dure : le CR doit être
+    // signé ET un e-mail doit être connu avant tout envoi (assertSendable).
+    // Si le CR est déjà signé, on saute la phase signature et on envoie directement.
+    signAndSend: adminProcedure
+      .input(
+        z.object({
+          reportId: z.number(),
+          recipientEmail: z.string().email().optional(),
+          windowCenter: z.number().finite().default(40),
+          windowWidth: z.number().finite().default(400),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const {
+          getDb,
+          getStudyById,
+          listSeriesByStudy,
+          upsertReferringEmail,
+          resolveReferringEmail,
+        } = await import("./db");
+        const { reports } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const { assertSendable } = await import("./report/signAndSend");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+        const rows = await db
+          .select()
+          .from(reports)
+          .where(eq(reports.id, input.reportId))
+          .limit(1);
+        const report = rows[0];
+        if (!report) throw new TRPCError({ code: "NOT_FOUND" });
+        const sections = validateReportSections(report);
+        const study = (await getStudyById(report.studyId)) as any;
+
+        const email =
+          input.recipientEmail ??
+          (await resolveReferringEmail(study?.referringPhysician));
+        if (!email) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "E-mail du référent requis (renseignez-le).",
+          });
+        }
+        if (input.recipientEmail && study?.referringPhysician) {
+          await upsertReferringEmail(
+            study.referringPhysician,
+            input.recipientEmail
+          );
+        }
+
+        if (report.status !== "signed") {
+          if (!canSignReport(report.status as any, sections)) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Conclusion requise pour signer.",
+            });
+          }
+          const signedAt = new Date();
+          const signature = `Signé par ${ctx.user.name ?? "Dr"} le ${signedAt.toLocaleString("fr-CH")}`;
+          const pdf = buildReportPdf({
+            study,
+            report: sections,
+            signature,
+            keyImages: [],
+            aiAssisted: report.aiGenerated,
+          });
+          const { key } = await storagePut(
+            `reports/${report.studyId}/report-${report.id}.pdf`,
+            pdf,
+            "application/pdf"
+          );
+          await db
+            .update(reports)
+            .set({
+              status: "signed",
+              signedBy: ctx.user.id,
+              signedAt,
+              pdfStorageKey: key,
+            })
+            .where(eq(reports.id, report.id));
+          await recordAccess({
+            userId: ctx.user.id,
+            action: "report.sign",
+            studyId: report.studyId,
+            detail: `report ${report.id} (signAndSend)`,
+            ipAddress: ctx.req?.ip ?? null,
+          });
+        }
+
+        assertSendable("signed", email);
+        const series = await listSeriesByStudy(report.studyId);
+        const { sendStudyReportImpl } = await import(
+          "./report/sendStudyReport"
+        );
+        await sendStudyReportImpl(
+          {
+            to: email,
+            studyId: report.studyId,
+            seriesId: (series as any)[0]?.id ?? 0,
+            windowCenter: input.windowCenter,
+            windowWidth: input.windowWidth,
+            keyImages: [],
+            includeVideo: false,
+            aiAssisted: report.aiGenerated,
+          } as any,
+          ctx as any
+        );
+        return { ok: true, email };
+      }),
+
     // Addendum (correction post-signature) : append-only, possible uniquement
     // sur un compte-rendu signé. Régénère le PDF avec l'historique des addenda.
     addAddendum: adminProcedure

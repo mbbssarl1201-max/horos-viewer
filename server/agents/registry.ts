@@ -100,6 +100,43 @@ export const AGENTS: AgentSpec[] = [
       },
     ],
   },
+  {
+    key: "apprentissage",
+    name: "Hermès Apprentissage",
+    role: "Apprend des corrections du médecin et propose des fiches de référence.",
+    objectives: [
+      "Capitaliser les corrections récurrentes",
+      "Améliorer les futurs CR",
+    ],
+    tasks: [
+      "Comparer brouillon↔signé",
+      "Repérer les patterns par modalité",
+      "Proposer une fiche RAG",
+    ],
+    tools: ["proposeRagFiche"],
+    access: ["report.read", "knowledge.read"],
+    guardrails: [
+      "N'écrit JAMAIS en base RAG sans validation humaine",
+      "Aucune donnée patient dans la fiche (règle générale uniquement)",
+      "N'apprend que d'un pattern récurrent (seuil)",
+    ],
+    kpis: [
+      {
+        key: "fichesProposed",
+        label: "Fiches proposées",
+        target: 1,
+        unit: "",
+        goal: "max",
+      },
+      {
+        key: "fichesApproved",
+        label: "Fiches approuvées",
+        target: 1,
+        unit: "",
+        goal: "max",
+      },
+    ],
+  },
 ];
 
 export function getAgentSpec(key: string): AgentSpec | null {

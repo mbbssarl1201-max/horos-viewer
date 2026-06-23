@@ -2676,6 +2676,18 @@ export const appRouter = router({
       for (const a of AGENTS) created += await computeSuggestions(a.key);
       return { created };
     }),
+    runLearning: adminProcedure.mutation(async ({ ctx }) => {
+      const { runLearningAgent } = await import("./agents/learning");
+      const res = await runLearningAgent();
+      await recordAccess({
+        userId: ctx.user.id,
+        action: "agents.runLearning",
+        studyId: null,
+        detail: `proposed=${res.proposed}`,
+        ipAddress: ctx.req?.ip ?? null,
+      });
+      return res;
+    }),
     resolveSuggestion: adminProcedure
       .input(
         z.object({
@@ -2700,6 +2712,10 @@ export const appRouter = router({
           detail: `${input.id}:${input.action}`,
           ipAddress: ctx.req?.ip ?? null,
         });
+        if (input.action === "approved") {
+          const { applyRagFiche } = await import("./agents/learning");
+          await applyRagFiche(input.id); // no-op si la suggestion n'est pas une rag_fiche
+        }
         return { ok: true };
       }),
   }),

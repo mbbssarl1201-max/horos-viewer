@@ -2,8 +2,9 @@ import { describe, it, expect } from "vitest";
 import { AGENTS, getAgentSpec } from "./registry";
 
 describe("registre d'agents", () => {
-  it("contient les 3 agents existants", () => {
+  it("contient les agents attendus (dont apprentissage)", () => {
     expect(AGENTS.map(a => a.key).sort()).toEqual([
+      "apprentissage",
       "copilote",
       "qualite",
       "redacteur",

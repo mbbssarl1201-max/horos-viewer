@@ -13,14 +13,15 @@ export interface CodeSuggestion {
 export async function suggestCodes(
   resultats: string,
   conclusion: string
-): Promise<{ codes: CodeSuggestion[] }> {
-  if (!ENV.ollamaUrl) return { codes: [] };
+): Promise<{ codes: CodeSuggestion[]; tardoc: CodeSuggestion[] }> {
+  if (!ENV.ollamaUrl) return { codes: [], tardoc: [] };
   const sys =
     "Tu aides à coder un compte rendu de radiologie. Propose 1 à 5 codes diagnostiques " +
     "CIM-10 (ICD-10) PERTINENTS au compte rendu. Réponds UNIQUEMENT en JSON strict : " +
-    '{"codes":[{"code":"R93.1","label":"..."}]}. Pas d\'autre texte. ' +
+    '{"codes":[{"code":"R93.1","label":"..."}],"tardoc":[{"code":"39.0010","label":"..."}]}. Pas d\'autre texte. ' +
     "Si le compte rendu est normal, propose le code approprié (ex. examen normal). " +
-    "Ce sont des SUGGESTIONS à valider par le médecin.";
+    "Ce sont des SUGGESTIONS à valider par le médecin. " +
+    "Propose AUSSI 1 à 5 actes TARDOC (tarif suisse) correspondant à l'examen. Ce sont des SUGGESTIONS à valider, ne facture rien.";
   const user = `Compte rendu :\nRésultats : ${resultats}\nConclusion : ${conclusion}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
@@ -53,7 +54,16 @@ export async function suggestCodes(
             label: String(c.label ?? "").slice(0, 200),
           }))
       : [];
-    return { codes };
+    const tardoc: CodeSuggestion[] = Array.isArray(parsed?.tardoc)
+      ? parsed.tardoc
+          .filter((c: any) => c && typeof c.code === "string")
+          .slice(0, 5)
+          .map((c: any) => ({
+            code: String(c.code).slice(0, 12),
+            label: String(c.label ?? "").slice(0, 200),
+          }))
+      : [];
+    return { codes, tardoc };
   } finally {
     clearTimeout(timeout);
   }

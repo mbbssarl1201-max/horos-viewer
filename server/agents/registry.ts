@@ -101,6 +101,28 @@ export const AGENTS: AgentSpec[] = [
     ],
   },
   {
+    key: "codage",
+    name: "Hermès Codage",
+    role: "Propose les codes CIM-10 et actes TARDOC à partir du compte rendu.",
+    objectives: ["Aider au codage diagnostique et tarifaire"],
+    tasks: ["Suggérer des codes CIM-10", "Suggérer des actes TARDOC"],
+    tools: ["suggestBillingCodes"],
+    access: ["report.read"],
+    guardrails: [
+      "Suggestion à valider par le médecin",
+      "Ne facture ni ne transmet rien",
+    ],
+    kpis: [
+      {
+        key: "codageRuns",
+        label: "Codages proposés",
+        target: 1,
+        unit: "",
+        goal: "max",
+      },
+    ],
+  },
+  {
     key: "apprentissage",
     name: "Hermès Apprentissage",
     role: "Apprend des corrections du médecin et propose des fiches de référence.",

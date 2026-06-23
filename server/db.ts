@@ -364,6 +364,27 @@ export async function listInstancesBySeries(seriesId: number) {
     .orderBy(instances.instanceNumber);
 }
 
+// ============ PATIENT NAME HELPERS ============
+
+/** Normalise un nom (casse/espaces/accents/^) pour la recherche. */
+export function normalizeName(name?: string | null): string {
+  if (!name) return "";
+  return name
+    .replace(/\^/g, " ")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Empreinte déterministe chiffrée du nom normalisé (blind index). */
+export function nameSearchKey(name?: string | null): string | null {
+  const n = normalizeName(name);
+  if (!n) return null;
+  return encryptDeterministic(n);
+}
+
 // ============ PATIENT QUERIES ============
 
 export async function findOrCreatePatient(patientData: {
@@ -400,6 +421,7 @@ export async function findOrCreatePatient(patientData: {
     patientName: encryptField(patientData.patientName)!,
     birthDate: encryptField(patientData.birthDate || null),
     sex: encryptField(patientData.sex || null),
+    nameSearch: nameSearchKey(patientData.patientName),
   });
 
   const newPatient = await db

@@ -47,11 +47,15 @@ export const patients = mysqlTable(
     patientName: varchar("patientName", { length: 1024 }).notNull(),
     birthDate: varchar("birthDate", { length: 128 }),
     sex: varchar("sex", { length: 64 }),
+    // Blind index : empreinte DÉTERMINISTE du nom normalisé → recherche par nom
+    // sans déchiffrer toute la base (le nom reste chiffré dans patientName).
+    nameSearch: varchar("nameSearch", { length: 255 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   t => ({
     patientIdIdx: index("patients_patientId_idx").on(t.patientId),
+    nameSearchIdx: index("patients_nameSearch_idx").on(t.nameSearch),
   })
 );
 

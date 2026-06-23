@@ -136,8 +136,6 @@ export const ENV = {
   geminiVertexLocation: process.env.GEMINI_VERTEX_LOCATION ?? "europe-west1",
   geminiVertexModel: process.env.GEMINI_VERTEX_MODEL ?? "gemini-2.0-flash",
   geminiVertexToken: process.env.GEMINI_VERTEX_TOKEN ?? "",
-  // Token Bearer pour déclencher la sync vault depuis un cron externe (hors UI).
-  vaultSyncToken: process.env.VAULT_SYNC_TOKEN ?? "",
   // Coordonnées GPS du cabinet pour la météo Open-Meteo (pas de clé requise).
   cabinetLat: process.env.CABINET_LAT ?? "",
   cabinetLng: process.env.CABINET_LNG ?? "",

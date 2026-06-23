@@ -431,6 +431,7 @@ export const agentActivity = mysqlTable(
     studyId: int("studyId"),
     status: mysqlEnum("status", ["ok", "error", "skipped"]).notNull(),
     detail: varchar("detail", { length: 512 }),
+    durationMs: int("durationMs"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   t => ({ agentIdx: index("agent_activity_agent_idx").on(t.agentKey) })

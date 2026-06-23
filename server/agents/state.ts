@@ -43,7 +43,7 @@ export async function logAgentActivity(
   agentKey: string,
   action: string,
   status: "ok" | "error" | "skipped",
-  opts?: { studyId?: number; detail?: string }
+  opts?: { studyId?: number; detail?: string; durationMs?: number }
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -54,6 +54,7 @@ export async function logAgentActivity(
       status,
       studyId: opts?.studyId ?? null,
       detail: opts?.detail?.slice(0, 512) ?? null,
+      durationMs: opts?.durationMs ?? null,
     });
     if (status === "error") {
       await setAgentState(agentKey, {

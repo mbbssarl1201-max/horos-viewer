@@ -296,12 +296,14 @@ export async function runHermesChat(
   input: RunHermesChatInput,
   ctx: { user: { id: number }; req?: { ip?: string } }
 ): Promise<{ reply: string; model: string; sources: HermesSource[] }> {
+  const startedAt = Date.now();
   const prep = await prepareHermesChat(input, { user: ctx.user });
   const reply = prep.useVertex
     ? await chatViaVertex(prep.messages)
     : prep.useClaude
       ? await chatViaClaude(prep.messages)
       : await chatViaOllama(prep.messages);
+  const durationMs = Date.now() - startedAt;
   await recordAccess({
     userId: ctx.user.id,
     action: "ai.hermes.chat",
@@ -313,6 +315,7 @@ export async function runHermesChat(
     const { logAgentActivity } = await import("../agents/state");
     await logAgentActivity("copilote", "chat", "ok", {
       studyId: (input as any).studyId,
+      durationMs,
     });
   } catch {
     /* best-effort */

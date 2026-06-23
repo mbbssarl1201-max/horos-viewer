@@ -2459,6 +2459,18 @@ export const appRouter = router({
       });
       return result;
     }),
+    syncGuidelines: adminProcedure.mutation(async ({ ctx }) => {
+      const { syncGuidelines } = await import("./knowledge/guidelinesSync");
+      const result = await syncGuidelines();
+      await recordAccess({
+        userId: ctx.user.id,
+        action: "knowledge.syncGuidelines",
+        studyId: null,
+        detail: `inserted=${result.inserted}`,
+        ipAddress: ctx.req?.ip ?? null,
+      });
+      return result;
+    }),
     // Recherche par similarité (test/2c).
     search: adminProcedure
       .input(
@@ -2685,6 +2697,30 @@ export const appRouter = router({
         return runAgentTool("copilote", "calendarToday", calendarTodayFn, {
           date: input.date,
         });
+      }),
+    pubmedSearch: medicalProcedure
+      .input(
+        z.object({
+          query: z.string().min(1).max(300),
+          maxResults: z.number().int().min(1).max(10).optional(),
+        })
+      )
+      .query(async ({ input }) => {
+        const { runAgentTool } = await import("./agents/tools");
+        const { pubmedSearchFn } = await import("./tools/researchTools");
+        return runAgentTool("copilote", "pubmedSearch", pubmedSearchFn, input);
+      }),
+    searchGuidelines: medicalProcedure
+      .input(z.object({ query: z.string().min(1).max(300) }))
+      .query(async ({ input }) => {
+        const { runAgentTool } = await import("./agents/tools");
+        const { searchGuidelinesFn } = await import("./tools/researchTools");
+        return runAgentTool(
+          "copilote",
+          "searchGuidelines",
+          searchGuidelinesFn,
+          { query: input.query }
+        );
       }),
   }),
   agentsRegistry: router({

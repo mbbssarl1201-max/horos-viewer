@@ -87,6 +87,8 @@ export const AGENTS: AgentSpec[] = [
       "getWeather",
       "getLocalTime",
       "calendarToday",
+      "pubmedSearch",
+      "searchGuidelines",
     ],
     access: ["patient.search", "report.read"],
     guardrails: ["Lecture seule", "Aucune action (signature/envoi/modif)"],

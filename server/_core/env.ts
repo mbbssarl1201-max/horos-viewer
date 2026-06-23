@@ -145,6 +145,8 @@ export const ENV = {
   googleServiceAccountJson: process.env.GOOGLE_SA_KEY_JSON ?? "",
   // ID du calendrier Google à lire (défaut = "primary" du service account).
   googleCalendarId: process.env.GOOGLE_CALENDAR_ID ?? "primary",
+  // Clé API NCBI optionnelle (lève la limite 3→10 req/s pour PubMed).
+  ncbiApiKey: process.env.NCBI_API_KEY ?? "",
 };
 
 // Garde fail-safe : signaler quand SMTP_INSECURE est posé en production mais

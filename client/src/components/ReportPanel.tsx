@@ -777,7 +777,9 @@ export default function ReportPanel({
             className="text-[11px] rounded bg-teal-500/15 text-teal-400 px-2 py-1 disabled:opacity-50"
             title="Propose des codes CIM-10 à partir du compte rendu (à valider ; la facturation se fait dans MediAdmin)."
           >
-            {suggestCodes.isPending ? "Analyse…" : "Suggérer codes (CIM-10)"}
+            {suggestCodes.isPending
+              ? "Analyse…"
+              : "Suggérer codes (CIM-10 + TARDOC)"}
           </button>
           {suggestCodes.data && suggestCodes.data.codes.length > 0 && (
             <div className="text-[11px] rounded border border-teal-500/30 p-2 space-y-0.5">
@@ -787,6 +789,19 @@ export default function ReportPanel({
               {suggestCodes.data.codes.map(c => (
                 <div key={c.code} className="flex gap-2">
                   <span className="font-mono text-teal-400">{c.code}</span>
+                  <span className="text-muted-foreground">{c.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {suggestCodes.data && suggestCodes.data.tardoc.length > 0 && (
+            <div className="text-[11px] rounded border border-indigo-500/30 p-2 space-y-0.5">
+              <p className="text-[10px] text-muted-foreground">
+                Actes TARDOC suggérés (à VÉRIFIER ; facturation = MediAdmin) :
+              </p>
+              {suggestCodes.data.tardoc.map(c => (
+                <div key={c.code} className="flex gap-2">
+                  <span className="font-mono text-indigo-400">{c.code}</span>
                   <span className="text-muted-foreground">{c.label}</span>
                 </div>
               ))}

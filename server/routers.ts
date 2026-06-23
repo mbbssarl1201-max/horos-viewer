@@ -2360,7 +2360,18 @@ export const appRouter = router({
             message: "Étude introuvable",
           });
         const { suggestCodes } = await import("./report/suggestCodes");
-        return suggestCodes(input.resultats, input.conclusion);
+        const { runAgentTool } = await import("./agents/tools");
+        const { logAgentActivity } = await import("./agents/state");
+        const res = await runAgentTool(
+          "codage",
+          "suggestBillingCodes",
+          () => suggestCodes(input.resultats, input.conclusion),
+          null
+        );
+        await logAgentActivity("codage", "suggestBillingCodes", "ok", {
+          detail: `cim=${res.codes.length} tardoc=${res.tardoc.length}`,
+        });
+        return res;
       }),
     // Dictée vocale → texte (Whisper sur GPU suisse, PHI-safe). Audio en base64.
     transcribe: medicalProcedure

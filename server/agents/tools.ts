@@ -11,15 +11,18 @@ export function assertToolAllowed(agentKey: string, toolKey: string): void {
   }
 }
 
-export type ToolFn = (args: any) => Promise<any>;
+export type ToolFn<T = any> = (args: any) => Promise<T>;
 
-/** Exécute un outil au nom d'un agent, après contrôle de la fiche. */
-export async function runAgentTool(
+/**
+ * Exécute un outil au nom d'un agent, après contrôle de la fiche.
+ * Générique : préserve le type de retour de `fn` (sinon l'inférence tRPC casse).
+ */
+export async function runAgentTool<T>(
   agentKey: string,
   toolKey: string,
-  fn: ToolFn,
+  fn: ToolFn<T>,
   args: any
-): Promise<any> {
+): Promise<T> {
   assertToolAllowed(agentKey, toolKey);
   return fn(args);
 }

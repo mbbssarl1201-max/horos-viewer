@@ -380,3 +380,28 @@ export const aiJobs = mysqlTable(
 );
 export type AiJob = typeof aiJobs.$inferSelect;
 export type InsertAiJob = typeof aiJobs.$inferInsert;
+
+/** Correspondance nom de médecin référent → e-mail (mono-cabinet). */
+export const referringContacts = mysqlTable(
+  "referring_contacts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    name: varchar("name", { length: 256 }).notNull(),
+    email: varchar("email", { length: 256 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => ({ nameIdx: index("referring_contacts_name_idx").on(t.name) })
+);
+export type ReferringContact = typeof referringContacts.$inferSelect;
+
+/** Réglages de l'agent CR autonome. Ligne UNIQUE (id=1). */
+export const agentSettings = mysqlTable("agent_settings", {
+  id: int("id").primaryKey(),
+  enabled: boolean("enabled").notNull().default(false),
+  enabledAt: timestamp("enabledAt"),
+  dailyCap: int("dailyCap").notNull().default(20),
+  lastRunAt: timestamp("lastRunAt"),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+export type AgentSettings = typeof agentSettings.$inferSelect;

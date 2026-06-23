@@ -1035,3 +1035,34 @@ export async function countPendingSignatureReports(): Promise<number> {
     .where(and(eq(reports.aiGenerated, true), eq(reports.status, "draft")));
   return Number(rows[0]?.n ?? 0);
 }
+
+/** File à signer : brouillons IA non signés + infos étude (mono-cabinet). */
+export async function listPendingSignatureReports(): Promise<
+  {
+    reportId: number;
+    studyId: number;
+    studyDescription: string | null;
+    modality: string | null;
+    studyDate: string | null;
+    referringPhysician: string | null;
+    createdAt: Date;
+  }[]
+> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      reportId: reports.id,
+      studyId: reports.studyId,
+      studyDescription: studies.studyDescription,
+      modality: studies.modality,
+      studyDate: studies.studyDate,
+      referringPhysician: studies.referringPhysician,
+      createdAt: reports.createdAt,
+    })
+    .from(reports)
+    .innerJoin(studies, eq(studies.id, reports.studyId))
+    .where(and(eq(reports.aiGenerated, true), eq(reports.status, "draft")))
+    .orderBy(desc(reports.createdAt));
+  return rows;
+}

@@ -1702,6 +1702,11 @@ export const appRouter = router({
         return { report, addenda };
       }),
 
+    pendingSignature: medicalProcedure.query(async () => {
+      const { listPendingSignatureReports } = await import("./db");
+      return { items: await listPendingSignatureReports() };
+    }),
+
     // Création / mise à jour du brouillon. Refuse toute modification d'un
     // compte-rendu déjà signé (immuable → addendum).
     upsertDraft: adminProcedure
@@ -2469,6 +2474,26 @@ export const appRouter = router({
           detail: `enabled=${input.enabled} cap=${input.dailyCap}`,
           ipAddress: ctx.req?.ip ?? null,
         });
+        return { ok: true };
+      }),
+  }),
+  referringContacts: router({
+    resolve: medicalProcedure
+      .input(z.object({ name: z.string().max(256) }))
+      .query(async ({ input }) => {
+        const { resolveReferringEmail } = await import("./db");
+        return { email: await resolveReferringEmail(input.name) };
+      }),
+    upsert: adminProcedure
+      .input(
+        z.object({
+          name: z.string().min(1).max(256),
+          email: z.string().email(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { upsertReferringEmail } = await import("./db");
+        await upsertReferringEmail(input.name, input.email);
         return { ok: true };
       }),
   }),

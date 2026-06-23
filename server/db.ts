@@ -9,6 +9,7 @@ import {
   ne,
   asc,
   inArray,
+  isNull,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
@@ -27,6 +28,8 @@ import {
   reportAddenda,
   aiEvaluations,
   aiJobs,
+  referringContacts,
+  agentSettings,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import {
@@ -897,5 +900,127 @@ export async function recoverStaleAiJobs(): Promise<number> {
   } catch (e) {
     console.warn("[AiJob] recover failed:", e);
     return 0;
+  }
+}
+
+// ============ AGENT CR AUTONOME ============
+
+/** Normalise un nom de référent pour servir de clé de correspondance e-mail. */
+export function normalizeReferringName(name?: string | null): string {
+  if (!name) return "";
+  return name
+    .replace(/\^/g, " ")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export async function getAgentSettings() {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(agentSettings)
+    .where(eq(agentSettings.id, 1))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function updateAgentSettings(patch: {
+  enabled?: boolean;
+  dailyCap?: number;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const current = await getAgentSettings();
+  const enabledAt =
+    patch.enabled && !current?.enabledAt
+      ? new Date()
+      : (current?.enabledAt ?? null);
+  await db
+    .update(agentSettings)
+    .set({
+      enabled: patch.enabled ?? current?.enabled ?? false,
+      dailyCap: patch.dailyCap ?? current?.dailyCap ?? 20,
+      enabledAt,
+      updatedAt: new Date(),
+    })
+    .where(eq(agentSettings.id, 1));
+}
+
+export async function setAgentLastRun(): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(agentSettings)
+    .set({ lastRunAt: new Date() })
+    .where(eq(agentSettings.id, 1));
+}
+
+/** Études SANS report, créées après `since`, limitées à `limit`. */
+export async function findStudyIdsNeedingReport(
+  since: Date,
+  limit: number
+): Promise<number[]> {
+  const db = await getDb();
+  if (!db || limit <= 0) return [];
+  const rows = await db
+    .select({ id: studies.id })
+    .from(studies)
+    .leftJoin(reports, eq(reports.studyId, studies.id))
+    .where(and(isNull(reports.id), gte(studies.createdAt, since)))
+    .orderBy(asc(studies.id))
+    .limit(limit);
+  return rows.map(r => r.id);
+}
+
+/** Nombre de reports IA créés depuis `since` (plafond/jour). */
+export async function countAiReportsSince(since: Date): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select({ n: sql<number>`COUNT(*)` })
+    .from(reports)
+    .where(and(eq(reports.aiGenerated, true), gte(reports.createdAt, since)));
+  return Number(rows[0]?.n ?? 0);
+}
+
+export async function resolveReferringEmail(
+  name?: string | null
+): Promise<string | null> {
+  const key = normalizeReferringName(name);
+  if (!key) return null;
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(referringContacts)
+    .where(eq(referringContacts.name, key))
+    .limit(1);
+  return rows[0]?.email ?? null;
+}
+
+export async function upsertReferringEmail(
+  name: string,
+  email: string
+): Promise<void> {
+  const key = normalizeReferringName(name);
+  if (!key) return;
+  const db = await getDb();
+  if (!db) return;
+  const existing = await db
+    .select()
+    .from(referringContacts)
+    .where(eq(referringContacts.name, key))
+    .limit(1);
+  if (existing[0]) {
+    await db
+      .update(referringContacts)
+      .set({ email, updatedAt: new Date() })
+      .where(eq(referringContacts.id, existing[0].id));
+  } else {
+    await db.insert(referringContacts).values({ name: key, email });
   }
 }

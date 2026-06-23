@@ -151,8 +151,21 @@ async function computeOneKpi(
       );
     return Number(rows[0]?.n ?? 0);
   }
-  // Non encore capturés (nécessitent durée d'appel / verdict du médecin) → 0.
-  // copilote.avgLatencyMs, qualite.disagreementConfirmedRate.
+  // Latence moyenne des conversations Copilote (durée mesurée à l'exécution).
+  if (agentKey === "copilote" && kpiKey === "avgLatencyMs") {
+    const rows = await db
+      .select({ avg: sql`AVG(${agentActivity.durationMs})` })
+      .from(agentActivity)
+      .where(
+        and(
+          eq(agentActivity.agentKey, "copilote"),
+          eq(agentActivity.action, "chat")
+        )
+      );
+    return Math.round(Number(rows[0]?.avg ?? 0));
+  }
+  // Non encore capturé (nécessite le verdict du médecin sur les désaccords) → 0.
+  // qualite.disagreementConfirmedRate.
   return 0;
 }
 

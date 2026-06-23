@@ -2722,6 +2722,37 @@ export const appRouter = router({
           { query: input.query }
         );
       }),
+    listPendingSignatures: medicalProcedure.query(async () => {
+      const { runAgentTool } = await import("./agents/tools");
+      const { listPendingSignaturesFn } = await import("./tools/crTools");
+      return runAgentTool(
+        "copilote",
+        "listPendingSignatures",
+        () => listPendingSignaturesFn(),
+        null
+      );
+    }),
+    getCRDraft: medicalProcedure
+      .input(z.object({ studyId: z.number().int().positive() }))
+      .query(async ({ input }) => {
+        const { runAgentTool } = await import("./agents/tools");
+        const { getCRDraftFn } = await import("./tools/crTools");
+        return runAgentTool("copilote", "getCRDraft", getCRDraftFn, {
+          studyId: input.studyId,
+        });
+      }),
+    requestCRGeneration: medicalProcedure
+      .input(z.object({ studyId: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        const { runAgentTool } = await import("./agents/tools");
+        const { requestCRGenerationFn } = await import("./tools/crTools");
+        return runAgentTool(
+          "copilote",
+          "requestCRGeneration",
+          requestCRGenerationFn,
+          { studyId: input.studyId }
+        );
+      }),
   }),
   agentsRegistry: router({
     list: medicalProcedure.query(async () => {

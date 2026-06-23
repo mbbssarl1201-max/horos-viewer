@@ -159,6 +159,31 @@ export const AGENTS: AgentSpec[] = [
       },
     ],
   },
+  {
+    key: "referent",
+    name: "Hermès Référent",
+    role: "Gère le carnet des médecins référents et le suivi des envois de CR.",
+    objectives: [
+      "Tenir un annuaire fiable",
+      "Tracer les envois de comptes rendus",
+    ],
+    tasks: ["Gérer les contacts référents", "Envoyer le CR signé au référent"],
+    tools: ["manageContacts", "sendReport"],
+    access: ["report.read", "email.send"],
+    guardrails: [
+      "Jamais d'envoi sans signature du médecin",
+      "Le carnet ne contient que des médecins référents (aucune donnée patient)",
+    ],
+    kpis: [
+      {
+        key: "envois",
+        label: "CR envoyés au référent",
+        target: 1,
+        unit: "",
+        goal: "max",
+      },
+    ],
+  },
 ];
 
 export function getAgentSpec(key: string): AgentSpec | null {

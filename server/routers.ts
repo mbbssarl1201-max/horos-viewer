@@ -2034,6 +2034,14 @@ export const appRouter = router({
           } as any,
           ctx as any
         );
+        try {
+          const { logAgentActivity } = await import("./agents/state");
+          await logAgentActivity("referent", "sendReport", "ok", {
+            studyId: report.studyId,
+          });
+        } catch {
+          /* best-effort */
+        }
         return { ok: true, email };
       }),
 
@@ -2747,6 +2755,24 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const { upsertReferringEmail } = await import("./db");
         await upsertReferringEmail(input.name, input.email);
+        return { ok: true };
+      }),
+    list: medicalProcedure.query(async () => {
+      const { listReferringContacts } = await import("./db");
+      return { items: await listReferringContacts() };
+    }),
+    delete: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input, ctx }) => {
+        const { deleteReferringContact } = await import("./db");
+        await deleteReferringContact(input.id);
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "referent.deleteContact",
+          studyId: null,
+          detail: `id=${input.id}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
         return { ok: true };
       }),
   }),

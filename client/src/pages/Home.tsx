@@ -29,6 +29,7 @@ import { PendingSignatureList } from "@/components/PendingSignatureList";
 import { HermesFinder } from "@/components/HermesFinder";
 import { AgentCrSettings } from "@/components/AgentCrSettings";
 import { AgentsDashboard } from "@/components/AgentsDashboard";
+import { ReferentDirectory } from "@/components/ReferentDirectory";
 import { useLocation } from "wouter";
 import {
   Database,
@@ -828,6 +829,13 @@ export default function Home() {
             {/* Dashboard agents Hermès */}
             <div className="p-3">
               <AgentsDashboard />
+            </div>
+
+            <Separator />
+
+            {/* Carnet des référents */}
+            <div className="p-3">
+              <ReferentDirectory />
             </div>
           </ScrollArea>
 

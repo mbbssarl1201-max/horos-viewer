@@ -9,6 +9,7 @@ describe("registre d'agents", () => {
       "copilote",
       "qualite",
       "redacteur",
+      "referent",
     ]);
   });
   it("chaque agent a des outils, accès et au moins un KPI", () => {

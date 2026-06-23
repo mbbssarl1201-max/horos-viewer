@@ -1047,6 +1047,29 @@ export async function upsertReferringEmail(
   }
 }
 
+/** Carnet des médecins référents (nom normalisé → e-mail). Lecture. */
+export async function listReferringContacts(): Promise<
+  { id: number; name: string; email: string; updatedAt: Date }[]
+> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: referringContacts.id,
+      name: referringContacts.name,
+      email: referringContacts.email,
+      updatedAt: referringContacts.updatedAt,
+    })
+    .from(referringContacts)
+    .orderBy(asc(referringContacts.name));
+}
+
+export async function deleteReferringContact(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(referringContacts).where(eq(referringContacts.id, id));
+}
+
 /** Nombre de brouillons IA en attente de signature (file à signer). */
 export async function countPendingSignatureReports(): Promise<number> {
   const db = await getDb();
@@ -1079,9 +1102,7 @@ export async function backfillPatientNameSearch(): Promise<number> {
 }
 
 /** Recherche patients par nom (blind index exact, mono-cabinet). Lecture seule. */
-export async function searchPatientsByName(
-  query: string
-): Promise<
+export async function searchPatientsByName(query: string): Promise<
   {
     patientId: number;
     patientName: string;

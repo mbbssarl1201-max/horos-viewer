@@ -128,6 +128,8 @@ export const ENV = {
   // erreurs serveur sont remontées à Sentry. Sinon, no-op (aucune dépendance
   // ajoutée). Pour activer : `npm i @sentry/node` puis définir SENTRY_DSN.
   sentryDsn: process.env.SENTRY_DSN ?? "",
+  // Intervalle (ms) du worker agent CR autonome. Défaut 5 min. 0 = ne pas démarrer.
+  agentPollMs: Number(process.env.AGENT_POLL_MS ?? "300000"),
 };
 
 // Garde fail-safe : signaler quand SMTP_INSECURE est posé en production mais

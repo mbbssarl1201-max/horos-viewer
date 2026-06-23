@@ -614,6 +614,11 @@ async function startServer() {
   // pour que le client affiche « relancez » au lieu d'un avancement figé.
   void import("../db").then(m => m.recoverStaleAiJobs()).catch(() => {});
 
+  // Agent CR autonome : génère les brouillons des nouvelles études (si activé).
+  void import("../report/autoReportAgent")
+    .then(m => m.startAutoReportAgent())
+    .catch(() => {});
+
   server.listen(port, () => {
     logger.info("server.started", { port, env: process.env.NODE_ENV });
     console.log(`Server running on http://localhost:${port}/`);

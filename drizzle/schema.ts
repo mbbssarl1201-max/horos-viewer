@@ -456,6 +456,13 @@ export const agentSuggestions = mysqlTable("agent_suggestions", {
   status: mysqlEnum("status", ["open", "approved", "dismissed"])
     .notNull()
     .default("open"),
+  kind: mysqlEnum("kind", ["improvement", "rag_fiche"])
+    .notNull()
+    .default("improvement"),
+  modality: varchar("modality", { length: 16 }),
+  proposedHeading: varchar("proposedHeading", { length: 512 }),
+  proposedContent: text("proposedContent"),
+  sampleCount: int("sampleCount"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type AgentSuggestion = typeof agentSuggestions.$inferSelect;

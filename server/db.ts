@@ -1024,3 +1024,14 @@ export async function upsertReferringEmail(
     await db.insert(referringContacts).values({ name: key, email });
   }
 }
+
+/** Nombre de brouillons IA en attente de signature (file à signer). */
+export async function countPendingSignatureReports(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select({ n: sql<number>`COUNT(*)` })
+    .from(reports)
+    .where(and(eq(reports.aiGenerated, true), eq(reports.status, "draft")));
+  return Number(rows[0]?.n ?? 0);
+}

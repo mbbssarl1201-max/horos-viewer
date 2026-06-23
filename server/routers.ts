@@ -2433,6 +2433,45 @@ export const appRouter = router({
         return result;
       }),
   }),
+  // Agent CR autonome : réglages + statut (incrément 1).
+  agent: router({
+    status: medicalProcedure.query(async () => {
+      const {
+        getAgentSettings,
+        countAiReportsSince,
+        countPendingSignatureReports,
+      } = await import("./db");
+      const s = await getAgentSettings();
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      return {
+        enabled: s?.enabled ?? false,
+        enabledAt: s?.enabledAt ?? null,
+        dailyCap: s?.dailyCap ?? 20,
+        generatedToday: await countAiReportsSince(startOfToday),
+        pendingCount: await countPendingSignatureReports(),
+      };
+    }),
+    configure: adminProcedure
+      .input(
+        z.object({
+          enabled: z.boolean().optional(),
+          dailyCap: z.number().int().min(1).max(500).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { updateAgentSettings } = await import("./db");
+        await updateAgentSettings(input);
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "agent.configure",
+          studyId: null,
+          detail: `enabled=${input.enabled} cap=${input.dailyCap}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { ok: true };
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

@@ -25,6 +25,8 @@ import AnonymizeDialog from "@/components/AnonymizeDialog";
 import QueryPACS from "@/components/QueryPACS";
 import WorklistDialog from "@/components/WorklistDialog";
 import ShareStudyDialog from "@/components/ShareStudyDialog";
+import { PendingSignatureList } from "@/components/PendingSignatureList";
+import { AgentCrSettings } from "@/components/AgentCrSettings";
 import { useLocation } from "wouter";
 import {
   Database,
@@ -718,6 +720,13 @@ export default function Home() {
 
             <Separator />
 
+            {/* File à signer — brouillons IA en attente de signature */}
+            <div className="p-3">
+              <PendingSignatureList onOpen={openStudy} />
+            </div>
+
+            <Separator />
+
             {/* Today's Studies by modality */}
             <div className="p-3">
               <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
@@ -796,6 +805,13 @@ export default function Home() {
                   </button>
                 ))}
               </div>
+            </div>
+
+            <Separator />
+
+            {/* Réglages agent CR autonome */}
+            <div className="p-3">
+              <AgentCrSettings />
             </div>
           </ScrollArea>
 

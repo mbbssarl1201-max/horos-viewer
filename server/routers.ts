@@ -2609,6 +2609,100 @@ export const appRouter = router({
       return { updated: await backfillPatientNameSearch() };
     }),
   }),
+  agentsRegistry: router({
+    list: medicalProcedure.query(async () => {
+      const { AGENTS } = await import("./agents/registry");
+      const { getAgentState } = await import("./agents/state");
+      const { computeAgentKpis } = await import("./agents/metrics");
+      const out = [];
+      for (const spec of AGENTS) {
+        const state = await getAgentState(spec.key);
+        const kpis = await computeAgentKpis(spec.key);
+        out.push({ spec, state, kpis });
+      }
+      return { agents: out };
+    }),
+    configure: adminProcedure
+      .input(
+        z.object({
+          agentKey: z.string().max(64),
+          enabled: z.boolean().optional(),
+          targetsJson: z.string().max(4000).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { setAgentState } = await import("./agents/state");
+        await setAgentState(input.agentKey, {
+          enabled: input.enabled,
+          targetsJson: input.targetsJson,
+        });
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "agents.configure",
+          studyId: null,
+          detail: input.agentKey,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { ok: true };
+      }),
+    activity: medicalProcedure
+      .input(
+        z.object({
+          agentKey: z.string().max(64).optional(),
+          limit: z.number().int().min(1).max(200).default(50),
+        })
+      )
+      .query(async ({ input }) => {
+        const { listAgentActivity } = await import("./agents/state");
+        return { items: await listAgentActivity(input.agentKey, input.limit) };
+      }),
+    suggestions: medicalProcedure.query(async () => {
+      const { getDb } = await import("./db");
+      const { agentSuggestions } = await import("../drizzle/schema");
+      const { eq, desc } = await import("drizzle-orm");
+      const db = await getDb();
+      if (!db) return { items: [] };
+      const items = await db
+        .select()
+        .from(agentSuggestions)
+        .where(eq(agentSuggestions.status, "open"))
+        .orderBy(desc(agentSuggestions.createdAt));
+      return { items };
+    }),
+    refreshSuggestions: adminProcedure.mutation(async () => {
+      const { AGENTS } = await import("./agents/registry");
+      const { computeSuggestions } = await import("./agents/improve");
+      let created = 0;
+      for (const a of AGENTS) created += await computeSuggestions(a.key);
+      return { created };
+    }),
+    resolveSuggestion: adminProcedure
+      .input(
+        z.object({
+          id: z.number().int(),
+          action: z.enum(["approved", "dismissed"]),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { getDb } = await import("./db");
+        const { agentSuggestions } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db
+          .update(agentSuggestions)
+          .set({ status: input.action })
+          .where(eq(agentSuggestions.id, input.id));
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "agents.resolveSuggestion",
+          studyId: null,
+          detail: `${input.id}:${input.action}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { ok: true };
+      }),
+  }),
   referringContacts: router({
     resolve: medicalProcedure
       .input(z.object({ name: z.string().max(256) }))

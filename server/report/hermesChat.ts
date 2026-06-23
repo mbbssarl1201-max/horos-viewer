@@ -309,5 +309,13 @@ export async function runHermesChat(
     detail: prep.model,
     ipAddress: ctx.req?.ip ?? null,
   });
+  try {
+    const { logAgentActivity } = await import("../agents/state");
+    await logAgentActivity("copilote", "chat", "ok", {
+      studyId: (input as any).studyId,
+    });
+  } catch {
+    /* best-effort */
+  }
   return { reply, model: prep.model, sources: prep.sources };
 }

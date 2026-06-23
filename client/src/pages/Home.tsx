@@ -28,6 +28,7 @@ import ShareStudyDialog from "@/components/ShareStudyDialog";
 import { PendingSignatureList } from "@/components/PendingSignatureList";
 import { HermesFinder } from "@/components/HermesFinder";
 import { AgentCrSettings } from "@/components/AgentCrSettings";
+import { AgentsDashboard } from "@/components/AgentsDashboard";
 import { useLocation } from "wouter";
 import {
   Database,
@@ -820,6 +821,13 @@ export default function Home() {
             {/* Réglages agent CR autonome */}
             <div className="p-3">
               <AgentCrSettings />
+            </div>
+
+            <Separator />
+
+            {/* Dashboard agents Hermès */}
+            <div className="p-3">
+              <AgentsDashboard />
             </div>
           </ScrollArea>
 

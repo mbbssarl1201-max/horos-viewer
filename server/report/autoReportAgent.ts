@@ -57,6 +57,20 @@ async function generateForStudy(studyId: number): Promise<boolean> {
     aiModel: (res as any).model ?? null,
     createdBy: 0,
   });
+  const { logAgentActivity, recordReportSnapshot } = await import(
+    "../agents/state"
+  );
+  await recordReportSnapshot(
+    studyId,
+    {
+      indication: (res as any).indication ?? "",
+      technique: (res as any).technique ?? "",
+      resultats: (res as any).resultats ?? "",
+      conclusion: (res as any).conclusion ?? "",
+    },
+    (res as any).model ?? null
+  );
+  await logAgentActivity("redacteur", "generateDraft", "ok", { studyId });
   return true;
 }
 
@@ -80,6 +94,12 @@ export async function runAgentOnce(): Promise<{ generated: number }> {
       if (await generateForStudy(id)) generated++;
     } catch (e) {
       console.warn(`[agent] échec étude ${id}:`, (e as Error)?.message);
+      await (
+        await import("../agents/state")
+      ).logAgentActivity("redacteur", "generateDraft", "error", {
+        studyId: id,
+        detail: (e as Error)?.message,
+      });
     }
   }
   await setAgentLastRun();

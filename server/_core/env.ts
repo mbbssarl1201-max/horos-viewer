@@ -136,6 +136,8 @@ export const ENV = {
   geminiVertexLocation: process.env.GEMINI_VERTEX_LOCATION ?? "europe-west1",
   geminiVertexModel: process.env.GEMINI_VERTEX_MODEL ?? "gemini-2.0-flash",
   geminiVertexToken: process.env.GEMINI_VERTEX_TOKEN ?? "",
+  // Token Bearer pour déclencher la sync vault depuis un cron externe (hors UI).
+  vaultSyncToken: process.env.VAULT_SYNC_TOKEN ?? "",
 };
 
 // Garde fail-safe : signaler quand SMTP_INSECURE est posé en production mais

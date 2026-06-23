@@ -2440,6 +2440,25 @@ export const appRouter = router({
         }
         return { inserted, errors };
       }),
+    syncVaultFromDisk: adminProcedure.mutation(async ({ ctx }) => {
+      const { syncVault } = await import("./knowledge/vaultSync");
+      const { ENV } = await import("./_core/env");
+      if (!ENV.knowledgeVaultDir) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "KNOWLEDGE_VAULT_DIR non configuré",
+        });
+      }
+      const result = await syncVault(ENV.knowledgeVaultDir);
+      await recordAccess({
+        userId: ctx.user.id,
+        action: "knowledge.syncVault",
+        studyId: null,
+        detail: `chunks=${result.chunks} removed=${result.removed}`,
+        ipAddress: ctx.req?.ip ?? null,
+      });
+      return result;
+    }),
     // Recherche par similarité (test/2c).
     search: adminProcedure
       .input(
@@ -2627,6 +2646,15 @@ export const appRouter = router({
       const { backfillPatientNameSearch } = await import("./db");
       return { updated: await backfillPatientNameSearch() };
     }),
+    searchVault: medicalProcedure
+      .input(z.object({ query: z.string().min(1).max(500) }))
+      .query(async ({ input }) => {
+        const { runAgentTool } = await import("./agents/tools");
+        const { searchVaultFn } = await import("./tools/vaultTools");
+        return runAgentTool("copilote", "searchVault", searchVaultFn, {
+          query: input.query,
+        });
+      }),
   }),
   agentsRegistry: router({
     list: medicalProcedure.query(async () => {

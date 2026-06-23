@@ -20,6 +20,7 @@ import {
   requestCRGenerationFn,
 } from "./crTools";
 import { getDb } from "../db";
+import { runAgentOnce } from "../report/autoReportAgent";
 
 const makeDb = (reports: any[], joinResult?: any[]) => ({
   select: vi.fn().mockReturnValue({
@@ -105,9 +106,9 @@ describe("requestCRGenerationFn", () => {
 
   it("déclenche runAgentOnce si pas de draft existant", async () => {
     vi.mocked(getDb).mockResolvedValue(makeDb([]) as any);
-    const { runAgentOnce } = await import("../report/autoReportAgent");
     const result = await requestCRGenerationFn({ studyId: 10 });
     expect(result.jobStarted).toBe(true);
     expect(result.alreadyExists).toBe(false);
+    expect(vi.mocked(runAgentOnce)).toHaveBeenCalled();
   });
 });

@@ -79,6 +79,9 @@ export async function requestCRGenerationFn(args: {
 }> {
   const db = await getDb();
   if (!db) return { alreadyExists: false, jobStarted: false };
+  // Checks for ANY existing report (draft or signed). If signed, Hermès receives
+  // alreadyExists: true + status: "signed", letting it inform the user instead
+  // of triggering a duplicate generation.
   const existing = await db
     .select({ id: reports.id, status: reports.status })
     .from(reports)
@@ -91,7 +94,9 @@ export async function requestCRGenerationFn(args: {
       status: existing[0].status,
     };
   }
-  // Déclenche l'agent CR de façon asynchrone (fire-and-forget)
+  // runAgentOnce() processes ALL studies pending generation (no studyId targeting).
+  // The requested study will be among them; delay may exceed expectedDelaySeconds
+  // if there is a queue.
   const { runAgentOnce } = await import("../report/autoReportAgent");
   runAgentOnce().catch(e =>
     console.warn("[crTool] requestCRGeneration failed:", (e as Error)?.message)

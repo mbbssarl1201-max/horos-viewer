@@ -54,6 +54,9 @@ describe("pubmedSearchFn", () => {
     expect(result.available).toBe(true);
     expect(result.results.length).toBeGreaterThan(0);
     expect(result.results[0].pmid).toBe("12345678");
+    expect(result.results[0].title).toBe("Radiology protocol review.");
+    expect(result.results[0].year).toBe("2025");
+    expect(result.results[0].abstract).toContain("IRM protocols");
   });
 
   it("retourne available: false si réseau KO", async () => {
@@ -62,7 +65,7 @@ describe("pubmedSearchFn", () => {
     expect(result.available).toBe(false);
   });
 
-  it("retourne available: false si aucun PMID trouvé", async () => {
+  it("retourne available: true avec tableau vide si aucun PMID trouvé", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: vi.fn().mockResolvedValue({ esearchresult: { idlist: [] } }),

@@ -50,16 +50,20 @@ export async function getWeatherFn(): Promise<{
     const resp = await fetch(url, { signal: controller.signal });
     if (!resp.ok) return { available: false };
     const data = await resp.json();
+    const tomorrowTemp = data.daily?.temperature_2m_max?.[1];
+    const tomorrowCode = data.daily?.weathercode?.[1];
     return {
       available: true,
       temperature: data.current?.temperature_2m,
       condition: wmoLabel(data.current?.weathercode ?? 0),
-      tomorrow: {
-        temperature:
-          data.daily?.temperature_2m_max?.[1] ??
-          data.daily?.temperature_2m_max?.[0],
-        condition: wmoLabel(data.daily?.weathercode?.[1] ?? 0),
-      },
+      ...(tomorrowTemp !== undefined
+        ? {
+            tomorrow: {
+              temperature: tomorrowTemp,
+              condition: wmoLabel(tomorrowCode ?? 0),
+            },
+          }
+        : {}),
     };
   } catch {
     return { available: false };
@@ -116,8 +120,20 @@ async function fetchGcalEvents(date: string): Promise<CalEvent[]> {
       scopes: ["https://www.googleapis.com/auth/calendar.readonly"],
     });
     const calendar = google.calendar({ version: "v3", auth });
-    const timeMin = new Date(`${date}T00:00:00+01:00`).toISOString();
-    const timeMax = new Date(`${date}T23:59:59+01:00`).toISOString();
+    // Derive correct UTC bounds accounting for CET/CEST dynamic offset
+    const tzOffsetParts =
+      new Intl.DateTimeFormat("en", {
+        timeZone: "Europe/Zurich",
+        timeZoneName: "shortOffset",
+      })
+        .formatToParts(new Date(`${date}T12:00:00Z`))
+        .find(p => p.type === "timeZoneName")?.value ?? "GMT+1";
+    const offsetMatch = tzOffsetParts.match(/GMT([+-])(\d+)/);
+    const sign = offsetMatch?.[1] ?? "+";
+    const hrs = (offsetMatch?.[2] ?? "1").padStart(2, "0");
+    const offset = `${sign}${hrs}:00`;
+    const timeMin = new Date(`${date}T00:00:00${offset}`).toISOString();
+    const timeMax = new Date(`${date}T23:59:59${offset}`).toISOString();
     const calendarId = ENV.googleCalendarId || "primary";
     const resp = await calendar.events.list({
       calendarId,

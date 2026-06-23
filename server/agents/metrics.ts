@@ -108,13 +108,17 @@ async function computeOneKpi(
     return acceptanceRate({ signed, changedMajor });
   }
   if (agentKey === "redacteur" && kpiKey === "draftsPerDay") {
+    const since = new Date();
+    since.setHours(0, 0, 0, 0);
+    const { gte } = await import("drizzle-orm");
     const rows = await db
       .select({ n: sql`COUNT(*)` })
       .from(agentActivity)
       .where(
         and(
           eq(agentActivity.agentKey, "redacteur"),
-          eq(agentActivity.action, "generateDraft")
+          eq(agentActivity.action, "generateDraft"),
+          gte(agentActivity.createdAt, since)
         )
       );
     return Number(rows[0]?.n ?? 0);

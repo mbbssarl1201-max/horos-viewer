@@ -12,6 +12,9 @@ export function AgentsDashboard() {
   const resolve = trpc.agentsRegistry.resolveSuggestion.useMutation({
     onSuccess: () => suggestions.refetch(),
   });
+  const runLearning = trpc.agentsRegistry.runLearning.useMutation({
+    onSuccess: () => suggestions.refetch(),
+  });
   const agents = list.data?.agents ?? [];
   return (
     <div className="space-y-3">
@@ -22,6 +25,12 @@ export function AgentsDashboard() {
           onClick={() => refresh.mutate()}
         >
           Analyser
+        </button>
+        <button
+          className="text-[11px] rounded bg-muted/50 px-2 py-1"
+          onClick={() => runLearning.mutate()}
+        >
+          Apprendre des corrections
         </button>
       </div>
       {agents.map((a: any) => (
@@ -77,7 +86,21 @@ export function AgentsDashboard() {
               key={s.id}
               className="rounded border border-amber-500/40 p-2 text-[11px] space-y-1"
             >
-              <div>{s.suggestion}</div>
+              {s.kind === "rag_fiche" ? (
+                <div className="text-[11px] space-y-0.5">
+                  <div className="font-medium">
+                    {s.proposedHeading}{" "}
+                    <span className="text-muted-foreground">
+                      ({s.modality}, vu {s.sampleCount}×)
+                    </span>
+                  </div>
+                  <div className="text-muted-foreground">
+                    {s.proposedContent}
+                  </div>
+                </div>
+              ) : (
+                <div>{s.suggestion}</div>
+              )}
               <div className="flex gap-2">
                 <button
                   className="rounded bg-emerald-500/15 text-emerald-400 px-2 py-0.5"

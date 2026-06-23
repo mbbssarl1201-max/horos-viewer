@@ -449,8 +449,11 @@ export default function ReportPanel({
 
   const field =
     "w-full rounded bg-muted/40 border border-border px-2 py-1 text-sm";
+  // Champs du COMPTE RENDU : plus grands et plus aérés (lisibilité du CR IA).
+  const reportField =
+    "w-full rounded bg-muted/40 border border-border px-3 py-2 text-[15px] leading-relaxed";
   return (
-    <div className="absolute right-0 top-0 z-30 h-full w-full sm:w-[360px] max-w-[100vw] bg-background border-l border-border p-4 overflow-y-auto space-y-3">
+    <div className="absolute right-0 top-0 z-30 h-full w-full sm:w-[440px] lg:w-[520px] max-w-[100vw] bg-background border-l border-border p-4 overflow-y-auto space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="font-bold text-sm">Compte rendu</h3>
         <button onClick={onClose} className="text-xs text-muted-foreground">
@@ -502,10 +505,10 @@ export default function ReportPanel({
       {/* --- Éditeur 4 sections ------------------------------------------- */}
       {SECTION_KEYS.map(k => (
         <div key={k} className="space-y-1">
-          <label className="text-xs font-medium capitalize">{k}</label>
+          <label className="text-sm font-semibold capitalize">{k}</label>
           <textarea
-            className={field}
-            rows={k === "resultats" ? 5 : 2}
+            className={reportField}
+            rows={k === "resultats" ? 12 : k === "conclusion" ? 5 : 4}
             value={sections[k]}
             disabled={isSigned || assistBusy === k}
             onChange={e => setSections(s => ({ ...s, [k]: e.target.value }))}

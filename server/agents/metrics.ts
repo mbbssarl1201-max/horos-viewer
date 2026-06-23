@@ -124,16 +124,54 @@ async function computeOneKpi(
     return Number(rows[0]?.n ?? 0);
   }
   if (agentKey === "copilote" && kpiKey === "conversations") {
+    return countActivity(db, "copilote", "chat");
+  }
+  // Compteurs d'activité (journal agent_activity) pour les KPIs « combien de fois ».
+  if (agentKey === "apprentissage" && kpiKey === "fichesProposed") {
+    return countActivity(db, "apprentissage", "proposeRagFiche");
+  }
+  if (agentKey === "codage" && kpiKey === "codageRuns") {
+    return countActivity(db, "codage", "suggestBillingCodes");
+  }
+  if (agentKey === "referent" && kpiKey === "envois") {
+    return countActivity(db, "referent", "sendReport");
+  }
+  // Fiches apprises réellement APPROUVÉES par le gérant (depuis agent_suggestions).
+  if (agentKey === "apprentissage" && kpiKey === "fichesApproved") {
+    const { agentSuggestions } = await import("../../drizzle/schema");
     const rows = await db
       .select({ n: sql`COUNT(*)` })
-      .from(agentActivity)
+      .from(agentSuggestions)
       .where(
         and(
-          eq(agentActivity.agentKey, "copilote"),
-          eq(agentActivity.action, "chat")
+          eq(agentSuggestions.agentKey, "apprentissage"),
+          eq(agentSuggestions.kind, "rag_fiche"),
+          eq(agentSuggestions.status, "approved")
         )
       );
     return Number(rows[0]?.n ?? 0);
   }
+  // Non encore capturés (nécessitent durée d'appel / verdict du médecin) → 0.
+  // copilote.avgLatencyMs, qualite.disagreementConfirmedRate.
   return 0;
+}
+
+/** Compte les entrées du journal d'un agent pour une action donnée. */
+async function countActivity(
+  db: any,
+  agentKey: string,
+  action: string
+): Promise<number> {
+  const { agentActivity } = await import("../../drizzle/schema");
+  const { eq, and, sql } = await import("drizzle-orm");
+  const rows = await db
+    .select({ n: sql`COUNT(*)` })
+    .from(agentActivity)
+    .where(
+      and(
+        eq(agentActivity.agentKey, agentKey),
+        eq(agentActivity.action, action)
+      )
+    );
+  return Number(rows[0]?.n ?? 0);
 }

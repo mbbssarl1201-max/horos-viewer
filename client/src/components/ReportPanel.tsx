@@ -155,6 +155,7 @@ export default function ReportPanel({
   const upsertDraft = trpc.reports.upsertDraft.useMutation();
   const aiGenerate = trpc.reports.aiGenerate.useMutation();
   const signReport = trpc.reports.sign.useMutation();
+  const signAndSend = trpc.reports.signAndSend.useMutation();
   const addAddendum = trpc.reports.addAddendum.useMutation();
   const trpcUtils = trpc.useUtils();
 
@@ -728,6 +729,32 @@ export default function ReportPanel({
           >
             Signer
           </Button>
+          <button
+            disabled={!sections.conclusion.trim() || signAndSend.isPending}
+            onClick={async () => {
+              try {
+                const up = await upsertDraft.mutateAsync({
+                  studyId,
+                  sections,
+                });
+                await signAndSend.mutateAsync({
+                  reportId: up.id,
+                  recipientEmail: to || undefined,
+                  windowCenter,
+                  windowWidth,
+                });
+                reportQuery.refetch();
+              } catch (e: unknown) {
+                const msg =
+                  e instanceof Error ? e.message : "Erreur lors de l'envoi";
+                setMessage(msg);
+              }
+            }}
+            className="text-[11px] rounded bg-emerald-600/20 text-emerald-400 px-2 py-1 disabled:opacity-50"
+            title="Signe le compte-rendu et l'envoie au médecin référent"
+          >
+            {signAndSend.isPending ? "Envoi…" : "Signer & envoyer au référent"}
+          </button>
         </div>
       )}
 

@@ -9,6 +9,7 @@ import {
 import { embedText } from "../knowledge/embeddings";
 import { searchSimilar } from "../knowledge/store";
 import { selectRelevant, buildKnowledgeBlock } from "../knowledge/retrieve";
+import { vertexConfigured } from "./hermesBackend";
 
 export interface HermesMessage {
   role: "user" | "assistant";
@@ -98,7 +99,8 @@ export async function chatViaOllama(messages: ChatMsg[]): Promise<string> {
       body: JSON.stringify({
         model: ENV.ollamaTextModel,
         stream: false,
-        keep_alive: "30s",
+        keep_alive: -1,
+        options: { num_thread: 4 },
         messages,
       }),
     });
@@ -137,6 +139,39 @@ async function chatViaClaude(messages: ChatMsg[]): Promise<string> {
     .join("\n");
 }
 
+/** Gemini via Vertex AI UE (conforme nLPD). */
+export async function chatViaVertex(messages: ChatMsg[]): Promise<string> {
+  const sys = messages.find(m => m.role === "system")?.content ?? "";
+  const contents = messages
+    .filter(m => m.role !== "system")
+    .map(m => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }],
+    }));
+  const url = `https://${ENV.geminiVertexLocation}-aiplatform.googleapis.com/v1/projects/${ENV.geminiVertexProject}/locations/${ENV.geminiVertexLocation}/publishers/google/models/${ENV.geminiVertexModel}:generateContent`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${ENV.geminiVertexToken}`,
+    },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: sys }] },
+      contents,
+      generationConfig: { maxOutputTokens: 1200, temperature: 0.2 },
+    }),
+  });
+  if (!resp.ok)
+    throw new Error(
+      `Vertex HTTP ${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 200)}`
+    );
+  const data = await resp.json();
+  return (
+    data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("") ??
+    ""
+  );
+}
+
 export interface RunHermesChatInput {
   studyId: number;
   messages: HermesMessage[];
@@ -154,6 +189,7 @@ export interface PreparedHermesChat {
   sources: HermesSource[];
   model: string;
   useClaude: boolean;
+  useVertex: boolean;
   study: { id: number };
 }
 
@@ -202,21 +238,56 @@ export async function prepareHermesChat(
     }
   }
 
+  // RAG référentiels (fail-soft) : enrichit le contexte avec des chunks
+  // issus de la base de connaissances radiologiques, requête = métadonnées étude.
+  try {
+    const query = [
+      (study as any).modality,
+      (study as any).studyDescription,
+      (report as any)?.indication,
+    ]
+      .filter(Boolean)
+      .join(" — ")
+      .trim();
+    if (query) {
+      const emb = await embedText(query);
+      const hits = await searchSimilar(emb, 8);
+      const block = buildKnowledgeBlock(
+        selectRelevant(hits, { minScore: 0.5, maxChunks: 4, maxChars: 2500 })
+      );
+      if (block) {
+        knowledgeBlock = knowledgeBlock
+          ? `${knowledgeBlock}\n\nRéférentiels (cite-les si pertinent) :\n${block}`
+          : `Référentiels (cite-les si pertinent) :\n${block}`;
+      }
+    }
+  } catch {
+    // RAG référentiels indisponible → on continue sans enrichissement
+  }
+
   const messages = assembleMessages(
     context,
     input.messages,
     12,
     knowledgeBlock
   );
+  const useVertex = vertexConfigured();
   const useClaude =
+    !useVertex &&
     ENV.aiBackend === "claude" &&
     !!ENV.anthropicApiKey &&
     ENV.cloudAiPhiConsent;
+  const model = useVertex
+    ? ENV.geminiVertexModel
+    : useClaude
+      ? ENV.anthropicModel
+      : ENV.ollamaTextModel;
   return {
     messages,
     sources,
-    model: useClaude ? ENV.anthropicModel : ENV.ollamaTextModel,
+    model,
     useClaude,
+    useVertex,
     study: { id: (study as any).id },
   };
 }
@@ -226,9 +297,11 @@ export async function runHermesChat(
   ctx: { user: { id: number }; req?: { ip?: string } }
 ): Promise<{ reply: string; model: string; sources: HermesSource[] }> {
   const prep = await prepareHermesChat(input, { user: ctx.user });
-  const reply = prep.useClaude
-    ? await chatViaClaude(prep.messages)
-    : await chatViaOllama(prep.messages);
+  const reply = prep.useVertex
+    ? await chatViaVertex(prep.messages)
+    : prep.useClaude
+      ? await chatViaClaude(prep.messages)
+      : await chatViaOllama(prep.messages);
   await recordAccess({
     userId: ctx.user.id,
     action: "ai.hermes.chat",

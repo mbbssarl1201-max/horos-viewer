@@ -130,6 +130,12 @@ export const ENV = {
   sentryDsn: process.env.SENTRY_DSN ?? "",
   // Intervalle (ms) du worker agent CR autonome. Défaut 5 min. 0 = ne pas démarrer.
   agentPollMs: Number(process.env.AGENT_POLL_MS ?? "300000"),
+  // Backend du chat Hermès : "local" (Ollama, PHI-safe) | "vertex" (Gemini UE) | "claude".
+  chatBackend: process.env.CHAT_BACKEND ?? "local",
+  geminiVertexProject: process.env.GEMINI_VERTEX_PROJECT ?? "",
+  geminiVertexLocation: process.env.GEMINI_VERTEX_LOCATION ?? "europe-west1",
+  geminiVertexModel: process.env.GEMINI_VERTEX_MODEL ?? "gemini-2.0-flash",
+  geminiVertexToken: process.env.GEMINI_VERTEX_TOKEN ?? "",
 };
 
 // Garde fail-safe : signaler quand SMTP_INSECURE est posé en production mais

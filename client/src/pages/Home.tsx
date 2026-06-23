@@ -26,6 +26,7 @@ import QueryPACS from "@/components/QueryPACS";
 import WorklistDialog from "@/components/WorklistDialog";
 import ShareStudyDialog from "@/components/ShareStudyDialog";
 import { PendingSignatureList } from "@/components/PendingSignatureList";
+import { HermesFinder } from "@/components/HermesFinder";
 import { AgentCrSettings } from "@/components/AgentCrSettings";
 import { useLocation } from "wouter";
 import {
@@ -723,6 +724,13 @@ export default function Home() {
             {/* File à signer — brouillons IA en attente de signature */}
             <div className="p-3">
               <PendingSignatureList onOpen={openStudy} />
+            </div>
+
+            <Separator />
+
+            {/* Recherche patient Hermès */}
+            <div className="p-3">
+              <HermesFinder onOpen={openStudy} />
             </div>
 
             <Separator />

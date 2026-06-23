@@ -364,6 +364,27 @@ export async function listInstancesBySeries(seriesId: number) {
     .orderBy(instances.instanceNumber);
 }
 
+// ============ PATIENT NAME HELPERS ============
+
+/** Normalise un nom (casse/espaces/accents/^) pour la recherche. */
+export function normalizeName(name?: string | null): string {
+  if (!name) return "";
+  return name
+    .replace(/\^/g, " ")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Empreinte déterministe chiffrée du nom normalisé (blind index). */
+export function nameSearchKey(name?: string | null): string | null {
+  const n = normalizeName(name);
+  if (!n) return null;
+  return encryptDeterministic(n);
+}
+
 // ============ PATIENT QUERIES ============
 
 export async function findOrCreatePatient(patientData: {
@@ -400,6 +421,7 @@ export async function findOrCreatePatient(patientData: {
     patientName: encryptField(patientData.patientName)!,
     birthDate: encryptField(patientData.birthDate || null),
     sex: encryptField(patientData.sex || null),
+    nameSearch: nameSearchKey(patientData.patientName),
   });
 
   const newPatient = await db
@@ -1034,6 +1056,79 @@ export async function countPendingSignatureReports(): Promise<number> {
     .from(reports)
     .where(and(eq(reports.aiGenerated, true), eq(reports.status, "draft")));
   return Number(rows[0]?.n ?? 0);
+}
+
+/** Recalcule nameSearch pour tous les patients (idempotent). */
+export async function backfillPatientNameSearch(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db.select().from(patients);
+  let updated = 0;
+  for (const p of rows) {
+    const name = decryptField(p.patientName);
+    const key = nameSearchKey(name);
+    if (key && key !== p.nameSearch) {
+      await db
+        .update(patients)
+        .set({ nameSearch: key })
+        .where(eq(patients.id, p.id));
+      updated++;
+    }
+  }
+  return updated;
+}
+
+/** Recherche patients par nom (blind index exact, mono-cabinet). Lecture seule. */
+export async function searchPatientsByName(
+  query: string
+): Promise<
+  {
+    patientId: number;
+    patientName: string;
+    studyId: number | null;
+    reportStatus: string | null;
+  }[]
+> {
+  const key = nameSearchKey(query);
+  if (!key) return [];
+  const db = await getDb();
+  if (!db) return [];
+  const pts = await db
+    .select()
+    .from(patients)
+    .where(eq(patients.nameSearch, key))
+    .limit(10);
+  const out: {
+    patientId: number;
+    patientName: string;
+    studyId: number | null;
+    reportStatus: string | null;
+  }[] = [];
+  for (const p of pts) {
+    const st = await db
+      .select({ id: studies.id })
+      .from(studies)
+      .where(eq(studies.patientId, p.id))
+      .orderBy(desc(studies.createdAt))
+      .limit(1);
+    const studyId = st[0]?.id ?? null;
+    let reportStatus: string | null = null;
+    if (studyId) {
+      const r = await db
+        .select({ status: reports.status })
+        .from(reports)
+        .where(eq(reports.studyId, studyId))
+        .limit(1);
+      reportStatus = r[0]?.status ?? null;
+    }
+    out.push({
+      patientId: p.id,
+      patientName: decryptField(p.patientName) ?? "",
+      studyId,
+      reportStatus,
+    });
+  }
+  return out;
 }
 
 /** File à signer : brouillons IA non signés + infos étude (mono-cabinet). */

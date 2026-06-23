@@ -2589,6 +2589,26 @@ export const appRouter = router({
         return { ok: true };
       }),
   }),
+  hermes: router({
+    findPatientReport: medicalProcedure
+      .input(z.object({ query: z.string().min(1).max(120) }))
+      .query(async ({ input, ctx }) => {
+        const { searchPatientsByName } = await import("./db");
+        const results = await searchPatientsByName(input.query);
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "hermes.find",
+          studyId: null,
+          detail: `n=${results.length}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { results };
+      }),
+    backfillNameSearch: adminProcedure.mutation(async () => {
+      const { backfillPatientNameSearch } = await import("./db");
+      return { updated: await backfillPatientNameSearch() };
+    }),
+  }),
   referringContacts: router({
     resolve: medicalProcedure
       .input(z.object({ name: z.string().max(256) }))

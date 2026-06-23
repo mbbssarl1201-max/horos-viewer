@@ -138,6 +138,13 @@ export const ENV = {
   geminiVertexToken: process.env.GEMINI_VERTEX_TOKEN ?? "",
   // Token Bearer pour déclencher la sync vault depuis un cron externe (hors UI).
   vaultSyncToken: process.env.VAULT_SYNC_TOKEN ?? "",
+  // Coordonnées GPS du cabinet pour la météo Open-Meteo (pas de clé requise).
+  cabinetLat: process.env.CABINET_LAT ?? "",
+  cabinetLng: process.env.CABINET_LNG ?? "",
+  // Service account Google Calendar (JSON stringifié). Vide = calendrier désactivé.
+  googleServiceAccountJson: process.env.GOOGLE_SA_KEY_JSON ?? "",
+  // ID du calendrier Google à lire (défaut = "primary" du service account).
+  googleCalendarId: process.env.GOOGLE_CALENDAR_ID ?? "primary",
 };
 
 // Garde fail-safe : signaler quand SMTP_INSECURE est posé en production mais

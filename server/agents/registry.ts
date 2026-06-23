@@ -80,7 +80,14 @@ export const AGENTS: AgentSpec[] = [
     role: "Répond aux questions du médecin et explique les comptes rendus.",
     objectives: ["Expliquer le raisonnement", "Retrouver un dossier vite"],
     tasks: ["Chercher un patient", "Expliquer un CR"],
-    tools: ["searchPatient", "explainReport", "searchVault"],
+    tools: [
+      "searchPatient",
+      "explainReport",
+      "searchVault",
+      "getWeather",
+      "getLocalTime",
+      "calendarToday",
+    ],
     access: ["patient.search", "report.read"],
     guardrails: ["Lecture seule", "Aucune action (signature/envoi/modif)"],
     kpis: [

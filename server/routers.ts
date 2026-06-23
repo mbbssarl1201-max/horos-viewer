@@ -2655,6 +2655,37 @@ export const appRouter = router({
           query: input.query,
         });
       }),
+    weather: medicalProcedure.query(async () => {
+      const { runAgentTool } = await import("./agents/tools");
+      const { getWeatherFn } = await import("./tools/contextTools");
+      return runAgentTool("copilote", "getWeather", () => getWeatherFn(), null);
+    }),
+    localTime: medicalProcedure.query(async () => {
+      const { runAgentTool } = await import("./agents/tools");
+      const { getLocalTimeFn } = await import("./tools/contextTools");
+      return runAgentTool(
+        "copilote",
+        "getLocalTime",
+        () => getLocalTimeFn(),
+        null
+      );
+    }),
+    calendarToday: medicalProcedure
+      .input(
+        z.object({
+          date: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .optional(),
+        })
+      )
+      .query(async ({ input }) => {
+        const { runAgentTool } = await import("./agents/tools");
+        const { calendarTodayFn } = await import("./tools/contextTools");
+        return runAgentTool("copilote", "calendarToday", calendarTodayFn, {
+          date: input.date,
+        });
+      }),
   }),
   agentsRegistry: router({
     list: medicalProcedure.query(async () => {

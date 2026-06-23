@@ -409,3 +409,63 @@ export const agentSettings = mysqlTable("agent_settings", {
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 export type AgentSettings = typeof agentSettings.$inferSelect;
+
+/** État + réglages par agent Hermès (registre des fiches = code). */
+export const agentState = mysqlTable("agent_state", {
+  agentKey: varchar("agentKey", { length: 64 }).primaryKey(),
+  enabled: boolean("enabled").notNull().default(false),
+  targetsJson: text("targetsJson"),
+  lastRunAt: timestamp("lastRunAt"),
+  lastError: varchar("lastError", { length: 512 }),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+export type AgentState = typeof agentState.$inferSelect;
+
+/** Journal d'activité par agent (santé + audit). */
+export const agentActivity = mysqlTable(
+  "agent_activity",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    agentKey: varchar("agentKey", { length: 64 }).notNull(),
+    action: varchar("action", { length: 128 }).notNull(),
+    studyId: int("studyId"),
+    status: mysqlEnum("status", ["ok", "error", "skipped"]).notNull(),
+    detail: varchar("detail", { length: 512 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => ({ agentIdx: index("agent_activity_agent_idx").on(t.agentKey) })
+);
+export type AgentActivity = typeof agentActivity.$inferSelect;
+
+/** Mémoire d'agent : notes courtes d'amélioration. */
+export const agentNotes = mysqlTable("agent_notes", {
+  id: int("id").autoincrement().primaryKey(),
+  agentKey: varchar("agentKey", { length: 64 }).notNull(),
+  note: text("note").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type AgentNote = typeof agentNotes.$inferSelect;
+
+/** Suggestions d'auto-amélioration (proposées → validées par le gérant). */
+export const agentSuggestions = mysqlTable("agent_suggestions", {
+  id: int("id").autoincrement().primaryKey(),
+  agentKey: varchar("agentKey", { length: 64 }).notNull(),
+  kpiKey: varchar("kpiKey", { length: 64 }).notNull(),
+  gap: int("gap"),
+  suggestion: text("suggestion").notNull(),
+  status: mysqlEnum("status", ["open", "approved", "dismissed"])
+    .notNull()
+    .default("open"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type AgentSuggestion = typeof agentSuggestions.$inferSelect;
+
+/** Snapshot du brouillon IA à la génération (pour mesurer signé-sans-correction). */
+export const reportAiSnapshots = mysqlTable("report_ai_snapshots", {
+  id: int("id").autoincrement().primaryKey(),
+  studyId: int("studyId").notNull().unique(),
+  sectionsJson: text("sectionsJson").notNull(),
+  model: varchar("model", { length: 128 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type ReportAiSnapshot = typeof reportAiSnapshots.$inferSelect;

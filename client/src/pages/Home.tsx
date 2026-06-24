@@ -690,7 +690,7 @@ export default function Home() {
       <div className="flex flex-1 overflow-hidden">
         {/* Left Sidebar */}
         <div className="w-52 border-r border-border bg-sidebar flex flex-col shrink-0">
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto min-h-0">
             {/* Albums */}
             <div className="p-3">
               <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">

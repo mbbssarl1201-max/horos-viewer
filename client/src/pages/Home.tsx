@@ -875,7 +875,7 @@ export default function Home() {
         </div>
 
         {/* Main Study List */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0">
           {/* Recherche multi-champs (Search ⌘F de Horos) */}
           <div className="h-9 border-b border-border bg-card flex items-center gap-2 px-2 shrink-0">
             <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
@@ -933,7 +933,7 @@ export default function Home() {
           </div>
 
           {/* Study Rows */}
-          <ScrollArea className="flex-1">
+          <ScrollArea className="flex-1 min-h-0">
             {studiesLoading ? (
               <div className="flex items-center justify-center h-48">
                 <div className="text-sm text-muted-foreground">

@@ -19,7 +19,7 @@ export interface RenderedFrame {
 
 export function renderDicomFrame(
   dicomBuffer: Buffer,
-  win: Windowing
+  win: Windowing | { windowCenter?: number; windowWidth?: number }
 ): RenderedFrame {
   const arrayBuffer = dicomBuffer.buffer.slice(
     dicomBuffer.byteOffset,
@@ -100,8 +100,44 @@ export function renderDicomFrame(
       ? new Int16Array(pixelBuffer)
       : new Uint16Array(pixelBuffer);
   else samples = new Uint8Array(pixelBuffer);
-  const lower = win.windowCenter - win.windowWidth / 2;
-  const span = win.windowWidth <= 0 ? 1 : win.windowWidth;
+  // Utilise le W/L fourni, ou les tags DICOM natifs (0028,1050/0028,1051), ou
+  // un auto-stretch sur les valeurs réelles (cas US/photo sans preset CT).
+  let wcFinal = win.windowCenter;
+  let wwFinal = win.windowWidth;
+  if (wcFinal == null || wwFinal == null) {
+    const dcmWc =
+      ds.WindowCenter != null
+        ? Number(
+            Array.isArray(ds.WindowCenter)
+              ? ds.WindowCenter[0]
+              : ds.WindowCenter
+          )
+        : null;
+    const dcmWw =
+      ds.WindowWidth != null
+        ? Number(
+            Array.isArray(ds.WindowWidth) ? ds.WindowWidth[0] : ds.WindowWidth
+          )
+        : null;
+    if (dcmWc != null && dcmWw != null && dcmWw > 0) {
+      wcFinal = dcmWc;
+      wwFinal = dcmWw;
+    } else {
+      // Auto-stretch sur le range réel des pixels (fait ressortir n'importe quelle modalité)
+      let minV = Infinity,
+        maxV = -Infinity;
+      for (let i = 0; i < samples.length; i++) {
+        const hu = (samples[i] as number) * slope + intercept;
+        if (hu < minV) minV = hu;
+        if (hu > maxV) maxV = hu;
+      }
+      const range = maxV - minV || 1;
+      wcFinal = minV + range / 2;
+      wwFinal = range;
+    }
+  }
+  const lower = wcFinal - wwFinal / 2;
+  const span = wwFinal <= 0 ? 1 : wwFinal;
   const png = new PNG({ width: cols, height: rows });
   for (let i = 0; i < rows * cols; i++) {
     const hu = samples[i] * slope + intercept;

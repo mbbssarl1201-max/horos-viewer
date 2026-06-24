@@ -83,7 +83,7 @@ export async function sampleSeriesPngs(
 export async function renderSliceByNumber(
   seriesId: number,
   sliceNumber: number,
-  opts: { windowCenter: number; windowWidth: number; maxDim?: number }
+  opts: { windowCenter?: number; windowWidth?: number; maxDim?: number }
 ): Promise<string | null> {
   const instances = await listInstancesBySeries(seriesId);
   const sorted = instances

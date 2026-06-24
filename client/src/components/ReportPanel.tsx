@@ -596,7 +596,9 @@ export default function ReportPanel({
           {aiAbnormal
             ? `⚠ Anomalie possible repérée par l'IA${
                 aiKeySlice
-                  ? ` — coupe n° ${aiKeySlice} (ajoutée aux images clés)`
+                  ? keyImages.some(k => k.sliceIndex === aiKeySlice)
+                    ? ` — coupe n° ${aiKeySlice} (ajoutée aux images clés)`
+                    : ` — naviguez à la coupe n° ${aiKeySlice} et utilisez « Ajouter l'image »`
                   : ""
               }. À confirmer par le médecin.`
             : "Aucune anomalie manifeste repérée par l'IA (à confirmer)."}

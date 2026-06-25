@@ -12,10 +12,7 @@ import type {
   ClipAxis,
   ObliqueClipConfig,
 } from "@/lib/clipPlanes";
-import {
-  shouldReselectSeries,
-  pickDefaultSeries,
-} from "@/lib/seriesSelection";
+import { shouldReselectSeries, pickDefaultSeries } from "@/lib/seriesSelection";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1636,7 +1633,7 @@ export default function Viewer() {
       {/* Barre d'outils : `flex-wrap` + hauteur mini pour que TOUS les boutons
           restent visibles (sinon, avec ~48 boutons, les derniers — dont
           « Compte rendu »/« Email » — débordaient hors écran et étaient coupés). */}
-      <div className="min-h-12 border-b border-border bg-card flex flex-wrap items-center px-2 gap-1 shrink-0">
+      <div className="min-h-12 border-b border-border bg-card flex flex-wrap items-center px-2 gap-1 shrink-0 relative z-[1]">
         <Button
           variant="ghost"
           size="sm"
@@ -3573,6 +3570,7 @@ export default function Viewer() {
                 onAddKeyImage={img => setReportKeyImages(p => [...p, img])}
                 comparePriorStudyId={comparePriorStudyId}
                 comparePriorSeriesId={comparePriorSeriesId}
+                studyModality={study.modality ?? null}
                 onClose={() => setReportOpen(false)}
               />
             )}

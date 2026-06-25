@@ -27,6 +27,7 @@ interface ReportPanelProps {
   onAddKeyImage?: (img: ReportKeyImage) => void;
   comparePriorStudyId?: number | null;
   comparePriorSeriesId?: number | null;
+  studyModality?: string | null;
   onClose: () => void;
 }
 
@@ -62,6 +63,7 @@ export default function ReportPanel({
   onAddKeyImage,
   comparePriorStudyId,
   comparePriorSeriesId,
+  studyModality,
   onClose,
 }: ReportPanelProps) {
   const [to, setTo] = useState("");
@@ -426,16 +428,26 @@ export default function ReportPanel({
       history.isFetched &&
       reportQuery.isFetched &&
       !report &&
-      !preanalyze.isPending
+      !preanalyze.isPending &&
+      (studyModality === "CT" || studyModality === "PT")
     ) {
       autoRan.current = true;
-      // Analyse auto à l'ouverture DÉSACTIVÉE : l'analyse est désormais
-      // EXHAUSTIVE et lancée à la demande via « Générer (IA) » (job long,
-      // plusieurs minutes — on ne la déclenche pas automatiquement à chaque
-      // ouverture de dossier).
+      void preanalyze.mutateAsync({
+        studyId,
+        seriesId,
+        windowCenter,
+        windowWidth,
+        keyImages: [],
+        includeSegmentation: false,
+        highResSegmentation: false,
+        doubleRead: false,
+        wholeStudy: true,
+        compareAllPriors: true,
+        deepAnalysis: false,
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seriesId, history.isFetched, reportQuery.isFetched]);
+  }, [seriesId, history.isFetched, reportQuery.isFetched, studyModality]);
 
   const aiAssisted = aiAbnormal !== null || aiGenerate.data != null;
 

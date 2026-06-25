@@ -7,7 +7,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { registerDicomwebProxy } from "../dicomwebProxy";
-import { registerCockpitRoutes } from "../cockpit.routes";
+import { registerCockpitRoutes, attacherVncProxy } from "../cockpit.routes";
 import { attacherProxyVoixVertex } from "../voix/vertexLiveProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
@@ -151,6 +151,7 @@ async function startServer() {
   registerDicomwebProxy(app);
   registerOAuthRoutes(app);
   registerCockpitRoutes(app);
+  attacherVncProxy(server);
   attacherProxyVoixVertex(server);
 
   // Authenticated CSV export of the audit trail (access_logs) — admin only.

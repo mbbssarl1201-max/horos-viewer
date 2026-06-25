@@ -3,11 +3,16 @@
 // Routes API du COCKPIT Eva-Selenium (MediView) :
 //   GET  /api/cockpit/viewer   → page HTML noVNC (même-origine, auth requise)
 //   POST /api/cockpit/naviguer → proxy vers eva-capture-mediview
+//   WS   /api/cockpit/vnc-ws  → proxy WS vers le conteneur VNC interne
 //
 // Sécurité : pages restreintes à un jeu fermé (anti open-redirect) ;
 // credentials VNC uniquement dans la réponse serveur (jamais dans le JS client) ;
 // les deux routes exigent un utilisateur authentifié (hasMedicalAccess).
 import type { Express, Request, Response, NextFunction } from "express";
+import type { Server, IncomingMessage } from "http";
+import type { Duplex } from "stream";
+import { WebSocketServer, WebSocket } from "ws";
+import { sdk } from "./_core/sdk";
 
 const PAGES_AUTORISEES = new Set(["/", "/admin/knowledge", "/knowledge"]);
 
@@ -21,7 +26,10 @@ function pageAutorisee(page: string): boolean {
   );
 }
 
-function buildViewerHtml(liveWsUrl: string, vncPassword: string): string {
+// Le HTML noVNC se connecte au proxy WS du même serveur (/api/cockpit/vnc-ws)
+// au lieu du conteneur VNC interne — le navigateur peut ainsi atteindre le VNC
+// même depuis l'extérieur du réseau Docker.
+function buildViewerHtml(vncPassword: string): string {
   return `<!doctype html>
 <html lang="fr">
 <head>
@@ -43,9 +51,10 @@ body{background:#0b1220;overflow:hidden;width:100vw;height:100vh}
 import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.5.0/core/rfb.js';
 const msg = document.getElementById('msg');
 try {
+  const wsUrl = location.origin.replace(/^http/, 'ws') + '/api/cockpit/vnc-ws';
   const rfb = new RFB(
     document.getElementById('screen'),
-    ${JSON.stringify(liveWsUrl)},
+    wsUrl,
     { credentials: { password: ${JSON.stringify(vncPassword)} } }
   );
   rfb.viewOnly = true;
@@ -63,6 +72,72 @@ try {
 </script>
 </body>
 </html>`;
+}
+
+const VNC_PROXY_PATH = "/api/cockpit/vnc-ws";
+
+// Proxy WebSocket : navigateur → /api/cockpit/vnc-ws → conteneur VNC interne.
+// Doit être appelé depuis _core/index.ts avec le server HTTP brut, après
+// registerCockpitRoutes(app).
+export function attacherVncProxy(server: Server): void {
+  const rawLiveUrl = (process.env.EVA_LIVE_URL ?? "").replace(/\/$/, "");
+  const vncPassword = process.env.EVA_VNC_PASSWORD ?? "";
+  if (!rawLiveUrl || !vncPassword) return;
+
+  // URL interne (Docker network) : le serveur peut l'atteindre, le navigateur non.
+  const internalWsUrl =
+    rawLiveUrl.replace(/^https?:\/\//, "ws://") + "/websockify";
+
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    let pathname = "";
+    try {
+      pathname = new URL(req.url ?? "", "http://localhost").pathname;
+    } catch {
+      return;
+    }
+    if (pathname !== VNC_PROXY_PATH) return;
+
+    sdk
+      .authenticateRequest(req as never)
+      .then(() => {
+        wss.handleUpgrade(req, socket, head, ws => {
+          const upstream = new WebSocket(internalWsUrl, ["binary"]);
+          upstream.binaryType = "nodebuffer";
+
+          upstream.on("open", () => {
+            ws.on("message", (data, isBinary) => {
+              if (upstream.readyState === WebSocket.OPEN) {
+                upstream.send(data, { binary: isBinary });
+              }
+            });
+            upstream.on("message", (data, isBinary) => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(data, { binary: isBinary });
+              }
+            });
+          });
+
+          ws.on("close", () => upstream.close());
+          upstream.on("close", () => {
+            if (ws.readyState === WebSocket.OPEN) ws.close();
+          });
+          upstream.on("error", () => {
+            if (ws.readyState === WebSocket.OPEN) ws.close();
+          });
+          ws.on("error", () => upstream.close());
+        });
+      })
+      .catch(() => {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+      });
+  });
+
+  console.log(
+    `[VncProxy-Cockpit] Proxy WS ${VNC_PROXY_PATH} actif → ${internalWsUrl}`
+  );
 }
 
 async function requireAuth(
@@ -90,23 +165,18 @@ export function registerCockpitRoutes(app: Express): void {
   const captureUrl = (process.env.EVA_CAPTURE_URL ?? "").replace(/\/$/, "");
   const captureSecret = process.env.EVA_CAPTURE_SECRET ?? "";
 
-  // https:// → wss:// pour WebSocket noVNC
-  const liveWsUrl = rawLiveUrl
-    ? rawLiveUrl.replace(/^https?:\/\//, "wss://") + "/websockify"
-    : "";
-
   app.get(
     "/api/cockpit/viewer",
     requireAuth,
     (_req: Request, res: Response): void => {
-      if (!liveWsUrl || !vncPassword) {
+      if (!rawLiveUrl || !vncPassword) {
         res.status(503).send("Service navigateur live non configuré.");
         return;
       }
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("X-Frame-Options", "SAMEORIGIN");
       res.setHeader("Cache-Control", "no-store");
-      res.send(buildViewerHtml(liveWsUrl, vncPassword));
+      res.send(buildViewerHtml(vncPassword));
     }
   );
 
@@ -158,7 +228,10 @@ export function registerCockpitRoutes(app: Express): void {
         const safe = rows.slice(0, 15).map(s => ({
           id: s.id,
           studyDate: s.studyDate,
-          studyDescription: s.studyDescription,
+          studyDescription:
+            s.studyDescription ||
+            [s.modality, s.studyDate].filter(Boolean).join(" — ") ||
+            "Examen",
           modality: s.modality,
           numberOfSeries: s.numberOfSeries,
           numberOfInstances: s.numberOfInstances,

@@ -64,8 +64,10 @@ import {
   ChevronDown,
   ClipboardList,
   LayoutDashboard,
+  X,
 } from "lucide-react";
 import { useState, useCallback } from "react";
+import CockpitMediView from "@/pages/CockpitMediView";
 import { matchAllFields } from "@/lib/studySearch";
 import { matchesTodayModality } from "@/lib/quickAlbums";
 import { toast } from "sonner";
@@ -238,6 +240,7 @@ export default function Home() {
   const [showAddServer, setShowAddServer] = useState(false);
   const [showSendDialog, setShowSendDialog] = useState(false);
   const [sendTargetAet, setSendTargetAet] = useState<string>("");
+  const [cockpitOpen, setCockpitOpen] = useState(false);
 
   // Clinical roles (admin/radiologist) may change RIS workflow state.
   const canEditWorkflow =
@@ -474,7 +477,7 @@ export default function Home() {
               else toast("Select a study first");
             }}
           />
-          <MenuBarItem label="Cockpit" onClick={() => navigate("/cockpit")} />
+          <MenuBarItem label="Cockpit" onClick={() => setCockpitOpen(true)} />
           {/* Plugins Menu */}
           <MenuDropdown
             label="Plugins"
@@ -510,7 +513,7 @@ export default function Home() {
         <ToolbarButton
           icon={LayoutDashboard}
           label="Cockpit"
-          onClick={() => navigate("/cockpit")}
+          onClick={() => setCockpitOpen(true)}
         />
         <ToolbarSep />
         <ToolbarButton
@@ -1314,6 +1317,20 @@ export default function Home() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Cockpit overlay — plein écran sur la worklist, fermable avec X */}
+      {cockpitOpen && (
+        <div className="fixed inset-0 z-50">
+          <button
+            onClick={() => setCockpitOpen(false)}
+            className="absolute right-3 top-3 z-[60] flex h-8 w-8 items-center justify-center rounded-full bg-slate-800/90 text-slate-300 shadow-lg hover:bg-slate-700 hover:text-white"
+            title="Fermer le cockpit"
+          >
+            <X className="h-4 w-4" />
+          </button>
+          <CockpitMediView />
+        </div>
+      )}
     </div>
   );
 }

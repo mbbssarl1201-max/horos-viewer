@@ -20,7 +20,7 @@ function Router() {
       <Route path={"/404"} component={NotFound} />
       <Route path={"/admin/knowledge"} component={KnowledgePage} />
       <Route path={"/knowledge"} component={KnowledgeSearchPage} />
-      <Route path={"/cockpit"} component={CockpitMediView} />
+      <Route path={"/cockpit"}>{() => <CockpitMediView />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

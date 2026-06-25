@@ -115,7 +115,11 @@ async function streamChat(
   }
 }
 
-export default function CockpitMediView() {
+export default function CockpitMediView({
+  embedded = false,
+}: {
+  embedded?: boolean;
+}) {
   const [routeAffichee, setRouteAffichee] = useState("/");
   const [navEnCours, setNavEnCours] = useState(false);
   const [saisieRoute, setSaisieRoute] = useState("");
@@ -262,7 +266,13 @@ export default function CockpitMediView() {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-950">
+    <div
+      className={
+        embedded
+          ? "flex h-full w-full overflow-hidden bg-slate-950"
+          : "flex h-screen w-screen overflow-hidden bg-slate-950"
+      }
+    >
       {/* ── GAUCHE : panneau Eva ─────────────────────────────────────────── */}
       <aside
         style={{ width: panelWidth }}

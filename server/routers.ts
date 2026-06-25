@@ -29,6 +29,7 @@ import { storagePut, storageDelete, storageGetSignedUrl } from "./storage";
 import { runAiPreanalysis } from "./report/aiPreanalysis";
 import { runHermesChat } from "./report/hermesChat";
 import { buildReportPdf } from "./report/reportPdf";
+import { deposerVersMediCentral } from "./report/deposerMediCentral";
 import {
   canSignReport,
   canAddAddendum,
@@ -1922,6 +1923,8 @@ export const appRouter = router({
           detail: `report ${report.id}`,
           ipAddress: ctx.req?.ip ?? null,
         });
+        // Dépôt automatique du CR + ciné vers MediCentral (non-bloquant).
+        void deposerVersMediCentral(report.studyId);
         return { success: true, pdfStorageKey: key };
       }),
 
@@ -2014,6 +2017,8 @@ export const appRouter = router({
             detail: `report ${report.id} (signAndSend)`,
             ipAddress: ctx.req?.ip ?? null,
           });
+          // Dépôt automatique CR + ciné vers MediCentral (non-bloquant).
+          void deposerVersMediCentral(report.studyId);
         }
 
         assertSendable("signed", email);

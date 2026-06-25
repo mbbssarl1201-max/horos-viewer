@@ -263,6 +263,14 @@ export default function ReportPanel({
     }
   };
 
+  useEffect(() => {
+    return () => {
+      if (mediaRecRef.current && mediaRecRef.current.state !== "inactive") {
+        mediaRecRef.current.stop();
+      }
+    };
+  }, []);
+
   // --- Mode validation IA : verdict du médecin + stats d'accord -------------
   const aiEval = trpc.ai.evaluation.useQuery({ studyId });
   const aiEvalStats = trpc.ai.evaluationStats.useQuery();

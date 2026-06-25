@@ -146,10 +146,35 @@ export function registerCockpitRoutes(app: Express): void {
     }
   );
 
+  // ── ÉTUDES RÉCENTES (PHI-safe : sans nom patient) ────────────────────────
+  // Utilisé par le chat Eva (contexte) et le tool vocal chercherEtudes.
+  app.get(
+    "/api/cockpit/studies/recent",
+    requireAuth,
+    async (_req: Request, res: Response): Promise<void> => {
+      try {
+        const { listStudies } = await import("./db");
+        const rows = await listStudies({ timeFilter: "last_week" });
+        const safe = rows.slice(0, 15).map(s => ({
+          id: s.id,
+          studyDate: s.studyDate,
+          studyDescription: s.studyDescription,
+          modality: s.modality,
+          numberOfSeries: s.numberOfSeries,
+          numberOfInstances: s.numberOfInstances,
+          status: s.status,
+        }));
+        res.json(safe);
+      } catch {
+        res.json([]);
+      }
+    }
+  );
+
   // ── COCKPIT CHAT Eva (SSE, Ollama local) ─────────────────────────────────
   // Navigation-focused: Eva répond et peut inclure NAV:/route en fin de message
   // pour déclencher la navigation Selenium côté client. PHI-free.
-  const SYSTEM_COCKPIT =
+  const SYSTEM_COCKPIT_BASE =
     "Tu es Eva, assistante IA du cockpit MediView (visionneuse radiologique DICOM). " +
     "Tu parles français, brièvement et précisément. " +
     "Tu aides le radiologue à naviguer dans l'interface et à trouver des infos en base de connaissances. " +
@@ -170,8 +195,30 @@ export function registerCockpitRoutes(app: Express): void {
         res.status(400).json({ error: "Bad request" });
         return;
       }
+
+      // Injecte les études récentes dans le contexte (sans PHI : pas de patientName)
+      let studiesCtx = "";
+      try {
+        const { listStudies } = await import("./db");
+        const rows = await listStudies({ timeFilter: "last_week" });
+        if (rows.length > 0) {
+          const lines = rows
+            .slice(0, 10)
+            .map(
+              s =>
+                `  - ID ${s.id} : ${s.studyDescription ?? s.modality ?? "?"} (${s.modality ?? "?"}), ${s.studyDate ?? "?"}, ${s.numberOfSeries ?? 0} série(s) → /viewer/${s.id}`
+            );
+          studiesCtx =
+            "\n\nÉtudes disponibles cette semaine (sans données patient) :\n" +
+            lines.join("\n") +
+            "\nPour ouvrir une étude : NAV:/viewer/<id>.";
+        }
+      } catch {
+        /* contexte études non critique */
+      }
+
       const messages = [
-        { role: "system", content: SYSTEM_COCKPIT },
+        { role: "system", content: SYSTEM_COCKPIT_BASE + studiesCtx },
         ...userMsgs.map(m => ({
           role: m.role,
           content: String(m.content ?? "").slice(0, 4_000),

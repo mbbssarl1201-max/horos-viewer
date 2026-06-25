@@ -22,8 +22,9 @@ function vertexVoixRegion(): string {
 const INSTRUCTIONS =
   "Tu es Eva, l'assistante vocale de MediView (logiciel de visualisation radiologique). " +
   "Tu parles français, naturellement et brièvement. " +
-  "Tu aides le radiologue à naviguer dans l'interface. " +
+  "Tu aides le radiologue à naviguer dans l'interface et à consulter les études récentes. " +
   "Quand on te demande d'ouvrir une page, utilise l'outil 'naviguer' avec la route. " +
+  "Quand on te demande la liste des examens ou études récentes, utilise 'chercherEtudes'. " +
   "Pages : worklist principale (/), viewer DICOM (/viewer/<studyId>), " +
   "base de connaissances radiologiques (/admin/knowledge), recherche (/knowledge). " +
   "Ne lis jamais de données PHI (nom patient, diagnostic) à voix haute.";
@@ -44,6 +45,19 @@ const TOOLS = [
         },
       },
       required: ["route"],
+    },
+  },
+  {
+    type: "function",
+    name: "chercherEtudes",
+    description:
+      "Cherche les études DICOM récentes (7 derniers jours). " +
+      "Retourne une liste sans données patient (PHI-safe : pas de nom, pas de date de naissance). " +
+      "Utile pour savoir quels examens sont disponibles et les ouvrir par ID.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
     },
   },
 ];

@@ -133,79 +133,114 @@ export default function EvaVoiceMV({ onNavigation }: Props) {
       };
 
       ws.onmessage = (e: MessageEvent) => {
-        try {
-          const pkg = JSON.parse(e.data as string) as {
-            type: string;
-            msg?: unknown;
-            error?: string;
-          };
-          if (pkg.type === "error") {
-            setErreur(pkg.error ?? "Erreur voix");
-            setEtat("erreur");
-            return;
-          }
-          if (pkg.type !== "message" || !pkg.msg) return;
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const msg = pkg.msg as any;
+        void (async () => {
+          try {
+            const pkg = JSON.parse(e.data as string) as {
+              type: string;
+              msg?: unknown;
+              error?: string;
+            };
+            if (pkg.type === "error") {
+              setErreur(pkg.error ?? "Erreur voix");
+              setEtat("erreur");
+              return;
+            }
+            if (pkg.type !== "message" || !pkg.msg) return;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const msg = pkg.msg as any;
 
-          // Audio PCM 24 kHz
-          const parts = msg?.serverContent?.modelTurn?.parts as
-            | unknown[]
-            | undefined;
-          if (Array.isArray(parts)) {
-            for (const part of parts) {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const p = part as any;
-              if (
-                p?.inlineData?.data &&
-                String(p.inlineData.mimeType ?? "").includes("audio")
-              ) {
-                jouerPcm(p.inlineData.data as string);
+            // Audio PCM 24 kHz
+            const parts = msg?.serverContent?.modelTurn?.parts as
+              | unknown[]
+              | undefined;
+            if (Array.isArray(parts)) {
+              for (const part of parts) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const p = part as any;
+                if (
+                  p?.inlineData?.data &&
+                  String(p.inlineData.mimeType ?? "").includes("audio")
+                ) {
+                  jouerPcm(p.inlineData.data as string);
+                }
               }
             }
-          }
 
-          // Tool-calls
-          const fcs = msg?.toolCall?.functionCalls as
-            | Array<{
+            // Tool-calls
+            const fcs = msg?.toolCall?.functionCalls as
+              | Array<{
+                  id: string;
+                  name: string;
+                  args: Record<string, unknown>;
+                }>
+              | undefined;
+            if (fcs?.length) {
+              const responses: Array<{
                 id: string;
                 name: string;
-                args: Record<string, unknown>;
-              }>
-            | undefined;
-          if (fcs?.length) {
-            const responses: Array<{
-              id: string;
-              name: string;
-              response: unknown;
-            }> = [];
-            for (const fc of fcs) {
-              if (fc.name === "naviguer") {
-                const route = String(fc.args.route ?? "/");
-                void fetch("/api/cockpit/naviguer", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ page: route }),
-                });
-                onNavigation?.(route);
-                responses.push({
-                  id: fc.id,
-                  name: fc.name,
-                  response: { output: "OK: " + route },
-                });
+                response: unknown;
+              }> = [];
+              for (const fc of fcs) {
+                if (fc.name === "naviguer") {
+                  const route = String(fc.args.route ?? "/");
+                  void fetch("/api/cockpit/naviguer", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ page: route }),
+                  });
+                  onNavigation?.(route);
+                  responses.push({
+                    id: fc.id,
+                    name: fc.name,
+                    response: { output: "OK: " + route },
+                  });
+                } else if (fc.name === "chercherEtudes") {
+                  try {
+                    const r = await fetch("/api/cockpit/studies/recent");
+                    const data = (await r.json()) as Array<{
+                      id: number;
+                      studyDate?: string;
+                      modality?: string;
+                      studyDescription?: string;
+                      numberOfSeries?: number;
+                    }>;
+                    const summary =
+                      data.length === 0
+                        ? "Aucune étude récente."
+                        : data
+                            .map(
+                              s =>
+                                `ID ${s.id}: ${s.studyDescription ?? s.modality ?? "?"} (${s.modality ?? "?"}), ${s.studyDate ?? "?"}, ${s.numberOfSeries ?? 0} série(s)`
+                            )
+                            .join("; ");
+                    responses.push({
+                      id: fc.id,
+                      name: fc.name,
+                      response: { output: summary },
+                    });
+                  } catch {
+                    responses.push({
+                      id: fc.id,
+                      name: fc.name,
+                      response: {
+                        output: "Erreur lors de la récupération des études.",
+                      },
+                    });
+                  }
+                }
               }
+              if (responses.length)
+                ws.send(
+                  JSON.stringify({
+                    type: "toolResponse",
+                    functionResponses: responses,
+                  })
+                );
             }
-            if (responses.length)
-              ws.send(
-                JSON.stringify({
-                  type: "toolResponse",
-                  functionResponses: responses,
-                })
-              );
+          } catch {
+            /* parse best-effort */
           }
-        } catch {
-          /* parse best-effort */
-        }
+        })();
       };
 
       // 5. Envoi micro → WS

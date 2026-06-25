@@ -71,8 +71,8 @@ describe("runAiPreanalysis", () => {
       resultats: "R",
       conclusion: "C",
       model: "qwen2.5-vl:3b",
-      // pas de seriesId → pas d'échantillonnage ni de coupe-clé rendue
-      keyImage: null,
+      // sans seriesId, l'image clé est prise depuis keyImages (coupe du milieu)
+      keyImage: { pngBase64: onePxPng, sliceIndex: 0 },
       // pas de priorStudyId → pas de comparaison d'antériorité
       comparedPriorDate: null,
       // pas de doubleRead → pas de 2e avis

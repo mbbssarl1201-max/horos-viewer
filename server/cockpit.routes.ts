@@ -99,10 +99,16 @@ export function attacherVncProxy(server: Server): void {
     }
     if (pathname !== VNC_PROXY_PATH) return;
 
-    // CSWSH mitigation : l'origine doit correspondre au même hôte.
+    // CSWSH : Origin doit être présent ET correspondre au même hôte.
+    // Les navigateurs envoient TOUJOURS Origin sur les connexions WS.
+    // Les clients non-browser sans Origin sont aussi rejetés — ils ne peuvent
+    // pas avoir de cookie de session valide émis par notre auth layer.
     const origin = req.headers.origin ?? "";
     const host = req.headers.host ?? "";
-    if (origin && origin !== `https://${host}` && origin !== `http://${host}`) {
+    if (
+      !origin ||
+      (origin !== `https://${host}` && origin !== `http://${host}`)
+    ) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
       return;
@@ -111,7 +117,6 @@ export function attacherVncProxy(server: Server): void {
     sdk
       .authenticateRequest(req as never)
       .then(async user => {
-        // Privilege escalation fix : vérifier hasMedicalAccess comme requireAuth.
         const { hasMedicalAccess } = await import("./rbac");
         if (!hasMedicalAccess(user)) {
           socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
@@ -123,33 +128,39 @@ export function attacherVncProxy(server: Server): void {
           const upstream = new WebSocket(internalWsUrl, ["binary"]);
           upstream.binaryType = "nodebuffer";
 
+          // View-only enforcement côté serveur.
+          // Approche : on détecte la fin du handshake RFB en comptant les
+          // messages server→client (5 attendus : version + security-list +
+          // challenge + security-result + server-init) et client→server
+          // (4 attendus : version + security-type + response + client-init).
+          // Une fois les deux compteurs atteints, on bloque les types d'entrée
+          // RFB : 4=KeyEvent, 5=PointerEvent, 6=ClientCutText.
+          let serverMsgs = 0;
+          let clientMsgs = 0;
+          const RFB_HANDSHAKE_SERVER_MSGS = 5;
+          const RFB_HANDSHAKE_CLIENT_MSGS = 4;
+
           upstream.on("open", () => {
-            // View-only enforcement côté serveur (bug #2).
-            // Le handshake RFB client→serveur dure ~30 octets (version 12 o +
-            // sélection type sécurité 1 o + réponse VNC challenge 16 o +
-            // ClientInit 1 o). On transmet librement pendant la phase handshake,
-            // puis on bloque les types d'entrée RFB : 4=KeyEvent, 5=PointerEvent,
-            // 6=ClientCutText.
-            let handshakeBytesLeft = 35;
             ws.on("message", (data, isBinary) => {
               if (upstream.readyState !== WebSocket.OPEN) return;
+              clientMsgs++;
               const buf = Buffer.isBuffer(data)
                 ? data
                 : Buffer.from(data as ArrayBuffer);
-              if (handshakeBytesLeft > 0) {
-                handshakeBytesLeft -= buf.length;
-                upstream.send(buf, { binary: isBinary });
-              } else if (
-                buf.length > 0 &&
-                buf[0] !== 4 &&
-                buf[0] !== 5 &&
-                buf[0] !== 6
+              const handshakeDone =
+                serverMsgs >= RFB_HANDSHAKE_SERVER_MSGS &&
+                clientMsgs > RFB_HANDSHAKE_CLIENT_MSGS;
+              if (
+                !handshakeDone ||
+                buf.length === 0 ||
+                (buf[0] !== 4 && buf[0] !== 5 && buf[0] !== 6)
               ) {
                 upstream.send(buf, { binary: isBinary });
               }
             });
 
             upstream.on("message", (data, isBinary) => {
+              serverMsgs++;
               if (ws.readyState === WebSocket.OPEN) {
                 ws.send(data, { binary: isBinary });
               }

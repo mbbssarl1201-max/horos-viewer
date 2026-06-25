@@ -63,6 +63,7 @@ import {
   Plus,
   ChevronDown,
   ClipboardList,
+  LayoutDashboard,
 } from "lucide-react";
 import { useState, useCallback } from "react";
 import { matchAllFields } from "@/lib/studySearch";
@@ -473,6 +474,7 @@ export default function Home() {
               else toast("Select a study first");
             }}
           />
+          <MenuBarItem label="Cockpit" onClick={() => navigate("/cockpit")} />
           {/* Plugins Menu */}
           <MenuDropdown
             label="Plugins"
@@ -505,6 +507,12 @@ export default function Home() {
 
       {/* Top Toolbar - Horos style with all buttons */}
       <div className="h-16 border-b border-border bg-gradient-to-b from-[#2a2a3e] to-[#1e1e30] flex items-center px-2 gap-0.5 shrink-0">
+        <ToolbarButton
+          icon={LayoutDashboard}
+          label="Cockpit"
+          onClick={() => navigate("/cockpit")}
+        />
+        <ToolbarSep />
         <ToolbarButton
           icon={Cloud}
           label="Cloud Dashboard"

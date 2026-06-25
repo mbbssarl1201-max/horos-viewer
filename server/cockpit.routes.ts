@@ -145,4 +145,81 @@ export function registerCockpitRoutes(app: Express): void {
       }
     }
   );
+
+  // ── COCKPIT CHAT Eva (SSE, Ollama local) ─────────────────────────────────
+  // Navigation-focused: Eva répond et peut inclure NAV:/route en fin de message
+  // pour déclencher la navigation Selenium côté client. PHI-free.
+  const SYSTEM_COCKPIT =
+    "Tu es Eva, assistante IA du cockpit MediView (visionneuse radiologique DICOM). " +
+    "Tu parles français, brièvement et précisément. " +
+    "Tu aides le radiologue à naviguer dans l'interface et à trouver des infos en base de connaissances. " +
+    "Pages disponibles : worklist (/), viewer DICOM (/viewer/<studyId>), base de connaissances (/admin/knowledge), recherche (/knowledge). " +
+    "Si tu dois naviguer vers une page, ajoute EXACTEMENT à la toute fin de ta réponse : NAV:/route " +
+    "Exemple : 'J'ouvre la worklist. NAV:/' " +
+    "Ne mentionne jamais de données patient (PHI) dans tes réponses.";
+
+  app.post(
+    "/api/cockpit/chat/stream",
+    requireAuth,
+    async (req: Request, res: Response): Promise<void> => {
+      const body = req.body as Record<string, unknown>;
+      const userMsgs = Array.isArray(body.messages)
+        ? (body.messages as { role: string; content: string }[]).slice(-20)
+        : null;
+      if (!userMsgs || userMsgs.length === 0) {
+        res.status(400).json({ error: "Bad request" });
+        return;
+      }
+      const messages = [
+        { role: "system", content: SYSTEM_COCKPIT },
+        ...userMsgs.map(m => ({
+          role: m.role,
+          content: String(m.content ?? "").slice(0, 4_000),
+        })),
+      ];
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      const send = (obj: unknown) =>
+        res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      const abortCtrl = new AbortController();
+      req.on("close", () => abortCtrl.abort());
+
+      try {
+        const { streamOllamaChat } = await import("./knowledge/stream");
+        const full = await streamOllamaChat(
+          messages,
+          (delta: string) => send({ t: delta }),
+          abortCtrl.signal
+        );
+        const navMatch = full.match(/NAV:(\/[^\s]*)/);
+        send({ done: true, nav: navMatch?.[1] ?? null });
+        res.end();
+      } catch {
+        if (!res.headersSent) {
+          res.status(500).json({ error: "stream failed" });
+        } else {
+          send({ error: "stream interrompu" });
+          res.end();
+        }
+      }
+    }
+  );
+
+  // ── VOIX SESSION (config pour le client WebSocket Vertex-UE) ─────────────
+  app.post(
+    "/api/voix/session",
+    requireAuth,
+    (_req: Request, res: Response): void => {
+      const provider = (process.env.VOICE_PROVIDER ?? "").trim();
+      const project = (process.env.VERTEX_PROJECT ?? "").trim();
+      if (provider !== "vertex-ue" || !project) {
+        res.status(503).json({ error: "Voix Vertex-UE non configurée." });
+        return;
+      }
+      res.json({ wsUrl: "/api/voix/live-ue" });
+    }
+  );
 }

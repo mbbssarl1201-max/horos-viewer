@@ -7,6 +7,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { registerDicomwebProxy } from "../dicomwebProxy";
+import { registerCockpitRoutes } from "../cockpit.routes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -148,6 +149,7 @@ async function startServer() {
   registerStorageProxy(app);
   registerDicomwebProxy(app);
   registerOAuthRoutes(app);
+  registerCockpitRoutes(app);
 
   // Authenticated CSV export of the audit trail (access_logs) — admin only.
   // Mirrors the audit.export tRPC procedure but streams a downloadable CSV.

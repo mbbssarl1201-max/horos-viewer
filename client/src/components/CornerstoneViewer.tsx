@@ -1282,10 +1282,47 @@ const CornerstoneViewer = forwardRef<
         };
         el.addEventListener(Enums.Events.VOI_MODIFIED, onVoi);
         el.addEventListener(Enums.Events.CAMERA_MODIFIED, onCamera);
+
+        // Intercepte les erreurs de décodage DICOM qui surviennent APRÈS setStack,
+        // dans le thread du web worker codec (ex: TypeError: N.slice is not a
+        // function). Ces erreurs n'atteignent pas le try/catch de setupViewport
+        // et remonteraient sinon jusqu'à l'ErrorBoundary globale → crash page.
+        const imageIdSet = new Set(imageIds);
+        const { eventTarget, EVENTS: CsEvents } = cornerstone;
+        const onImageLoadError = (evt: any) => {
+          if (!mounted) return;
+          const failedId: string | undefined = evt?.detail?.imageId;
+          if (failedId && !imageIdSet.has(failedId)) return;
+          const msg: string =
+            (evt?.detail?.error as Error)?.message ?? "Format non supporté";
+          setError(`Série non lisible — ${msg.slice(0, 120)}`);
+        };
+        (eventTarget as EventTarget).addEventListener(
+          CsEvents.IMAGE_LOAD_ERROR,
+          onImageLoadError
+        );
+        // Filet de sécurité : erreurs synchrones issues du thread web-worker
+        // (TypeError: N.slice…) qui ne transitent pas par eventTarget.
+        const onWorkerError = (e: ErrorEvent) => {
+          if (!mounted) return;
+          if (
+            /slice is not a function|getPixelData|decode/i.test(e.message ?? "")
+          ) {
+            e.preventDefault();
+            setError("Série non lisible — décodeur DICOM non supporté");
+          }
+        };
+        window.addEventListener("error", onWorkerError);
+
         listenersCleanupRef.current?.();
         listenersCleanupRef.current = () => {
           el.removeEventListener(Enums.Events.VOI_MODIFIED, onVoi);
           el.removeEventListener(Enums.Events.CAMERA_MODIFIED, onCamera);
+          (eventTarget as EventTarget).removeEventListener(
+            CsEvents.IMAGE_LOAD_ERROR,
+            onImageLoadError
+          );
+          window.removeEventListener("error", onWorkerError);
           try {
             cornerstoneTools.utilities.stackContextPrefetch.disable(el);
           } catch {}

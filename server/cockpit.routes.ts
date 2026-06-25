@@ -99,19 +99,56 @@ export function attacherVncProxy(server: Server): void {
     }
     if (pathname !== VNC_PROXY_PATH) return;
 
+    // CSWSH mitigation : l'origine doit correspondre au même hôte.
+    const origin = req.headers.origin ?? "";
+    const host = req.headers.host ?? "";
+    if (origin && origin !== `https://${host}` && origin !== `http://${host}`) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
     sdk
       .authenticateRequest(req as never)
-      .then(() => {
+      .then(async user => {
+        // Privilege escalation fix : vérifier hasMedicalAccess comme requireAuth.
+        const { hasMedicalAccess } = await import("./rbac");
+        if (!hasMedicalAccess(user)) {
+          socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+
         wss.handleUpgrade(req, socket, head, ws => {
           const upstream = new WebSocket(internalWsUrl, ["binary"]);
           upstream.binaryType = "nodebuffer";
 
           upstream.on("open", () => {
+            // View-only enforcement côté serveur (bug #2).
+            // Le handshake RFB client→serveur dure ~30 octets (version 12 o +
+            // sélection type sécurité 1 o + réponse VNC challenge 16 o +
+            // ClientInit 1 o). On transmet librement pendant la phase handshake,
+            // puis on bloque les types d'entrée RFB : 4=KeyEvent, 5=PointerEvent,
+            // 6=ClientCutText.
+            let handshakeBytesLeft = 35;
             ws.on("message", (data, isBinary) => {
-              if (upstream.readyState === WebSocket.OPEN) {
-                upstream.send(data, { binary: isBinary });
+              if (upstream.readyState !== WebSocket.OPEN) return;
+              const buf = Buffer.isBuffer(data)
+                ? data
+                : Buffer.from(data as ArrayBuffer);
+              if (handshakeBytesLeft > 0) {
+                handshakeBytesLeft -= buf.length;
+                upstream.send(buf, { binary: isBinary });
+              } else if (
+                buf.length > 0 &&
+                buf[0] !== 4 &&
+                buf[0] !== 5 &&
+                buf[0] !== 6
+              ) {
+                upstream.send(buf, { binary: isBinary });
               }
             });
+
             upstream.on("message", (data, isBinary) => {
               if (ws.readyState === WebSocket.OPEN) {
                 ws.send(data, { binary: isBinary });

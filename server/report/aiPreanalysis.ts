@@ -1371,9 +1371,22 @@ export async function runAiPreanalysis(
   if (result.abnormal === true && result.keySliceNumber) {
     keySlice = result.keySliceNumber;
   } else if (images.length > 0) {
-    keySlice = images[Math.floor(images.length / 2)].sliceIndex;
+    keySlice = images[Math.floor(images.length / 2)]!.sliceIndex;
   }
-  if (input.seriesId && keySlice) {
+  // Priorité 1 : image déjà rendue dans l'échantillon (toujours disponible,
+  // même quand le storage ou renderSliceByNumber échoue : multi-frame, compression
+  // non supportée, etc.). La qualité est légèrement inférieure (downscale IA) mais
+  // garantie de présence — mieux qu'une image clé manquante.
+  if (keySlice !== null) {
+    const fromSample = images.find(img => img.sliceIndex === keySlice);
+    if (fromSample)
+      keyImage = {
+        pngBase64: fromSample.pngBase64,
+        sliceIndex: fromSample.sliceIndex,
+      };
+  }
+  // Priorité 2 : re-rendu haute résolution depuis le stockage.
+  if (!keyImage && input.seriesId && keySlice !== null) {
     try {
       const { renderSliceByNumber } = await import("./aiSampling");
       const b64 = await renderSliceByNumber(input.seriesId, keySlice, {

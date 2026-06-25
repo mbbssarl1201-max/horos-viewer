@@ -266,90 +266,115 @@ export default function CockpitMediView() {
       {/* ── GAUCHE : panneau Eva ─────────────────────────────────────────── */}
       <aside
         style={{ width: panelWidth }}
-        className="flex min-w-0 flex-col bg-slate-900 shadow-2xl"
+        className="flex min-w-0 flex-col bg-[#0d1520] shadow-2xl"
       >
-        {/* En-tête */}
-        <header className="flex items-center gap-3 bg-gradient-to-br from-violet-700 to-violet-900 px-4 py-3.5 text-white">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15 ring-2 ring-white/30">
-            <MonitorPlay className="h-5 w-5 text-white" />
+        {/* Avatar + identité */}
+        <div className="relative flex flex-col items-center gap-2 px-4 pb-4 pt-6">
+          <div className="absolute right-3 top-3">
+            <EvaVoiceMV onNavigation={naviguer} />
           </div>
-          <div className="min-w-0 flex-1 leading-tight">
-            <p className="truncate text-[14px] font-semibold tracking-tight">
-              MediView Cockpit
-            </p>
-            <p className="truncate text-[11px] text-violet-200/70">
-              Navigation Selenium en direct
-            </p>
+          <div className="relative">
+            <div className="flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-violet-900 shadow-xl ring-2 ring-violet-400/30">
+              <span className="text-4xl font-bold text-white">E</span>
+            </div>
+            <span className="absolute bottom-1 right-1 h-4 w-4 rounded-full bg-emerald-400 ring-2 ring-[#0d1520]" />
           </div>
-          <EvaVoiceMV onNavigation={naviguer} />
-        </header>
+          <div className="text-center">
+            <p className="text-[17px] font-semibold text-white">Eva</p>
+            <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-violet-400">
+              Assistante Radiologique IA · cerveau 72B
+            </span>
+          </div>
+        </div>
+
+        {/* Texte d'accueil */}
+        <div className="mx-3 mb-3 rounded-xl bg-slate-800/40 px-3 py-2.5 text-[12px] leading-relaxed text-slate-300">
+          Bonjour 👋 Je suis Eva. Dites-moi quoi faire — j&apos;ouvre les
+          études, navigue dans MediView et réponds à vos questions
+          radiologiques.
+        </div>
 
         {/* Corps scrollable */}
-        <div className="flex flex-1 flex-col overflow-y-auto overflow-x-hidden">
-          {/* Navigation rapide */}
-          <div className="shrink-0 px-3 pt-4">
-            <p className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-              Navigation rapide
+        <div className="flex flex-1 flex-col gap-4 overflow-x-hidden overflow-y-auto px-3 pb-3">
+          {/* À traiter */}
+          {!etudesChargement && etudes.length > 0 && (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2.5">
+              <div className="mb-1.5 flex items-center gap-1.5">
+                <Activity className="h-3.5 w-3.5 text-amber-400" />
+                <p className="text-[11px] font-semibold text-amber-300">
+                  À traiter aujourd&apos;hui
+                </p>
+              </div>
+              <p className="text-xs text-amber-200/80">
+                • {etudes.length} étude{etudes.length > 1 ? "s" : ""} récente
+                {etudes.length > 1 ? "s" : ""} cette semaine
+              </p>
+              {etudes.filter(e => e.modality === "CT" || e.modality === "MR")
+                .length > 0 && (
+                <p className="text-xs text-amber-200/80">
+                  •{" "}
+                  {
+                    etudes.filter(
+                      e => e.modality === "CT" || e.modality === "MR"
+                    ).length
+                  }{" "}
+                  examen
+                  {etudes.filter(
+                    e => e.modality === "CT" || e.modality === "MR"
+                  ).length > 1
+                    ? "s"
+                    : ""}{" "}
+                  CT/MR à analyser
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Suggestions */}
+          <div>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              Suggestions
             </p>
-            <div className="space-y-1">
-              {RACCOURCIS.map(({ icon: Icon, label, route }) => {
-                const actif = routeAffichee === route;
-                return (
-                  <button
-                    key={route}
-                    onClick={() => naviguer(route)}
-                    disabled={navEnCours}
-                    className={[
-                      "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition",
-                      actif
-                        ? "bg-violet-600/25 text-violet-300 ring-1 ring-violet-500/40"
-                        : "text-slate-300 hover:bg-slate-800 hover:text-slate-100",
-                      "disabled:opacity-40",
-                    ].join(" ")}
-                  >
-                    <Icon
-                      className={`h-4 w-4 shrink-0 ${actif ? "text-violet-400" : "text-slate-500"}`}
-                    />
-                    <span className="flex-1 truncate">{label}</span>
-                    {actif && (
-                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" />
-                    )}
-                  </button>
-                );
-              })}
+            <div className="space-y-1.5">
+              {RACCOURCIS.map(({ icon: Icon, label, route }) => (
+                <button
+                  key={route}
+                  onClick={() => naviguer(route)}
+                  disabled={navEnCours}
+                  className="flex w-full items-center gap-3 rounded-xl bg-slate-800/60 px-3 py-2.5 text-left text-sm text-slate-300 transition hover:bg-slate-700/80 hover:text-white disabled:opacity-40"
+                >
+                  <Icon className="h-4 w-4 shrink-0 text-violet-400" />
+                  <span className="flex-1 truncate">{label}</span>
+                </button>
+              ))}
             </div>
           </div>
 
           {/* Route libre */}
-          <div className="shrink-0 px-3 pt-4">
-            <p className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-              Route libre
-            </p>
-            <form onSubmit={soumettre} className="flex gap-1.5">
-              <input
-                value={saisieRoute}
-                onChange={e => setSaisieRoute(e.target.value)}
-                placeholder="/viewer/42"
-                className="flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-slate-100 placeholder-slate-600 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50"
-              />
-              <button
-                type="submit"
-                disabled={!saisieRoute.trim() || navEnCours}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-700 text-white transition hover:bg-violet-600 disabled:opacity-40"
-              >
-                {navEnCours ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <ChevronRight className="h-3.5 w-3.5" />
-                )}
-              </button>
-            </form>
-          </div>
+          <form onSubmit={soumettre} className="flex gap-1.5">
+            <input
+              value={saisieRoute}
+              onChange={e => setSaisieRoute(e.target.value)}
+              placeholder="/viewer/42"
+              className="flex-1 rounded-xl border border-slate-700 bg-slate-800/60 px-3 py-2 text-xs text-slate-100 placeholder-slate-600 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50"
+            />
+            <button
+              type="submit"
+              disabled={!saisieRoute.trim() || navEnCours}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-700 text-white transition hover:bg-violet-600 disabled:opacity-40"
+            >
+              {navEnCours ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </form>
 
           {/* Études récentes */}
-          <div className="shrink-0 px-3 pt-5">
-            <div className="mb-2 flex items-center gap-1.5 px-1">
-              <Activity className="h-3 w-3 text-slate-500" />
+          <div>
+            <div className="mb-2 flex items-center gap-1.5">
+              <Calendar className="h-3 w-3 text-slate-500" />
               <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
                 Études récentes
               </p>
@@ -358,7 +383,7 @@ export default function CockpitMediView() {
               )}
             </div>
             {etudes.length === 0 && !etudesChargement ? (
-              <p className="px-1 text-xs text-slate-600">
+              <p className="text-xs text-slate-600">
                 Aucune étude cette semaine.
               </p>
             ) : (
@@ -371,11 +396,10 @@ export default function CockpitMediView() {
                       onClick={() => naviguer(`/viewer/${e.id}`)}
                       disabled={navEnCours}
                       className={[
-                        "flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition",
+                        "flex w-full flex-col gap-0.5 rounded-xl px-2.5 py-2 text-left transition disabled:opacity-40",
                         actif
                           ? "bg-violet-600/20 ring-1 ring-violet-500/40"
-                          : "hover:bg-slate-800",
-                        "disabled:opacity-40",
+                          : "bg-slate-800/40 hover:bg-slate-700/60",
                       ].join(" ")}
                     >
                       <div className="flex items-center gap-1.5">
@@ -405,24 +429,20 @@ export default function CockpitMediView() {
             )}
           </div>
 
-          <div className="mx-3 my-4 border-t border-slate-800" />
+          <div className="border-t border-slate-800/80" />
 
           {/* Chat Eva */}
-          <div className="flex min-h-[200px] flex-1 flex-col px-3 pb-3">
-            <div className="mb-2 flex items-center gap-1.5 px-1">
+          <div className="flex min-h-[180px] flex-1 flex-col">
+            <div className="mb-2 flex items-center gap-1.5">
               <MessageCircle className="h-3 w-3 text-violet-500" />
               <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-                Chat Eva
+                Demandez à Eva…
               </p>
             </div>
 
-            {/* Messages */}
             <div className="flex-1 overflow-y-auto rounded-xl border border-slate-700/60 bg-slate-800/40 p-2">
               {chatMessages.length === 0 ? (
                 <div className="flex h-full flex-col items-center justify-center gap-3 py-4">
-                  <p className="text-center text-[11px] text-slate-500">
-                    Posez une question à Eva ou choisissez :
-                  </p>
                   <div className="flex flex-wrap justify-center gap-1.5">
                     {SUGGESTIONS.map(s => (
                       <button
@@ -465,7 +485,6 @@ export default function CockpitMediView() {
               )}
             </div>
 
-            {/* Suggestions rapides si chat non vide */}
             {chatMessages.length > 0 && !chatEnCours && (
               <div className="mt-1.5 flex gap-1 overflow-x-auto pb-0.5">
                 {SUGGESTIONS.map(s => (
@@ -480,7 +499,6 @@ export default function CockpitMediView() {
               </div>
             )}
 
-            {/* Saisie */}
             <form
               onSubmit={e => {
                 e.preventDefault();

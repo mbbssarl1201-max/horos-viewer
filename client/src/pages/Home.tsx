@@ -239,7 +239,7 @@ export default function Home() {
   const [showAddServer, setShowAddServer] = useState(false);
   const [showSendDialog, setShowSendDialog] = useState(false);
   const [sendTargetAet, setSendTargetAet] = useState<string>("");
-  const [cockpitOpen, setCockpitOpen] = useState(true);
+  const [cockpitOpen, setCockpitOpen] = useState(false);
 
   // Clinical roles (admin/radiologist) may change RIS workflow state.
   const canEditWorkflow =

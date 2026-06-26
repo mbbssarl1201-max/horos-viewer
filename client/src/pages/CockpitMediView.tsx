@@ -274,7 +274,7 @@ export default function CockpitMediView({
     <div
       className={
         embedded
-          ? "flex h-full w-full overflow-hidden bg-slate-950"
+          ? "flex h-full overflow-hidden bg-[#0d1520] shrink-0"
           : "flex h-screen w-screen overflow-hidden bg-slate-950"
       }
     >

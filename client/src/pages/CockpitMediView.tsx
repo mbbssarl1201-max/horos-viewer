@@ -147,6 +147,11 @@ export default function CockpitMediView({
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
 
+  // Navigate Selenium to worklist on mount
+  useEffect(() => {
+    void naviguerSelenium("/");
+  }, []);
+
   // Fetch recent studies on mount
   useEffect(() => {
     setEtudesChargement(true);

@@ -348,9 +348,9 @@ export function attacherVncProxy(server: Server): void {
   const vncPassword = process.env.EVA_VNC_PASSWORD ?? "";
   if (!rawLiveUrl || !vncPassword) return;
 
-  // URL interne Docker — le navigateur ne peut pas l'atteindre directement.
+  // Le serveur VPS 76 ne répond qu'en TLS — utiliser wss:// pour l'upstream.
   const internalWsUrl =
-    rawLiveUrl.replace(/^https?:\/\//, "ws://") + "/websockify";
+    rawLiveUrl.replace(/^https?:\/\//, "wss://") + "/websockify";
 
   const wss = new WebSocketServer({ noServer: true });
 

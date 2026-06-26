@@ -11,19 +11,11 @@ import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Viewer from "./pages/Viewer";
 
-// Selenium browse horos.mbbssarl.ch → worklist ; users visit mediview.ch → cockpit
-const isSeleniumTarget =
-  typeof window !== "undefined" &&
-  window.location.hostname === "horos.mbbssarl.ch";
-
 function Router() {
   return (
     <Switch>
       <Route path={"/login"} component={Login} />
-      <Route path={"/"}>
-        {() => (isSeleniumTarget ? <Home /> : <CockpitMediView />)}
-      </Route>
-      <Route path={"/worklist"} component={Home} />
+      <Route path={"/"} component={Home} />
       <Route path={"/viewer/:studyId?"} component={Viewer} />
       <Route path={"/404"} component={NotFound} />
       <Route path={"/admin/knowledge"} component={KnowledgePage} />

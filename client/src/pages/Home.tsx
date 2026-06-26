@@ -239,7 +239,7 @@ export default function Home() {
   const [showAddServer, setShowAddServer] = useState(false);
   const [showSendDialog, setShowSendDialog] = useState(false);
   const [sendTargetAet, setSendTargetAet] = useState<string>("");
-  const [cockpitOpen, setCockpitOpen] = useState(false);
+  const [cockpitOpen, setCockpitOpen] = useState(true);
 
   // Clinical roles (admin/radiologist) may change RIS workflow state.
   const canEditWorkflow =
@@ -704,421 +704,411 @@ export default function Home() {
         {cockpitOpen ? (
           <CockpitMediView embedded />
         ) : (
-          <>
-            {/* Left Sidebar */}
-            <div className="w-52 border-r border-border bg-sidebar flex flex-col shrink-0">
-              <div className="flex-1 overflow-y-auto min-h-0">
-                {/* Albums */}
-                <div className="p-3">
-                  <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
-                    Albums
-                  </h3>
-                  <div className="space-y-0.5">
-                    {SMART_ALBUMS.map(album => (
+          <div className="w-52 border-r border-border bg-sidebar flex flex-col shrink-0">
+            <div className="flex-1 overflow-y-auto min-h-0">
+              {/* Albums */}
+              <div className="p-3">
+                <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
+                  Albums
+                </h3>
+                <div className="space-y-0.5">
+                  {SMART_ALBUMS.map(album => (
+                    <button
+                      key={album.key}
+                      onClick={() => setSelectedAlbum(album.key)}
+                      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
+                        selectedAlbum === album.key
+                          ? "bg-primary/20 text-primary"
+                          : "text-sidebar-foreground hover:bg-sidebar-accent"
+                      }`}
+                    >
+                      <album.icon className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">{album.label}</span>
+                      <span className="ml-auto text-[10px] text-muted-foreground">
+                        {
+                          allStudies.filter((s: any) =>
+                            albumMatches(s, album.key, openedIds)
+                          ).length
+                        }
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* File à signer — brouillons IA en attente de signature */}
+              <div className="p-3">
+                <PendingSignatureList onOpen={openStudy} />
+              </div>
+
+              <Separator />
+
+              {/* Recherche patient Hermès */}
+              <div className="p-3">
+                <HermesFinder onOpen={openStudy} />
+              </div>
+
+              <Separator />
+
+              {/* Today's Studies by modality */}
+              <div className="p-3">
+                <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
+                  Today's Studies
+                </h3>
+                <div className="space-y-0.5">
+                  {ALL_MODALITIES.slice(0, 10).map(mod => {
+                    const albumKey = `today:${mod.key}`;
+                    const count = allStudies.filter((s: any) =>
+                      albumMatches(s, albumKey, openedIds)
+                    ).length;
+                    return (
                       <button
-                        key={album.key}
-                        onClick={() => setSelectedAlbum(album.key)}
+                        key={mod.key}
+                        onClick={() =>
+                          setSelectedAlbum(
+                            selectedAlbum === albumKey ? "database" : albumKey
+                          )
+                        }
                         className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
-                          selectedAlbum === album.key
+                          selectedAlbum === albumKey
                             ? "bg-primary/20 text-primary"
                             : "text-sidebar-foreground hover:bg-sidebar-accent"
                         }`}
                       >
-                        <album.icon className="w-3.5 h-3.5 shrink-0" />
-                        <span className="truncate">{album.label}</span>
+                        <span className="w-6 font-mono text-[10px] shrink-0">
+                          {mod.key}
+                        </span>
+                        <span className="truncate text-[10px]">
+                          {mod.description}
+                        </span>
                         <span className="ml-auto text-[10px] text-muted-foreground">
-                          {
-                            allStudies.filter((s: any) =>
-                              albumMatches(s, album.key, openedIds)
-                            ).length
-                          }
+                          {count}
                         </span>
                       </button>
-                    ))}
-                  </div>
-                </div>
-
-                <Separator />
-
-                {/* File à signer — brouillons IA en attente de signature */}
-                <div className="p-3">
-                  <PendingSignatureList onOpen={openStudy} />
-                </div>
-
-                <Separator />
-
-                {/* Recherche patient Hermès */}
-                <div className="p-3">
-                  <HermesFinder onOpen={openStudy} />
-                </div>
-
-                <Separator />
-
-                {/* Today's Studies by modality */}
-                <div className="p-3">
-                  <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
-                    Today's Studies
-                  </h3>
-                  <div className="space-y-0.5">
-                    {ALL_MODALITIES.slice(0, 10).map(mod => {
-                      const albumKey = `today:${mod.key}`;
-                      const count = allStudies.filter((s: any) =>
-                        albumMatches(s, albumKey, openedIds)
-                      ).length;
-                      return (
-                        <button
-                          key={mod.key}
-                          onClick={() =>
-                            setSelectedAlbum(
-                              selectedAlbum === albumKey ? "database" : albumKey
-                            )
-                          }
-                          className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
-                            selectedAlbum === albumKey
-                              ? "bg-primary/20 text-primary"
-                              : "text-sidebar-foreground hover:bg-sidebar-accent"
-                          }`}
-                        >
-                          <span className="w-6 font-mono text-[10px] shrink-0">
-                            {mod.key}
-                          </span>
-                          <span className="truncate text-[10px]">
-                            {mod.description}
-                          </span>
-                          <span className="ml-auto text-[10px] text-muted-foreground">
-                            {count}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <Separator />
-
-                {/* Sources */}
-                <div className="p-3">
-                  <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 flex items-center justify-between">
-                    <span>Sources</span>
-                    <button
-                      onClick={() => setShowAddServer(true)}
-                      className="hover:text-primary"
-                    >
-                      <Plus className="w-3 h-3" />
-                    </button>
-                  </h3>
-                  <div className="space-y-0.5">
-                    <button className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs bg-primary/10 text-primary">
-                      <Database className="w-3.5 h-3.5" />
-                      <span>Documents DB</span>
-                    </button>
-                    {(pacsServersList || []).map((srv: any) => (
-                      <button
-                        key={srv.id}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-sidebar-foreground hover:bg-sidebar-accent group"
-                        onClick={() => setShowQueryPACS(true)}
-                      >
-                        <Server className="w-3.5 h-3.5" />
-                        <span className="text-[10px] flex-1 text-left truncate">
-                          {srv.name}
-                        </span>
-                        <Trash2
-                          className="w-3 h-3 opacity-0 group-hover:opacity-100 text-destructive hover:text-destructive"
-                          onClick={e => {
-                            e.stopPropagation();
-                            deletePacsServer.mutate({ id: srv.id });
-                          }}
-                        />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <Separator />
-
-                {/* Réglages agent CR autonome */}
-                <div className="p-3">
-                  <AgentCrSettings />
-                </div>
-
-                <Separator />
-
-                {/* Dashboard agents Hermès */}
-                <div className="p-3">
-                  <AgentsDashboard />
-                </div>
-
-                <Separator />
-
-                {/* Carnet des référents */}
-                <div className="p-3">
-                  <ReferentDirectory />
-                </div>
-              </div>
-
-              {/* Activity */}
-              <div className="p-3 border-t border-border">
-                <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1">
-                  Activity
-                </h3>
-                {(() => {
-                  const recent = openedIds
-                    .map(id => allStudies.find((s: any) => s.id === id))
-                    .filter(Boolean)
-                    .slice(0, 6);
-                  if (recent.length === 0)
-                    return (
-                      <p className="text-[10px] text-muted-foreground">
-                        Aucune activité récente
-                      </p>
                     );
-                  return (
-                    <div className="space-y-0.5">
-                      {recent.map((s: any) => (
-                        <button
-                          key={s.id}
-                          onClick={() => navigate(`/viewer/${s.id}`)}
-                          className="w-full text-left text-[10px] text-muted-foreground hover:text-foreground truncate"
-                          title={`${s.patientName || "?"} — ${s.modality || ""} ${s.studyDescription || ""}`}
-                        >
-                          • {s.patientName || "Sans nom"}{" "}
-                          <span className="opacity-60">{s.modality || ""}</span>
-                        </button>
-                      ))}
-                    </div>
-                  );
-                })()}
+                  })}
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Sources */}
+              <div className="p-3">
+                <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 flex items-center justify-between">
+                  <span>Sources</span>
+                  <button
+                    onClick={() => setShowAddServer(true)}
+                    className="hover:text-primary"
+                  >
+                    <Plus className="w-3 h-3" />
+                  </button>
+                </h3>
+                <div className="space-y-0.5">
+                  <button className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs bg-primary/10 text-primary">
+                    <Database className="w-3.5 h-3.5" />
+                    <span>Documents DB</span>
+                  </button>
+                  {(pacsServersList || []).map((srv: any) => (
+                    <button
+                      key={srv.id}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-sidebar-foreground hover:bg-sidebar-accent group"
+                      onClick={() => setShowQueryPACS(true)}
+                    >
+                      <Server className="w-3.5 h-3.5" />
+                      <span className="text-[10px] flex-1 text-left truncate">
+                        {srv.name}
+                      </span>
+                      <Trash2
+                        className="w-3 h-3 opacity-0 group-hover:opacity-100 text-destructive hover:text-destructive"
+                        onClick={e => {
+                          e.stopPropagation();
+                          deletePacsServer.mutate({ id: srv.id });
+                        }}
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Réglages agent CR autonome */}
+              <div className="p-3">
+                <AgentCrSettings />
+              </div>
+
+              <Separator />
+
+              {/* Dashboard agents Hermès */}
+              <div className="p-3">
+                <AgentsDashboard />
+              </div>
+
+              <Separator />
+
+              {/* Carnet des référents */}
+              <div className="p-3">
+                <ReferentDirectory />
               </div>
             </div>
 
-            {/* Main Study List */}
-            <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-              {/* Recherche multi-champs (Search ⌘F de Horos) */}
-              <div className="h-9 border-b border-border bg-card flex items-center gap-2 px-2 shrink-0">
-                <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Rechercher (nom, ID, accession, modalité, description…)"
-                  className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery("")}
-                    className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded border border-border"
-                  >
-                    {studies.length} résultat{studies.length > 1 ? "s" : ""} ✕
-                  </button>
-                )}
-              </div>
-              {/* Column Headers - Horos style with all columns */}
-              <div className="h-8 border-b border-border bg-card/50 flex items-center px-2 text-[10px] font-medium text-muted-foreground shrink-0 select-none">
-                <div className="w-36 px-1 flex items-center gap-1 cursor-pointer hover:text-foreground">
-                  Patient name <ChevronDown className="w-2.5 h-2.5" />
-                </div>
-                <div className="w-16 px-1 cursor-pointer hover:text-foreground">
-                  Report
-                </div>
-                <div className="w-10 px-1 cursor-pointer hover:text-foreground">
-                  Lock
-                </div>
-                <div className="w-24 px-1 cursor-pointer hover:text-foreground">
-                  Patient ID
-                </div>
-                <div className="w-12 px-1 cursor-pointer hover:text-foreground">
-                  Age
-                </div>
-                <div className="w-28 px-1 cursor-pointer hover:text-foreground">
-                  Accession Number
-                </div>
-                <div className="w-40 px-1 cursor-pointer hover:text-foreground">
-                  Study Description
-                </div>
-                <div className="w-14 px-1 cursor-pointer hover:text-foreground">
-                  Modality
-                </div>
-                <div className="w-20 px-1 cursor-pointer hover:text-foreground">
-                  ID
-                </div>
-                <div className="flex-1 px-1 cursor-pointer hover:text-foreground">
-                  Comments
-                </div>
-                <div className="w-16 px-1 cursor-pointer hover:text-foreground">
-                  History
-                </div>
-              </div>
-
-              {/* Study Rows */}
-              <ScrollArea className="flex-1 min-h-0">
-                {studiesLoading ? (
-                  <div className="flex items-center justify-center h-48">
-                    <div className="text-sm text-muted-foreground">
-                      Loading studies...
-                    </div>
-                  </div>
-                ) : studies.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full min-h-[300px] gap-4 p-8">
-                    <Database className="w-12 h-12 text-muted-foreground/30" />
-                    <div className="text-center">
-                      <p className="text-sm text-muted-foreground">
-                        No studies in database
-                      </p>
-                      <p className="text-xs text-muted-foreground/60 mt-1">
-                        Import DICOM files by dragging them here or using the
-                        Import button
-                      </p>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowImportDialog(true)}
-                      className="gap-2"
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      Import DICOM
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-border/30">
-                    {studies.map((study: any) => (
-                      <div
-                        key={study.id}
-                        role="button"
-                        tabIndex={0}
-                        className={`w-full flex items-center px-2 py-1.5 text-[10px] hover:bg-accent/50 transition-colors text-left cursor-pointer ${
-                          selectedStudyId === study.id
-                            ? "bg-primary/15 ring-1 ring-primary/40"
-                            : ""
-                        }`}
-                        onClick={() => setSelectedStudyId(study.id)}
-                        onDoubleClick={() => openStudy(study.id)}
+            {/* Activity */}
+            <div className="p-3 border-t border-border">
+              <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1">
+                Activity
+              </h3>
+              {(() => {
+                const recent = openedIds
+                  .map(id => allStudies.find((s: any) => s.id === id))
+                  .filter(Boolean)
+                  .slice(0, 6);
+                if (recent.length === 0)
+                  return (
+                    <p className="text-[10px] text-muted-foreground">
+                      Aucune activité récente
+                    </p>
+                  );
+                return (
+                  <div className="space-y-0.5">
+                    {recent.map((s: any) => (
+                      <button
+                        key={s.id}
+                        onClick={() => navigate(`/viewer/${s.id}`)}
+                        className="w-full text-left text-[10px] text-muted-foreground hover:text-foreground truncate"
+                        title={`${s.patientName || "?"} — ${s.modality || ""} ${s.studyDescription || ""}`}
                       >
-                        <div className="w-36 px-1 font-medium truncate text-foreground">
-                          {study.patientName || "-"}
-                        </div>
-                        <div
-                          className="w-24 px-1 text-muted-foreground"
-                          onClick={e => e.stopPropagation()}
-                        >
-                          {canEditWorkflow ? (
-                            <Select
-                              value={study.status ?? "new"}
-                              onValueChange={value =>
-                                updateStatus.mutate({
-                                  id: study.id,
-                                  status: value as
-                                    | "new"
-                                    | "in_progress"
-                                    | "reported"
-                                    | "finalized",
-                                })
-                              }
-                            >
-                              <SelectTrigger
-                                size="sm"
-                                className="h-6 text-[9px] px-1.5"
-                              >
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="new">Nouveau</SelectItem>
-                                <SelectItem value="in_progress">
-                                  En cours
-                                </SelectItem>
-                                <SelectItem value="reported">
-                                  Rapporté
-                                </SelectItem>
-                                <SelectItem value="finalized">
-                                  Finalisé
-                                </SelectItem>
-                              </SelectContent>
-                            </Select>
-                          ) : study.status === "reported" ? (
-                            <Badge
-                              variant="secondary"
-                              className="text-[8px] px-1 py-0"
-                            >
-                              Done
-                            </Badge>
-                          ) : (
-                            "-"
-                          )}
-                        </div>
-                        <div
-                          className="w-24 px-1 text-muted-foreground"
-                          onClick={e => e.stopPropagation()}
-                        >
-                          {canEditWorkflow ? (
-                            <Select
-                              value={study.priority ?? "routine"}
-                              onValueChange={value =>
-                                updatePriority.mutate({
-                                  id: study.id,
-                                  priority: value as
-                                    | "routine"
-                                    | "stat"
-                                    | "urgent",
-                                })
-                              }
-                            >
-                              <SelectTrigger
-                                size="sm"
-                                className="h-6 text-[9px] px-1.5"
-                              >
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="routine">Routine</SelectItem>
-                                <SelectItem value="stat">STAT</SelectItem>
-                                <SelectItem value="urgent">Urgent</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          ) : study.priority === "stat" ? (
-                            <Lock className="w-3 h-3 text-destructive" />
-                          ) : (
-                            "-"
-                          )}
-                        </div>
-                        <div className="w-24 px-1 text-muted-foreground truncate">
-                          {study.patientDicomId || "-"}
-                        </div>
-                        <div className="w-12 px-1 text-muted-foreground">
-                          {calculateAge(study.birthDate) || "-"}
-                        </div>
-                        <div className="w-28 px-1 text-muted-foreground truncate">
-                          {study.accessionNumber || "-"}
-                        </div>
-                        <div className="w-40 px-1 text-muted-foreground truncate">
-                          {study.studyDescription || "-"}
-                        </div>
-                        <div className="w-14 px-1">
-                          <Badge
-                            variant="secondary"
-                            className="text-[8px] px-1 py-0 font-mono"
-                          >
-                            {study.modality || "-"}
-                          </Badge>
-                        </div>
-                        <div className="w-20 px-1 text-muted-foreground truncate text-[9px]">
-                          {study.studyInstanceUid?.slice(-8) || "-"}
-                        </div>
-                        <div className="flex-1 px-1 text-muted-foreground truncate">
-                          {"-"}
-                        </div>
-                        <div className="w-16 px-1 text-muted-foreground text-[9px]">
-                          {study.numberOfSeries
-                            ? `${study.numberOfSeries}S/${study.numberOfInstances}I`
-                            : "-"}
-                        </div>
-                      </div>
+                        • {s.patientName || "Sans nom"}{" "}
+                        <span className="opacity-60">{s.modality || ""}</span>
+                      </button>
                     ))}
                   </div>
-                )}
-              </ScrollArea>
+                );
+              })()}
             </div>
-          </>
+          </div>
         )}
+
+        {/* Main Study List */}
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+          {/* Recherche multi-champs (Search ⌘F de Horos) */}
+          <div className="h-9 border-b border-border bg-card flex items-center gap-2 px-2 shrink-0">
+            <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Rechercher (nom, ID, accession, modalité, description…)"
+              className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded border border-border"
+              >
+                {studies.length} résultat{studies.length > 1 ? "s" : ""} ✕
+              </button>
+            )}
+          </div>
+          {/* Column Headers - Horos style with all columns */}
+          <div className="h-8 border-b border-border bg-card/50 flex items-center px-2 text-[10px] font-medium text-muted-foreground shrink-0 select-none">
+            <div className="w-36 px-1 flex items-center gap-1 cursor-pointer hover:text-foreground">
+              Patient name <ChevronDown className="w-2.5 h-2.5" />
+            </div>
+            <div className="w-16 px-1 cursor-pointer hover:text-foreground">
+              Report
+            </div>
+            <div className="w-10 px-1 cursor-pointer hover:text-foreground">
+              Lock
+            </div>
+            <div className="w-24 px-1 cursor-pointer hover:text-foreground">
+              Patient ID
+            </div>
+            <div className="w-12 px-1 cursor-pointer hover:text-foreground">
+              Age
+            </div>
+            <div className="w-28 px-1 cursor-pointer hover:text-foreground">
+              Accession Number
+            </div>
+            <div className="w-40 px-1 cursor-pointer hover:text-foreground">
+              Study Description
+            </div>
+            <div className="w-14 px-1 cursor-pointer hover:text-foreground">
+              Modality
+            </div>
+            <div className="w-20 px-1 cursor-pointer hover:text-foreground">
+              ID
+            </div>
+            <div className="flex-1 px-1 cursor-pointer hover:text-foreground">
+              Comments
+            </div>
+            <div className="w-16 px-1 cursor-pointer hover:text-foreground">
+              History
+            </div>
+          </div>
+
+          {/* Study Rows */}
+          <ScrollArea className="flex-1 min-h-0">
+            {studiesLoading ? (
+              <div className="flex items-center justify-center h-48">
+                <div className="text-sm text-muted-foreground">
+                  Loading studies...
+                </div>
+              </div>
+            ) : studies.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full min-h-[300px] gap-4 p-8">
+                <Database className="w-12 h-12 text-muted-foreground/30" />
+                <div className="text-center">
+                  <p className="text-sm text-muted-foreground">
+                    No studies in database
+                  </p>
+                  <p className="text-xs text-muted-foreground/60 mt-1">
+                    Import DICOM files by dragging them here or using the Import
+                    button
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowImportDialog(true)}
+                  className="gap-2"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  Import DICOM
+                </Button>
+              </div>
+            ) : (
+              <div className="divide-y divide-border/30">
+                {studies.map((study: any) => (
+                  <div
+                    key={study.id}
+                    role="button"
+                    tabIndex={0}
+                    className={`w-full flex items-center px-2 py-1.5 text-[10px] hover:bg-accent/50 transition-colors text-left cursor-pointer ${
+                      selectedStudyId === study.id
+                        ? "bg-primary/15 ring-1 ring-primary/40"
+                        : ""
+                    }`}
+                    onClick={() => setSelectedStudyId(study.id)}
+                    onDoubleClick={() => openStudy(study.id)}
+                  >
+                    <div className="w-36 px-1 font-medium truncate text-foreground">
+                      {study.patientName || "-"}
+                    </div>
+                    <div
+                      className="w-24 px-1 text-muted-foreground"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      {canEditWorkflow ? (
+                        <Select
+                          value={study.status ?? "new"}
+                          onValueChange={value =>
+                            updateStatus.mutate({
+                              id: study.id,
+                              status: value as
+                                | "new"
+                                | "in_progress"
+                                | "reported"
+                                | "finalized",
+                            })
+                          }
+                        >
+                          <SelectTrigger
+                            size="sm"
+                            className="h-6 text-[9px] px-1.5"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="new">Nouveau</SelectItem>
+                            <SelectItem value="in_progress">
+                              En cours
+                            </SelectItem>
+                            <SelectItem value="reported">Rapporté</SelectItem>
+                            <SelectItem value="finalized">Finalisé</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : study.status === "reported" ? (
+                        <Badge
+                          variant="secondary"
+                          className="text-[8px] px-1 py-0"
+                        >
+                          Done
+                        </Badge>
+                      ) : (
+                        "-"
+                      )}
+                    </div>
+                    <div
+                      className="w-24 px-1 text-muted-foreground"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      {canEditWorkflow ? (
+                        <Select
+                          value={study.priority ?? "routine"}
+                          onValueChange={value =>
+                            updatePriority.mutate({
+                              id: study.id,
+                              priority: value as "routine" | "stat" | "urgent",
+                            })
+                          }
+                        >
+                          <SelectTrigger
+                            size="sm"
+                            className="h-6 text-[9px] px-1.5"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="routine">Routine</SelectItem>
+                            <SelectItem value="stat">STAT</SelectItem>
+                            <SelectItem value="urgent">Urgent</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : study.priority === "stat" ? (
+                        <Lock className="w-3 h-3 text-destructive" />
+                      ) : (
+                        "-"
+                      )}
+                    </div>
+                    <div className="w-24 px-1 text-muted-foreground truncate">
+                      {study.patientDicomId || "-"}
+                    </div>
+                    <div className="w-12 px-1 text-muted-foreground">
+                      {calculateAge(study.birthDate) || "-"}
+                    </div>
+                    <div className="w-28 px-1 text-muted-foreground truncate">
+                      {study.accessionNumber || "-"}
+                    </div>
+                    <div className="w-40 px-1 text-muted-foreground truncate">
+                      {study.studyDescription || "-"}
+                    </div>
+                    <div className="w-14 px-1">
+                      <Badge
+                        variant="secondary"
+                        className="text-[8px] px-1 py-0 font-mono"
+                      >
+                        {study.modality || "-"}
+                      </Badge>
+                    </div>
+                    <div className="w-20 px-1 text-muted-foreground truncate text-[9px]">
+                      {study.studyInstanceUid?.slice(-8) || "-"}
+                    </div>
+                    <div className="flex-1 px-1 text-muted-foreground truncate">
+                      {"-"}
+                    </div>
+                    <div className="w-16 px-1 text-muted-foreground text-[9px]">
+                      {study.numberOfSeries
+                        ? `${study.numberOfSeries}S/${study.numberOfInstances}I`
+                        : "-"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </div>
       </div>
 
       {/* Status Bar - Horos style */}

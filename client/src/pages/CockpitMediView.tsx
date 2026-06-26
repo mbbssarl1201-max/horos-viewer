@@ -544,107 +544,113 @@ export default function CockpitMediView({
         </div>
       </aside>
 
-      {/* ── POIGNÉE DE REDIMENSIONNEMENT ───────────────────────────────── */}
-      <div
-        onMouseDown={startDrag}
-        className="group relative z-10 w-1 cursor-col-resize bg-slate-800 hover:bg-violet-600/60 active:bg-violet-600"
-        title="Redimensionner le panneau"
-      >
-        <div className="absolute inset-y-0 -left-1.5 -right-1.5 flex items-center justify-center">
-          <GripVertical className="h-4 w-4 text-slate-600 opacity-0 transition group-hover:opacity-100" />
-        </div>
-      </div>
-
-      {/* ── DROITE : navigateur Selenium live (noVNC) ───────────────────── */}
-      <main className="relative flex flex-1 flex-col bg-[#0b1220]">
-        {/* Barre navigateur */}
-        <div className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-900 px-2 py-1.5">
-          <button
-            onClick={() => naviguer("/")}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-800 hover:text-slate-300"
-            title="Worklist"
+      {/* ── POIGNÉE + DROITE noVNC — masqués en mode embarqué ──────────── */}
+      {!embedded && (
+        <>
+          <div
+            onMouseDown={startDrag}
+            className="group relative z-10 w-1 cursor-col-resize bg-slate-800 hover:bg-violet-600/60 active:bg-violet-600"
+            title="Redimensionner le panneau"
           >
-            <Home className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={recharger}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-800 hover:text-slate-300"
-            title="Recharger"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-          </button>
+            <div className="absolute inset-y-0 -left-1.5 -right-1.5 flex items-center justify-center">
+              <GripVertical className="h-4 w-4 text-slate-600 opacity-0 transition group-hover:opacity-100" />
+            </div>
+          </div>
 
-          {/* Barre URL cliquable */}
-          {urlEditing ? (
-            <form
-              onSubmit={e => {
-                e.preventDefault();
-                commitUrl();
-              }}
-              className="flex flex-1 items-center"
-            >
-              <input
-                ref={urlInputRef}
-                autoFocus
-                value={urlDraft}
-                onChange={e => setUrlDraft(e.target.value)}
-                onBlur={commitUrl}
-                onKeyDown={e => e.key === "Escape" && setUrlEditing(false)}
-                className="flex-1 rounded-md border border-violet-500 bg-slate-800 px-3 py-1 text-xs text-slate-100 outline-none"
-              />
-            </form>
-          ) : (
-            <button
-              onClick={() => {
-                setUrlDraft(routeAffichee);
-                setUrlEditing(true);
-              }}
-              className="flex flex-1 items-center gap-2 rounded-md bg-slate-800 px-3 py-1 text-left text-xs text-slate-400 transition hover:bg-slate-700"
-              title="Modifier la route"
-            >
-              {navEnCours ? (
-                <Loader2 className="h-3 w-3 animate-spin text-violet-400" />
+          {/* ── DROITE : navigateur Selenium live (noVNC) ───────────────────── */}
+          <main className="relative flex flex-1 flex-col bg-[#0b1220]">
+            {/* Barre navigateur */}
+            <div className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-900 px-2 py-1.5">
+              <button
+                onClick={() => naviguer("/")}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-800 hover:text-slate-300"
+                title="Worklist"
+              >
+                <Home className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={recharger}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-800 hover:text-slate-300"
+                title="Recharger"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </button>
+
+              {/* Barre URL cliquable */}
+              {urlEditing ? (
+                <form
+                  onSubmit={e => {
+                    e.preventDefault();
+                    commitUrl();
+                  }}
+                  className="flex flex-1 items-center"
+                >
+                  <input
+                    ref={urlInputRef}
+                    autoFocus
+                    value={urlDraft}
+                    onChange={e => setUrlDraft(e.target.value)}
+                    onBlur={commitUrl}
+                    onKeyDown={e => e.key === "Escape" && setUrlEditing(false)}
+                    className="flex-1 rounded-md border border-violet-500 bg-slate-800 px-3 py-1 text-xs text-slate-100 outline-none"
+                  />
+                </form>
               ) : (
-                <MonitorPlay className="h-3 w-3 shrink-0 text-emerald-500" />
+                <button
+                  onClick={() => {
+                    setUrlDraft(routeAffichee);
+                    setUrlEditing(true);
+                  }}
+                  className="flex flex-1 items-center gap-2 rounded-md bg-slate-800 px-3 py-1 text-left text-xs text-slate-400 transition hover:bg-slate-700"
+                  title="Modifier la route"
+                >
+                  {navEnCours ? (
+                    <Loader2 className="h-3 w-3 animate-spin text-violet-400" />
+                  ) : (
+                    <MonitorPlay className="h-3 w-3 shrink-0 text-emerald-500" />
+                  )}
+                  <span className="font-medium text-slate-500">
+                    mediview.mbbssarl.ch
+                  </span>
+                  <span className="truncate text-slate-400">
+                    {routeAffichee}
+                  </span>
+                </button>
               )}
-              <span className="font-medium text-slate-500">
-                mediview.mbbssarl.ch
-              </span>
-              <span className="truncate text-slate-400">{routeAffichee}</span>
-            </button>
-          )}
 
-          <a
-            href={`https://mediview.mbbssarl.ch${routeAffichee}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-800 hover:text-slate-300"
-            title="Ouvrir dans MediView"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-          </a>
-          <a
-            href={`https://mediview.mbbssarl.ch${routeAffichee}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hidden h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-800 hover:text-slate-300 sm:flex"
-            title="Plein écran"
-          >
-            <Maximize2 className="h-3.5 w-3.5" />
-          </a>
-        </div>
+              <a
+                href={`https://mediview.mbbssarl.ch${routeAffichee}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-800 hover:text-slate-300"
+                title="Ouvrir dans MediView"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+              <a
+                href={`https://mediview.mbbssarl.ch${routeAffichee}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hidden h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-800 hover:text-slate-300 sm:flex"
+                title="Plein écran"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </a>
+            </div>
 
-        {/* Viewer noVNC */}
-        <div className="relative flex-1">
-          <iframe
-            ref={iframeRef}
-            src={VIEWER_URL}
-            title="MediView (Selenium live)"
-            className="h-full w-full border-0"
-            allow="clipboard-read; clipboard-write"
-          />
-        </div>
-      </main>
+            {/* Viewer noVNC */}
+            <div className="relative flex-1">
+              <iframe
+                ref={iframeRef}
+                src={VIEWER_URL}
+                title="MediView (Selenium live)"
+                className="h-full w-full border-0"
+                allow="clipboard-read; clipboard-write"
+              />
+            </div>
+          </main>
+        </>
+      )}
     </div>
   );
 }

@@ -182,12 +182,14 @@ const PROMPT_HEADER = [
   "8. DISTINGUE l'AIGU du CHRONIQUE/dégénératif ou séquellaire — crucial en contexte traumatique (une arthrose/chondropathie n'est pas une lésion traumatique aiguë).",
   "9. SIGNALE les LIMITES de la technique (CT natif peu sensible à l'ischémie aiguë et aux parties molles/tendons ; IRM bas champ/ouverte = résolution limitée ; artéfacts) et propose l'examen complémentaire adapté.",
   "",
-  "Style de rédaction (compte rendu radiologique — Institut Médical de Champel, Dr Kolo) :",
+  "Style de rédaction (compte rendu radiologique — Institut Médical de Champel) :",
   "- TERMINOLOGIE radiologique standard et précise. PAS de remplissage, PAS de phrases d'introduction, PAS de formules de prudence répétées (« à corréler à la clinique » : au plus UNE fois en Conclusion).",
-  "- LE FORMAT DES RÉSULTATS DÉPEND DE LA RÉGION (voir instructions spécifiques à la modalité ci-dessous) :",
-  "  • SEIN / THYROÏDE / TESTICULE : format PUCE + ÉTIQUETTE EN GRAS — « • **Organe :** description. »",
-  "  • ABDOMEN / PELVIS / CAS GÉNÉRAL : format PROSE — une phrase complète par organe, sans puce, à la manière d'un paragraphe rédigé (ex. « Le foie présente un volume, une forme et une échostructure homogènes, sans lésion focale identifiable. Les contours hépatiques sont réguliers. »). Les organes normaux sont décrits EXPLICITEMENT (ne liste pas seulement les anomalies).",
-  "- CONCLUSION : 2 à 3 phrases DIRECTES sur lignes séparées. Première ligne = bilan global (ex. « Échographie abdominale normale. »). Deuxième ligne = réponse précise à l'indication + anomalie significative si présente. PAS de paraphrase des Résultats.",
+  "- LE FORMAT DÉPEND DE LA MODALITÉ ET DE LA RÉGION (voir instructions spécifiques à la modalité ci-dessous) :",
+  "  • IRM / SCANNER (Dr Eva Son) : section nommée 'Description' (prose libre, paragraphes par région/structure) + Conclusion en LISTE NUMÉROTÉE (1. / 2. / 3. ...).",
+  "  • ÉCHOGRAPHIE SEIN / THYROÏDE / TESTICULE (Dr Son) : format PUCE + ÉTIQUETTE EN GRAS — « • **Organe :** description. » + Classification BI-RADS/EU-TIRADS.",
+  "  • ÉCHOGRAPHIE ABDOMEN / PELVIS (Dr Kolo) : format LABEL : DESCRIPTION — chaque organe commence par son nom suivi de deux-points sur la même ligne (ex. « Foie : Volume, forme et échostructure homogènes, sans lésion focale. »). Organes normaux décrits EXPLICITEMENT.",
+  "  • ÉCHOGRAPHIE MUSCULO-SQUELETTIQUE (Dr Kolo) : sous-groupes anatomiques (ex. « Coiffe des rotateurs : »), puis « Structure : description. » par ligne sans puce ni gras.",
+  "- CONCLUSION ÉCHOGRAPHIE : 1 à 2 phrases DIRECTES. Bilan global + réponse à l'indication. PAS de paraphrase des Résultats.",
   "- CLASSIFICATION : si applicable (BI-RADS, EU-TIRADS, LI-RADS, Bosniak…), indiquer EN GRAS sur une ligne dédiée après la Conclusion (ex. « **Classification : BI-RADS 1** »).",
   "",
   "Méthode :",
@@ -207,11 +209,11 @@ const PROMPT_FOOTER = [
   "Technique:",
   "<description FACTUELLE et brève de l'acquisition d'après la modalité. N'invente NI produit de contraste, NI paramètres s'ils ne sont pas fournis.>",
   "",
-  "Résultats:",
-  "<prose ou puces selon la région détectée — voir instructions modalité. Ordre anatomique logique. Mentionne les structures normales explicitement.>",
+  "Résultats: (IRM/Scanner : nomme cette section « Description: » — voir instructions modalité)",
+  "<format selon la modalité et la région : prose par paragraphes pour IRM/scanner ; label:description pour écho abdominale ; puces grasses pour écho sein/thyroïde ; structure:description pour musculo. Ordre anatomique logique. Structures normales décrites explicitement.>",
   "",
   "Conclusion:",
-  "<2 à 3 phrases directes sur lignes séparées : bilan global + réponse à l'indication + hypothèses si besoin>",
+  "<IRM/Scanner : liste numérotée 1./2./3. — un finding par point. Échographie : 1 à 2 phrases directes.>",
   "",
   "Classification: <BI-RADS / EU-TIRADS / LI-RADS / etc. si applicable — sinon omettre cette ligne>",
   "",
@@ -232,16 +234,17 @@ export function modalityBlock(modality?: string): string {
       "- ÉTAPE 1 OBLIGATOIRE : IDENTIFIE LA RÉGION EXPLORÉE d'après le TEXTE INCRUSTÉ en haut/bas de l'image (nom de sonde + région), AVANT toute interprétation. Exemples de régions : SEIN/MAMMAIRE (sonde linéaire haute fréquence « 11L », « L »), THYROÏDE/COU, ABDOMEN (foie, rein, vésicule, pancréas, rate, aorte), PELVIS, VASCULAIRE/DOPPLER, PARTIES MOLLES, TESTICULE, MUSCULO-SQUELETTIQUE. NE PRÉSUME JAMAIS l'abdomen par défaut : adapte les organes recherchés à la région LUE.",
       "- Si la région est le SEIN/MAMMAIRE : structure les Résultats avec les 4 rubriques standard en puces grasses : « • **Étude du parenchyme :** » (type A/B/C/D ACR, symétrie, échostructure glandulo-adipeuse/fibroglandulaire), « • **Analyse focale :** » (masse/nodule : forme, contours, orientation, échostructure, atténuation post. ; kyste ; ectasies galactophoriques ; microcalcifications), « • **Galactophores :** » (présence/absence d'ectasies, de dilatations, de contenu intraluminal), « • **Analyse axillaire :** » (adénopathies suspectes ou non dans les deux creux). Classe en BI-RADS à la fin. NE cherche PAS de foie/rein.",
       "- Si la région est la THYROÏDE : rubriques standard en puces grasses : « • **Lobe droit :** », « • **Lobe gauche :** », « • **Isthme :** », « • **Vascularisation Doppler :** ». Pour tout nodule : composition, échogénicité, forme, contours, calcifications → EU-TIRADS si pertinent.",
-      "- Si la région est l'ABDOMEN / PELVIS (foie, rein, vésicule, pancréas, rate, aorte, utérus, ovaires) : utilise le format PROSE (une phrase complète par organe, SANS puce), dans l'ordre anatomique standard Dr Kolo :",
-      "  1. Foie : volume, forme, échostructure, lésion focale, contours hépatiques, voies biliaires intra- et extra-hépatiques.",
-      "  2. Vésicule biliaire : distension, lithiase, épaississement pariétal.",
+      "- Si la région est l'ABDOMEN / PELVIS (foie, rein, vésicule, pancréas, rate, aorte, utérus, ovaires) : utilise le format LABEL : DESCRIPTION (style Dr Kolo) — chaque organe = son nom suivi de deux-points puis la description sur la même ligne, SANS puce, SANS gras. Ordre anatomique :",
+      "  1. Foie : volume, forme, échostructure, lésion focale, contours, voies biliaires.",
+      "  2. Voies biliaires et vésicule : distension VB, lithiase, épaississement pariétal.",
       "  3. Pancréas : visualisation, échostructure, anomalie.",
       "  4. Rate : taille, parenchyme.",
       "  5. Reins : dimensions, contours, dilatation des cavités excrétrices, lithiase.",
       "  6. Aorte abdominale : calibre.",
-      "  7. Doppler couleur (si visible) : perméabilité du tronc porte (flux hépatopète), branches intra-hépatiques, veines hépatiques, VCI.",
-      "  8. Exploration pelvienne (précédé de la mention « Exploration pelvienne : ») : vessie (paroi, contenu), utérus (taille, contours, endomètre mesuré si curseur visible), ovaires (taille, échostructure, kyste), loge utérine si hystérectomie, épanchement pelvien, adénomégalies.",
-      "  Phrases modèles pour le NORMAL : « Le foie présente un volume, une forme et une échostructure homogènes, sans lésion focale identifiable. Les contours hépatiques sont réguliers. Les voies biliaires intra- et extra-hépatiques ne sont pas dilatées. » / « La vésicule biliaire est bien tendue, sans image lithiasique ni épaississement pariétal. » / « Le pancréas est correctement visualisé, d'échostructure homogène, sans anomalie visible. » / « La rate est de taille normale, à parenchyme homogène. » / « Les reins sont de dimensions respectées, de contours réguliers, sans dilatation des cavités excrétrices et sans formation lithiasique décelable. » / « L'aorte abdominale est de calibre normal et régulier. » / « Au Doppler couleur, le tronc porte est perméable avec un flux hépatopète régulier, sans signe de sténose. Les branches intra-hépatiques de la veine porte, les veines hépatiques principales et la veine cave inférieure sont perméables et de morphologie normale. »",
+      "  7. Doppler couleur portal : perméabilité du tronc porte (flux hépatopète), branches intra-hépatiques, veines hépatiques, VCI.",
+      "  8. Exploration pelvienne : vessie, utérus (endomètre si curseur visible), ovaires, épanchement, adénomégalies.",
+      "  Formulations NORMALES Dr Kolo : « Foie : Volume, forme et échostructure homogènes, sans lésion focale identifiable. Contours hépatiques réguliers. Voies biliaires intra- et extra-hépatiques non dilatées. » / « Voies biliaires et vésicule : Vésicule biliaire bien tendue, sans image lithiasique ni épaississement pariétal. » / « Pancréas : Correctement visualisé, d'échostructure homogène, sans anomalie visible. » / « Rate : De taille normale, à parenchyme homogène. » / « Reins : Dimensions respectées, contours réguliers, sans dilatation des cavités excrétrices et sans image lithiasique. » / « Aorte abdominale : De calibre normal et régulier. » / « Doppler couleur portal : Tronc porte perméable avec un flux hépatopète régulier. Branches intra-hépatiques, veines hépatiques principales et VCI perméables et de morphologie normale. »",
+      "- Si la région est MUSCULO-SQUELETTIQUE / ARTICULAIRE (épaule, genou, coude, cheville, tendon, fascia, parties molles) : organise les Résultats par sous-groupes anatomiques (ex. « Coiffe des rotateurs : » / « Bourse sous-acromiale : » / « Articulation gléno-humérale : »), puis chaque structure sur sa propre ligne au format « Structure : description. » sans puce ni gras. Ex. : « Tendon du supraépineux : Épais, continu, sans déchirure ni calcification. » / « Bourse sous-acromio-deltoïdienne : Non épanouie, sans épanchement. » Conclusion en 1-2 phrases avec recommandation IRM si indiquée.",
       "- DOPPLER COULEUR : si des plages de COULEUR (rouge/bleu) sont présentes, c'est un Doppler de FLUX — décris la vascularisation (présente/absente, intra/périlésionnelle) ; ne confonds pas la couleur avec une lésion.",
       "- Pour chaque structure visible, décris : taille, échostructure (homogène/hétérogène), contours, et toute LÉSION FOCALE — KYSTE (anéchogène, arrondi, paroi fine, renforcement postérieur), nodule, masse, calcul (hyperéchogène + cône d'ombre), dilatation, épanchement.",
       "- Des CURSEURS de mesure (« + », « 1 », « 2 », pointillés, valeurs en mm/cm) posés sur une structure signalent une LÉSION/STRUCTURE MESURÉE : décris-la, REPORTE la valeur si lisible, et indique Anomalie = oui.",
@@ -249,12 +252,32 @@ export function modalityBlock(modality?: string): string {
   if (m === "MR" || m === "MRI")
     return [
       "MODALITÉ : IRM (résonance magnétique). N'emploie PAS le concept de « fenêtre osseuse » (propre au scanner).",
-      "- Décris le SIGNAL des structures selon les séquences visibles (T1/T2/FLAIR/diffusion si identifiables), les LÉSIONS FOCALES, anomalies de signal, œdème, effet de masse, et toute prise de contraste apparente.",
+      "FORMAT DU COMPTE RENDU — Style Dr Eva Son, Institut Médical de Champel :",
+      "IMPORTANT : dans ta réponse, nomme la section des constatations « Description: » et NON « Résultats: ».",
+      "- Section 'Description' : PROSE LIBRE, phrases courtes et directes, groupées par région/structure anatomique (PAS de puces, PAS d'étiquettes en gras, PAS de listes à points).",
+      "  • Si l'examen couvre PLUSIEURS RÉGIONS (ex. rachis lombaire + genou), commence chaque région par son nom suivi de deux-points : « Rachis lombaire : [prose continu]. » puis saut de ligne, « Genou gauche : [prose continu]. »",
+      "  • Ordre classique : constats normaux/neutres d'abord (alignement, hauteur, signal), puis anomalies.",
+      "  • Formules RACHIS normales : « Alignement [cervical/lombaire] conservé. Hauteur des corps vertébraux respectée. Pas de tassement, pas d'anomalie focale agressive du signal osseux. Disques [X] sans hernie significative. Pas de sténose canalaire ni foraminale significative. Cône médullaire de morphologie et de signal conservés. »",
+      "  • Pour les anomalies discales : niveau précis (L4-L5), type (protrusion/hernie), côté (médiane/paramédiane droite/gauche/foraminale), structure comprimée (racine L5 droite/moelle). Exemple : « Discrète protrusion discale paramédiane droite L4-L5, avec conflit de la racine L5 droite. »",
+      "  • Formules GENOU normales : « Alignement fémoro-tibial conservé. Pas d'épanchement articulaire significatif. Ménisques sans fissure visible. Ligaments croisés et collatéraux continus. Appareil extenseur conservé. Pas de lésion osseuse aiguë, pas d'œdème osseux focal, pas de kyste poplité significatif. »",
+      "  • Formules ÉPAULE : épanchement gléno-huméral, état de la coiffe (supraépineux, infraépineux, sous-scapulaire, long biceps), bourse sous-acromio-deltoïdienne, intervalle des rotateurs, signal osseux (œdème, lésion de Bankart).",
+      "  • Décris le SIGNAL T1/T2/FLAIR/diffusion (si identifiables), les LÉSIONS FOCALES, œdème osseux, épanchement, état des structures (ménisques/ligaments/tendons/coiffe).",
+      "- Section 'Conclusion' : LISTE NUMÉROTÉE — un finding par numéro (1. / 2. / 3. ...). Le plus cliniquement important en premier. Si examen strictement normal : « 1. IRM [région] sans anomalie significative décelable. » Jamais de prose libre en Conclusion pour l'IRM.",
+      "- TECHNIQUE IRM CHAMPEL (si applicable) : « Examen réalisé sur IRM ouverte Basda avec aimant permanent Nd-Fe-B, antenne [région], sans injection de GBCAs, avec séquences localizer, T1, T2 et T2 FS dans les plans usuels. »",
     ].join("\n");
   if (m === "CT")
     return [
-      "MODALITÉ : SCANNER (tomodensitométrie). Décris de façon SYSTÉMATIQUE : structures osseuses, articulations/espaces, parties molles, organes, vaisseaux, et tout signe pertinent.",
-      "- ATTENTION (fenêtre osseuse) : l'os cortical dense apparaît NORMALEMENT blanc/très brillant — anatomie NORMALE. Ne l'interprète JAMAIS comme une tumeur, une masse, une calcification suspecte ou un objet métallique. N'évoque « tumeur / masse / corps étranger / métal » QUE devant une lésion franchement pathologique (destruction osseuse nette, masse de parties molles évidente). En cas de doute, considère que c'est NORMAL.",
+      "MODALITÉ : SCANNER / ANGIO-SCANNER (tomodensitométrie). Décris de façon SYSTÉMATIQUE selon la région.",
+      "FORMAT DU COMPTE RENDU — Style Dr Eva Son, Institut Médical de Champel :",
+      "IMPORTANT : dans ta réponse, nomme la section des constatations « Description: » et NON « Résultats: ».",
+      "- Section 'Description' : PROSE LIBRE, paragraphes par région/système anatomique (PAS de puces ni de listes).",
+      "  • ANGIO-SCANNER VASCULAIRE : axes artériels (perméabilité, sténose en %, plaques, occlusion, dissection) → territoire intracrânien → parenchyme cérébral (hémorragie, syndrome de masse) → sinus/rochers → parties molles cervicales.",
+      "  • Formules normales ANGIO-TSA : « Axes carotidiens et vertébraux cervicaux perméables. Absence de sténose hémodynamiquement significative. Pas d'occlusion artérielle cervicale. Pas d'argument pour dissection. Axes intracrâniens proximaux perméables. »",
+      "  • SCANNER OSTÉO-ARTICULAIRE : os (corticales, trabéculation), espaces articulaires, parties molles, tout trait/tassement/lésion.",
+      "  • Formules négatives utiles : « Absence de sténose hémodynamiquement significative. Pas d'hémorragie intracrânienne visible. Parties molles sans collection ni adénopathie pathologique évidente. »",
+      "- Section 'Conclusion' : LISTE NUMÉROTÉE — un finding par numéro (1. / 2. / 3. ...). Le plus cliniquement important en premier. Inclure une recommandation corrélative si pertinente (ex. avis vasculaire). Si normal : « 1. [Région] sans anomalie significative décelable. »",
+      "- TECHNIQUE CT CHAMPEL (si applicable) : « Examen CT hélicoïdal sur Toshiba 128 barrettes Aquilion CX. Acquisition [région] en phase [artérielle/veineuse/sans injection] [après injection intraveineuse de X ml d'Iomeron 350, lot XXXXXX]. »",
+      "- ATTENTION (fenêtre osseuse) : l'os cortical dense apparaît NORMALEMENT blanc/très brillant. Ne l'interprète JAMAIS comme une tumeur, une masse ou un corps étranger. N'évoque une lésion pathologique QUE devant une destruction osseuse nette ou une masse de parties molles évidente.",
     ].join("\n");
   if (m === "CR" || m === "DX" || m === "DR" || m === "RX")
     return [
@@ -1659,7 +1682,7 @@ export function parseSections(text: string): {
   // Technique : "Technique"
   const T = "Technique";
   // Résultats : "Résultats"/"Resultats"/"Résultat"/"Constatations"/"Constatation"
-  const R = "(?:R[ée]sultats?|Constatations?)";
+  const R = "(?:R[ée]sultats?|Constatations?|Description)";
   // Conclusion : "Conclusion"/"Conclusions"
   const C = "Conclusions?";
   // Format attendu : Technique / Résultats / Conclusion.

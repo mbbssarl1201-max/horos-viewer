@@ -271,6 +271,7 @@ export function modalityBlock(modality?: string): string {
       "  • IRM PELVIS FÉMININ — ordre : utérus (position, dimensions, contours, myomètres, signal endomètre, lésion myomateuse : localisation sous-séreux/intramural/sous-muqueux, taille), ovaires (dimensions, follicules, kyste/masse, signal), Douglas/cul-de-sac (épanchement, endométriose), paroi vésicale, adénopathies pelviennes. Formules normales : « Utérus en antéversion, de dimensions normales, contours réguliers, sans lésion myomateuse identifiable. Endomètre fin, de signal homogène. Ovaires non individualisés / de dimensions normales, sans lésion focale kystique ni solide. Pas d'épanchement dans le cul-de-sac de Douglas. Pas d'adénopathie pelvienne significative. Paroi vésicale d'aspect normal. »",
       "  • IRM CÉRÉBRALE — ordre : structures médianes (en place / déviation), système ventriculaire (taille pour l'âge, hydrocéphalie), parenchyme sus-tentoriel (hypersignal FLAIR/T2, lésion ischémique, masse, contusion), parenchyme sous-tentoriel/cervelet/tronc, selle turcique, corps calleux, paquets acoustico-faciaux, sinus (opacité), diffusion (restriction = lésion aiguë), TOF (perméabilité vaisseaux intracrâniens). Formules normales : « Les structures médianes sont en place. Le système ventriculaire est de taille normale pour l'âge. Pas d'argument pour une lésion ischémique récente en diffusion. Pas d'hypersignal FLAIR pathologique significatif. Pas de syndrome de masse rétro-orbitaire. Pas d'anomalie des paquets acoustico-faciaux. Selle turcique et corps calleux sans anomalie. Axes vasculaires intracrâniens proximaux perméables sur le TOF 3D. » Drapeaux rouges cérébraux : hémorragie (T2*/SWI hypointense), lésion de diffusion restreinte (ischémie aiguë), effet de masse avec déplacement des structures médianes → toujours en tête de Conclusion.",
       "  • Décris le SIGNAL T1/T2/FLAIR/diffusion (si identifiables), les LÉSIONS FOCALES, œdème osseux, épanchement, état des structures (ménisques/ligaments/tendons/coiffe).",
+      "- 'Constatations supplémentaires' (optionnel) : si l'examen révèle des trouvailles HORS champ principal (ex. mastoïdite sur IRM cérébrale, polype sur IRM pelvienne), les regrouper dans un paragraphe dédié AVANT la Conclusion, intitulé exactement « Constatations supplémentaires ». Ex. : « Constatations supplémentaires : présence d'un important comblement des cellules mastoïdiennes à gauche, compatible avec une mastoïdite non coalescente. Pas d'anomalie des orbites. »",
       "- Section 'Conclusion' : LISTE NUMÉROTÉE — un finding par numéro (1. / 2. / 3. ...). Le plus cliniquement important en premier. Si examen strictement normal : « 1. IRM [région] sans anomalie significative décelable. » Jamais de prose libre en Conclusion pour l'IRM.",
       "- TECHNIQUE IRM CHAMPEL (si applicable) : « Examen réalisé sur IRM ouverte Basda avec aimant permanent Nd-Fe-B, antenne [région], sans injection de GBCAs, avec séquences localizer, T1, T2 et T2 FS dans les plans usuels. »",
     ].join("\n");
@@ -313,8 +314,22 @@ export function modalityBlock(modality?: string): string {
     ].join("\n");
   if (m === "MG")
     return [
-      "MODALITÉ : MAMMOGRAPHIE. N'emploie pas le vocabulaire du scanner.",
-      "- Décris : densité mammaire, masses (forme, contours), microcalcifications, distorsions architecturales, asymétries. Terminologie ACR/BI-RADS si pertinent.",
+      "MODALITÉ : MAMMOGRAPHIE (± ÉCHOGRAPHIE MAMMAIRE COMBINÉE). Terminologie ACR/BI-RADS. Style radiologues genevois (Imagerive/Unilabs/Champel).",
+      "FORMAT — section 'Description' en PROSE CONTINUE (pas de puces) :",
+      "  1. DENSITÉ : catégorie ACR (a = essentiellement graisseux / b = densité fibroglandulaire modérée / c = hétérogène / d = extrêmement dense) + symétrie globale.",
+      "  2. MASSES / OPACITÉS : localisation (sein D ou G, cadran, rayon horloge, superficiel/profond), forme (arrondie/ovale/irrégulière), contours (circonscrits/obscurcis/microlobulés/indistincts/spiculés), taille si lisible, stabilité vs antérieur.",
+      "  3. MICROCALCIFICATIONS : présence/absence, morphologie (rondes bénignes / amorphes / pléomorphes / linéaires branchées suspectes), distribution (éparse / groupée / segmentaire).",
+      "  4. DISTORSIONS ARCHITECTURALES et ASYMÉTRIES : présence/absence, localisation.",
+      "  5. ÉCHOGRAPHIE (si réalisée sur le même examen) : « L'échographie est normale à droite » ou finding focal (taille, rayon horloge + profondeur, échostructure, vascularisation Doppler).",
+      "  6. ADÉNOPATHIES axillaires : mentionner explicitement.",
+      "  Formule NORMALE avec comparatif : « Les seins sont inchangés depuis [date], de densité modérée, globalement symétriques, sans surdensité suspecte apparue ni désorganisation architecturale. Pas de microcalcifications suspectes. L'échographie est normale à droite et à gauche. Pas d'image suspecte apparue. Pas d'adénopathie. »",
+      "  Formule NORMALE sans comparatif : « Seins de densité b, globalement symétriques. Pas de masse, de microcalcification suspecte ni de distorsion architecturale. »",
+      "  Formule avec FIBROADÉNOME stable : « Petite opacité fibroadénomateuse superficielle externe gauche stable. »",
+      "CONCLUSION : 1 phrase de synthèse directe, puis BI-RADS + densité sur la ligne suivante.",
+      "  Ex. normal : « Contrôle normal et stable depuis 2025 avec un petit fibroadénome dans le sein gauche. »",
+      "  Puis : « Densité b. BI-RADS 2 »",
+      "BI-RADS : 1 (normal), 2 (bénin), 3 (probablement bénin → suivi 6 mois), 4 (suspect → biopsie), 5 (très suspect → biopsie urgente), 6 (malin connu). TOUJOURS inclure dans la Conclusion.",
+      "DRAPEAU ROUGE : BI-RADS 4 ou 5 → signaler EN PREMIER dans la Conclusion avec recommandation de cytoponction/biopsie guidée.",
     ].join("\n");
   if (m === "PT" || m === "NM")
     return [

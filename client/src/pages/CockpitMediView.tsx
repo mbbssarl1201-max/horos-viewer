@@ -18,6 +18,8 @@ import {
   Calendar,
   ExternalLink,
   GripVertical,
+  Sparkles,
+  Zap,
 } from "lucide-react";
 import EvaVoiceMV from "@/components/EvaVoiceMV";
 
@@ -289,13 +291,15 @@ export default function CockpitMediView({
             <EvaVoiceMV onNavigation={naviguer} />
           </div>
           <div className="relative">
-            <div className="flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-violet-900 shadow-xl ring-2 ring-violet-400/30">
-              <span className="text-4xl font-bold text-white">E</span>
+            {/* Glow ring animé */}
+            <div className="absolute -inset-1 rounded-full bg-gradient-to-br from-violet-500/40 to-purple-800/20 blur-md" />
+            <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-violet-900 shadow-xl ring-2 ring-violet-400/30">
+              <span className="text-3xl font-bold text-white">E</span>
             </div>
-            <span className="absolute bottom-1 right-1 h-4 w-4 rounded-full bg-emerald-400 ring-2 ring-[#0d1520]" />
+            <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full bg-emerald-400 ring-2 ring-[#0d1520]" />
           </div>
           <div className="text-center">
-            <p className="text-[17px] font-semibold text-white">Eva</p>
+            <p className="text-base font-semibold text-white">Eva</p>
             <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-violet-400">
               Assistante Radiologique IA · cerveau 72B
             </span>
@@ -303,14 +307,14 @@ export default function CockpitMediView({
         </div>
 
         {/* Texte d'accueil */}
-        <div className="mx-3 mb-3 rounded-xl bg-slate-800/40 px-3 py-2.5 text-[12px] leading-relaxed text-slate-300">
+        <div className="mx-3 mb-3 rounded-xl border border-slate-700/40 bg-slate-800/40 px-3 py-2.5 text-[12px] leading-relaxed text-slate-300">
           Bonjour 👋 Je suis Eva. Dites-moi quoi faire — j&apos;ouvre les
           études, navigue dans MediView et réponds à vos questions
           radiologiques.
         </div>
 
         {/* Corps scrollable */}
-        <div className="flex flex-1 flex-col gap-4 overflow-x-hidden overflow-y-auto px-3 pb-3">
+        <div className="flex flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto px-3 pb-3">
           {/* À traiter */}
           {!etudesChargement && etudes.length > 0 && (
             <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2.5">
@@ -345,11 +349,14 @@ export default function CockpitMediView({
             </div>
           )}
 
-          {/* Suggestions */}
+          {/* Suggestions navigation */}
           <div>
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-              Suggestions
-            </p>
+            <div className="mb-2 flex items-center gap-1.5">
+              <Zap className="h-3 w-3 text-amber-500" />
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                Suggestions
+              </p>
+            </div>
             <div className="space-y-1.5">
               {RACCOURCIS.map(({ icon: Icon, label, route }) => (
                 <button
@@ -449,9 +456,9 @@ export default function CockpitMediView({
           {/* Chat Eva */}
           <div className="flex min-h-[180px] flex-1 flex-col">
             <div className="mb-2 flex items-center gap-1.5">
-              <MessageCircle className="h-3 w-3 text-violet-500" />
+              <Sparkles className="h-3 w-3 text-violet-500" />
               <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-                Demandez à Eva…
+                Conversation
               </p>
             </div>
 
@@ -480,7 +487,7 @@ export default function CockpitMediView({
                     >
                       <div
                         className={[
-                          "max-w-[88%] rounded-xl px-3 py-2 text-xs leading-relaxed",
+                          "max-w-[88%] rounded-xl px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap",
                           m.role === "user"
                             ? "bg-violet-600 text-white"
                             : "bg-slate-700 text-slate-200",

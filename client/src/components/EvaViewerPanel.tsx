@@ -1,6 +1,6 @@
 // client/src/components/EvaViewerPanel.tsx
-// Panneau Eva gauche dans le viewer DICOM — écran scindé premium.
-// Chat streamé + voix Vertex-UE. PHI-safe : aucune donnée patient transmise.
+// Panneau Eva gauche dans le viewer DICOM — visage animé + Selenium noVNC + chat.
+// PHI-safe : aucune donnée patient transmise via Eva ou noVNC.
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   X,
@@ -9,8 +9,10 @@ import {
   Loader2,
   MessageCircle,
   Sparkles,
-  Brain,
   Zap,
+  MonitorPlay,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import EvaVoiceMV from "./EvaVoiceMV";
 
@@ -27,8 +29,8 @@ interface Props {
   onWidthChange: (w: number) => void;
 }
 
-const MIN_W = 260;
-const MAX_W = 520;
+const MIN_W = 280;
+const MAX_W = 560;
 
 const SUGGESTIONS_BY_MODALITY: Record<string, string[]> = {
   CT: [
@@ -78,6 +80,119 @@ async function streamChat(
   }
 }
 
+// Visage animé Eva
+function EvaFace({ speaking }: { speaking: boolean }) {
+  return (
+    <div className="relative flex items-center justify-center">
+      {/* Anneaux de glow */}
+      <div
+        className={`absolute inset-0 rounded-full transition-all duration-700 ${
+          speaking
+            ? "scale-110 bg-violet-500/20 shadow-[0_0_30px_10px_rgba(139,92,246,0.35)]"
+            : "scale-100 bg-violet-500/10 shadow-[0_0_15px_4px_rgba(139,92,246,0.15)]"
+        }`}
+      />
+      <div
+        className={`absolute inset-[-4px] rounded-full border transition-all duration-500 ${
+          speaking
+            ? "border-violet-400/50 shadow-[0_0_20px_rgba(139,92,246,0.5)]"
+            : "border-violet-600/20"
+        }`}
+      />
+      {/* Cercle principal */}
+      <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 via-violet-700 to-purple-900 shadow-xl">
+        {/* Visage SVG */}
+        <svg viewBox="0 0 80 80" className="h-16 w-16" fill="none">
+          {/* Reflet haut */}
+          <ellipse
+            cx="30"
+            cy="22"
+            rx="14"
+            ry="7"
+            fill="white"
+            fillOpacity="0.08"
+            transform="rotate(-20 30 22)"
+          />
+          {/* Yeux */}
+          <ellipse
+            cx="28"
+            cy="33"
+            rx="4"
+            ry={speaking ? "3.5" : "4"}
+            fill="white"
+            fillOpacity="0.9"
+            className="transition-all duration-200"
+          />
+          <ellipse
+            cx="52"
+            cy="33"
+            rx="4"
+            ry={speaking ? "3.5" : "4"}
+            fill="white"
+            fillOpacity="0.9"
+            className="transition-all duration-200"
+          />
+          {/* Pupilles */}
+          <circle cx="29" cy="34" r="2" fill="#1e1b4b" />
+          <circle cx="53" cy="34" r="2" fill="#1e1b4b" />
+          {/* Reflets pupilles */}
+          <circle cx="30" cy="33" r="0.8" fill="white" fillOpacity="0.8" />
+          <circle cx="54" cy="33" r="0.8" fill="white" fillOpacity="0.8" />
+          {/* Bouche */}
+          {speaking ? (
+            // Bouche ouverte animation parole
+            <ellipse
+              cx="40"
+              cy="52"
+              rx="8"
+              ry={4}
+              fill="white"
+              fillOpacity="0.85"
+            />
+          ) : (
+            // Sourire
+            <path
+              d="M31 50 Q40 58 49 50"
+              stroke="white"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeOpacity="0.85"
+            />
+          )}
+          {/* Dents si parle */}
+          {speaking && (
+            <ellipse
+              cx="40"
+              cy="51"
+              rx="5"
+              ry="2.5"
+              fill="white"
+              fillOpacity="0.95"
+            />
+          )}
+        </svg>
+        {/* Point vert statut */}
+        <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full bg-emerald-400 ring-2 ring-[#0d1520]" />
+      </div>
+      {/* Barres audio si parle */}
+      {speaking && (
+        <div className="absolute -bottom-5 flex items-end gap-0.5 h-4">
+          {[3, 5, 7, 4, 6, 8, 5, 3].map((h, i) => (
+            <div
+              key={i}
+              className="w-1 rounded-full bg-violet-400"
+              style={{
+                height: `${h * 2}px`,
+                animation: `pulse ${0.4 + i * 0.07}s ease-in-out infinite alternate`,
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function EvaViewerPanel({
   onClose,
   studyDescription,
@@ -88,6 +203,7 @@ export default function EvaViewerPanel({
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [vncOpen, setVncOpen] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const dragStart = useRef(0);
@@ -180,9 +296,9 @@ export default function EvaViewerPanel({
       className="relative flex flex-col bg-[#0d1520] shadow-2xl shrink-0"
       style={{ width }}
     >
-      {/* ─── HEADER avatar ─────────────────────────────────────── */}
-      <div className="relative flex flex-col items-center gap-2 px-4 pb-4 pt-6">
-        {/* Bouton voix + fermer */}
+      {/* ─── HEADER ──────────────────────────────────────────────── */}
+      <div className="relative flex flex-col items-center gap-1 px-4 pb-3 pt-6">
+        {/* Voix + fermer */}
         <div className="absolute right-3 top-3 flex items-center gap-1.5">
           <EvaVoiceMV />
           <button
@@ -194,18 +310,11 @@ export default function EvaViewerPanel({
           </button>
         </div>
 
-        {/* Avatar */}
-        <div className="relative">
-          {/* Glow ring animé */}
-          <div className="absolute -inset-1 rounded-full bg-gradient-to-br from-violet-500/40 to-purple-800/20 blur-md" />
-          <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-violet-900 shadow-xl ring-2 ring-violet-400/30">
-            <span className="text-3xl font-bold text-white">E</span>
-          </div>
-          <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full bg-emerald-400 ring-2 ring-[#0d1520]" />
-        </div>
+        {/* Visage animé */}
+        <EvaFace speaking={loading} />
 
         {/* Nom */}
-        <div className="text-center">
+        <div className="mt-5 text-center">
           <p className="text-base font-semibold text-white">Eva</p>
           <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-violet-400">
             Assistante Radiologique IA · cerveau 72B
@@ -213,50 +322,70 @@ export default function EvaViewerPanel({
         </div>
       </div>
 
-      {/* ─── Carte étude courante ───────────────────────────────── */}
+      {/* ─── Carte étude ─────────────────────────────────────────── */}
       {(studyDescription || modality) && (
-        <div className="mx-3 mb-3 rounded-xl border border-violet-500/20 bg-violet-500/10 px-3 py-2">
-          <div className="mb-0.5 flex items-center gap-1.5">
-            <Brain className="h-3 w-3 text-violet-300" />
-            <span className="text-[10px] font-semibold text-violet-300">
-              Examen en cours
-            </span>
+        <div className="mx-3 mb-2 rounded-xl border border-violet-500/20 bg-violet-500/10 px-3 py-2">
+          <div className="flex items-center gap-1.5">
+            {modality && (
+              <span className="inline-flex items-center rounded border border-violet-500/30 bg-violet-500/20 px-1.5 py-0 text-[9px] font-bold text-violet-300">
+                {modality}
+              </span>
+            )}
+            {studyDescription && (
+              <span className="text-[11px] text-slate-300 truncate">
+                {studyDescription}
+              </span>
+            )}
           </div>
-          {modality && (
-            <span className="mr-1.5 inline-flex items-center rounded border border-violet-500/30 bg-violet-500/20 px-1.5 py-0 text-[9px] font-bold text-violet-300">
-              {modality}
-            </span>
-          )}
-          {studyDescription && (
-            <span className="text-[11px] text-slate-300">
-              {studyDescription}
-            </span>
-          )}
         </div>
       )}
 
-      {/* ─── Zone scrollable ────────────────────────────────────── */}
+      {/* ─── Selenium noVNC (collapsible) ────────────────────────── */}
+      <div className="mx-3 mb-2 overflow-hidden rounded-xl border border-slate-700/60">
+        <button
+          onClick={() => setVncOpen(o => !o)}
+          className="flex w-full items-center gap-2 bg-slate-800/60 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-slate-400 transition hover:bg-slate-700/60 hover:text-slate-200"
+        >
+          <MonitorPlay className="h-3 w-3 text-emerald-400" />
+          <span className="flex-1">Vue Selenium live</span>
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          {vncOpen ? (
+            <ChevronUp className="h-3 w-3" />
+          ) : (
+            <ChevronDown className="h-3 w-3" />
+          )}
+        </button>
+        {vncOpen && (
+          <div className="relative bg-black" style={{ height: 220 }}>
+            <iframe
+              src="/api/cockpit/viewer"
+              className="absolute inset-0 h-full w-full border-0"
+              title="Eva Selenium live"
+              sandbox="allow-same-origin allow-scripts allow-forms"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* ─── Zone scrollable ──────────────────────────────────────── */}
       <div className="flex flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto px-3 pb-3">
         {/* Chat */}
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="mb-2 flex items-center gap-1.5">
-            <MessageCircle className="h-3 w-3 text-violet-500" />
+            <Sparkles className="h-3 w-3 text-violet-500" />
             <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
               Conversation
             </p>
           </div>
 
-          <div className="flex-1 overflow-y-auto rounded-xl border border-slate-700/60 bg-slate-800/40 p-2 min-h-[160px]">
+          <div className="flex-1 overflow-y-auto rounded-xl border border-slate-700/60 bg-slate-800/40 p-2 min-h-[140px]">
             {messages.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center gap-4 py-4">
-                <div className="flex flex-col items-center gap-1 text-center">
-                  <Sparkles className="h-6 w-6 text-violet-400/60" />
-                  <p className="text-[11px] text-slate-500">
-                    Bonjour 👋 Je suis Eva.
-                    <br />
-                    Posez-moi une question sur cet examen.
-                  </p>
-                </div>
+              <div className="flex h-full flex-col items-center justify-center gap-4 py-3">
+                <p className="text-center text-[11px] text-slate-500 leading-relaxed">
+                  Posez-moi une question
+                  <br />
+                  sur cet examen.
+                </p>
                 <div className="flex flex-wrap justify-center gap-1.5">
                   {suggestions.map(s => (
                     <button
@@ -299,7 +428,6 @@ export default function EvaViewerPanel({
             )}
           </div>
 
-          {/* Suggestions rapides post-chat */}
           {messages.length > 0 && !loading && (
             <div className="mt-1.5 flex gap-1 overflow-x-auto pb-0.5">
               {suggestions.map(s => (
@@ -314,7 +442,6 @@ export default function EvaViewerPanel({
             </div>
           )}
 
-          {/* Input */}
           <form onSubmit={submit} className="mt-1.5 flex gap-1.5">
             <input
               type="text"
@@ -338,7 +465,7 @@ export default function EvaViewerPanel({
           </form>
         </div>
 
-        {/* Raccourcis radiologiques */}
+        {/* Actions rapides */}
         <div>
           <div className="mb-2 flex items-center gap-1.5">
             <Zap className="h-3 w-3 text-amber-500" />
@@ -380,7 +507,6 @@ export default function EvaViewerPanel({
       <div
         onMouseDown={startDrag}
         className="group absolute right-0 top-0 bottom-0 z-10 w-1 cursor-col-resize bg-slate-800 hover:bg-violet-600/60 active:bg-violet-600"
-        title="Redimensionner"
       >
         <div className="absolute inset-y-0 -left-1.5 -right-1.5 flex items-center justify-center">
           <GripVertical className="h-4 w-4 text-slate-600 opacity-0 transition group-hover:opacity-100" />

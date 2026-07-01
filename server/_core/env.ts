@@ -36,6 +36,17 @@ export const ENV = {
   ollamaVisionModel: process.env.OLLAMA_VISION_MODEL ?? "qwen2.5vl:7b",
   // 2e modèle vision pour la « double lecture » (avis indépendant anomalie oui/non).
   ollamaVisionModel2: process.env.OLLAMA_VISION_MODEL2 ?? "qwen2.5vl:3b",
+  // Provider VISION : "ollama" (local A100, défaut) | "infomaniak" (VLM managé CH,
+  // ex. gemma-4-31B / Mistral-Small-119B). DORMANT tant que VISION_PROVIDER≠infomaniak
+  // ET INFOMANIAK_VISION_KEY absent → aucun changement de comportement.
+  // ⚠️ Basculer sur Infomaniak = envoyer les images patient à un sous-traitant CH
+  // (dé-identifier avant + mettre à jour l'AIPD).
+  visionProvider: (process.env.VISION_PROVIDER ?? "ollama").toLowerCase(),
+  infomaniakVisionUrl:
+    process.env.INFOMANIAK_VISION_URL ?? process.env.INFOMANIAK_BASE_URL ?? "",
+  infomaniakVisionKey: process.env.INFOMANIAK_VISION_KEY ?? "",
+  infomaniakVisionModel:
+    process.env.INFOMANIAK_VISION_MODEL ?? "google/gemma-4-31B-it",
   // Plan de contrôle du GPU vision (sidecar gpu-control) : pilote la mise en
   // veille (shelve) / réveil (unshelve) de l'instance GPU pour ne payer qu'à
   // l'usage. Vide = fonctionnalité désactivée (le GPU est supposé toujours là).

@@ -10,6 +10,81 @@ import {
 } from "../db";
 
 /**
+ * Appel VLM unifié : Infomaniak (VLM managé CH, format OpenAI image_url) si
+ * `VISION_PROVIDER=infomaniak` + clé configurée, SINON Ollama local (A100, format
+ * natif `images:[]`) — comportement historique par défaut. Renvoie le texte, lève
+ * en cas d'échec HTTP (les appelants gèrent déjà try/catch → null, ou remontent).
+ */
+async function chatVision(p: {
+  system: string;
+  userText: string;
+  images: string[]; // PNG base64 (sans préfixe data:)
+  numCtx?: number;
+  numPredict?: number;
+  temperature?: number;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const useInfomaniak =
+    ENV.visionProvider === "infomaniak" &&
+    !!ENV.infomaniakVisionKey &&
+    !!ENV.infomaniakVisionUrl;
+
+  if (useInfomaniak) {
+    const content = [
+      { type: "text", text: p.userText },
+      ...p.images.map(b => ({
+        type: "image_url",
+        image_url: { url: `data:image/png;base64,${b}` },
+      })),
+    ];
+    const resp = await fetch(ENV.infomaniakVisionUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${ENV.infomaniakVisionKey}`,
+      },
+      signal: p.signal,
+      body: JSON.stringify({
+        model: ENV.infomaniakVisionModel,
+        max_tokens: p.numPredict ?? 1024,
+        temperature: p.temperature ?? 0,
+        messages: [
+          { role: "system", content: p.system },
+          { role: "user", content },
+        ],
+      }),
+    });
+    if (!resp.ok) throw new Error(`Infomaniak vision HTTP ${resp.status}`);
+    const data: any = await resp.json();
+    return (data?.choices?.[0]?.message?.content ?? "").trim();
+  }
+
+  // Défaut historique : Ollama local (A100), format natif images[].
+  const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal: p.signal,
+    body: JSON.stringify({
+      model: ENV.ollamaVisionModel,
+      stream: false,
+      keep_alive: -1,
+      options: {
+        num_ctx: p.numCtx ?? 8192,
+        num_predict: p.numPredict ?? 1024,
+        temperature: p.temperature ?? 0,
+      },
+      messages: [
+        { role: "system", content: p.system },
+        { role: "user", content: p.userText, images: p.images },
+      ],
+    }),
+  });
+  if (!resp.ok) throw new Error(`Ollama HTTP ${resp.status}`);
+  const data: any = await resp.json();
+  return (data?.message?.content ?? "").trim();
+}
+
+/**
  * Réduit une image PNG (base64) à `maxDim` px sur son plus grand côté, par
  * sous-échantillonnage au plus proche voisin (pur JS, pas de dépendance native).
  * Indispensable AVANT l'envoi au VLM : sur CPU, une grande image vision coûte
@@ -184,7 +259,7 @@ const PROMPT_HEADER = [
   "10. DRAPEAUX ROUGES — findings qui DOIVENT TOUJOURS figurer en tête de la Conclusion, même si le reste de l'examen est rassurant : MASSE TISSULAIRE suspecte (contours irréguliers, envahissement, adénopathies), DESTRUCTION OSSEUSE AGRESSIVE, COMPRESSION MÉDULLAIRE ou DE LA QUEUE DE CHEVAL, STÉNOSE ARTÉRIELLE SERRÉE (≥ 70 %), DISSECTION ARTÉRIELLE, OCCLUSION ARTÉRIELLE AIGUË, HÉMORRAGIE INTRACRÂNIENNE, EMBOLIE PULMONAIRE, PNEUMOTHORAX COMPRESSIF, ÉPANCHEMENT PÉRICARDIQUE/TAMPONNADE. Ne minimise JAMAIS un drapeau rouge — le signaler clairement en Conclusion même en cas de doute.",
   "",
   "Style de rédaction (compte rendu radiologique — Institut Médical de Champel) :",
-  "- TERMINOLOGIE radiologique standard et précise. PAS de remplissage, PAS de phrases d'introduction, PAS de formules de prudence répétées (« à corréler à la clinique » : au plus UNE fois en Conclusion).",
+  "- Style CONCIS et précis. TERMINOLOGIE radiologique standard. PAS de remplissage, PAS de phrases d'introduction, PAS de formules de prudence répétées (« à corréler à la clinique » : au plus UNE fois en Conclusion).",
   "- LE FORMAT DÉPEND DE LA MODALITÉ ET DE LA RÉGION (voir instructions spécifiques à la modalité ci-dessous) :",
   "  • IRM (Dr Eva Son) : section nommée 'Description' (prose libre, groupée par région) + Conclusion en LISTE NUMÉROTÉE (1. / 2. / 3. ...).",
   "  • SCANNER standard (Dr Eva Son) : section nommée 'Description' + paragraphes « Au niveau [région]... » + Conclusion : 1 phrase si normal, sinon 1 phrase EN GRAS par finding.",
@@ -213,7 +288,7 @@ const PROMPT_FOOTER = [
   "<description FACTUELLE et brève de l'acquisition d'après la modalité. N'invente NI produit de contraste, NI paramètres s'ils ne sont pas fournis.>",
   "",
   "Résultats: (IRM uniquement : nomme cette section « Description: » — voir instructions modalité)",
-  "<format selon la modalité et la région : prose groupée par région pour IRM (section nommée Description) ; régions en MAJUSCULES pour CT (RACHIS LOMBAIRE : [...]) ; label:description pour écho abdominale ; puces grasses pour écho sein/thyroïde ; structure:description pour musculo. Ordre anatomique logique. Structures normales décrites explicitement.>",
+  "<format selon la modalité et la région — structure PAR ORGANE/région : prose groupée par région pour IRM (section nommée Description) ; régions en MAJUSCULES pour CT (RACHIS LOMBAIRE : [...]) ; label:description pour écho abdominale ; puces grasses pour écho sein/thyroïde ; structure:description pour musculo. Ordre anatomique logique. Structures normales décrites explicitement.>",
   "",
   "Conclusion:",
   "<IRM/Scanner : liste numérotée 1./2./3. — un finding par point. Échographie : 1 à 2 phrases directes.>",
@@ -650,28 +725,15 @@ export async function extractBurnedInText(
         .join("\n")
         .trim();
     } else {
-      const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      txt = await chatVision({
+        system: OCR_SYSTEM,
+        userText: "Transcris le texte/les mesures affichés.",
+        images: picks,
+        numCtx: 8192,
+        numPredict: 250,
+        temperature: 0,
         signal: controller.signal,
-        body: JSON.stringify({
-          model: ENV.ollamaVisionModel,
-          stream: false,
-          keep_alive: -1,
-          options: { num_ctx: 8192, num_predict: 250, temperature: 0 },
-          messages: [
-            { role: "system", content: OCR_SYSTEM },
-            {
-              role: "user",
-              content: "Transcris le texte/les mesures affichés.",
-              images: picks,
-            },
-          ],
-        }),
       });
-      if (!resp.ok) return null;
-      const data = await resp.json();
-      txt = (data?.message?.content ?? "").trim();
     }
     if (!txt || /^aucun\.?$/i.test(txt)) return null;
     return txt;
@@ -801,24 +863,15 @@ async function focusedVisionRead(
         .trim();
       return t || null;
     }
-    const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    const t = await chatVision({
+      system,
+      userText,
+      images: imagesB64,
+      numCtx: 8192,
+      numPredict: maxTokens,
+      temperature: 0.1,
       signal: controller.signal,
-      body: JSON.stringify({
-        model: ENV.ollamaVisionModel,
-        stream: false,
-        keep_alive: -1,
-        options: { num_ctx: 8192, num_predict: maxTokens, temperature: 0.1 },
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: userText, images: imagesB64 },
-        ],
-      }),
     });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    const t = (data?.message?.content ?? "").trim();
     return t || null;
   } catch {
     return null;
@@ -877,50 +930,30 @@ async function generateViaOllama(
   numCtx: number,
   system: string
 ): Promise<PreanalysisResult> {
-  const model = ENV.ollamaVisionModel;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 240_000);
   let content = "";
   try {
-    const resp = await fetch(`${ENV.ollamaVisionUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    content = await chatVision({
+      system,
+      userText,
+      images,
+      numCtx,
+      numPredict: 1024,
       signal: controller.signal,
-      body: JSON.stringify({
-        model,
-        stream: false,
-        // GPU dédié : on garde le modèle chargé en VRAM (évite le warm-up ~67 s
-        // au premier compte rendu). -1 = pas de déchargement.
-        keep_alive: -1,
-        // 512 tokens tronquaient les CR multi-séries (Conclusion/Anomalie/
-        // Coupe-clé coupées en fin de sortie → parsing incomplet, brouillon
-        // amputé). 1024 couvre un CR structuré complet ; le GPU L4 l'encaisse
-        // sans surcoût de latence notable.
-        options: { num_ctx: numCtx, num_predict: 1024 },
-        messages: [
-          { role: "system", content: system },
-          {
-            role: "user",
-            content: userText,
-            images,
-          },
-        ],
-      }),
     });
-    if (!resp.ok) {
-      const txt = await resp.text().catch(() => "");
-      throw new Error(`Ollama HTTP ${resp.status}: ${txt.slice(0, 200)}`);
-    }
-    const data = await resp.json();
-    content = data?.message?.content ?? "";
   } finally {
     clearTimeout(timeout);
   }
+  const useInfomaniak =
+    ENV.visionProvider === "infomaniak" &&
+    !!ENV.infomaniakVisionKey &&
+    !!ENV.infomaniakVisionUrl;
   return {
     ...parseSections(content),
     ...parseKeySlice(content),
     evolution: parseEvolution(content).evolution,
-    model: ENV.ollamaVisionModel,
+    model: useInfomaniak ? ENV.infomaniakVisionModel : ENV.ollamaVisionModel,
   };
 }
 

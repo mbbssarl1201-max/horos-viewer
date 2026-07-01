@@ -652,8 +652,12 @@ async function startServer() {
   // Redirige vers le viewer après validation du token. Pas de PHI dans l'URL.
   app.get("/r/:token", async (req, res) => {
     try {
-      const { resolveShareToken } = await import("../report/reportShareToken");
-      const payload = await resolveShareToken(req.params.token as string);
+      // GET = validation LECTURE SEULE (peek), jamais de consommation : sinon les
+      // scanners de liens email (Outlook SafeLinks & co) brûlent le token avant le
+      // clic humain (F2). L'« usage unique » (consumeShareToken) sera déclenché à
+      // l'octroi réel de l'accès, après le challenge OTP du destinataire (F1).
+      const { peekShareToken } = await import("../report/reportShareToken");
+      const payload = await peekShareToken(req.params.token as string);
       if (!payload) {
         res.status(410).send("Lien expiré ou déjà utilisé.");
         return;

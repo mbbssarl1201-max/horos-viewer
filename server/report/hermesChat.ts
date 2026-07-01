@@ -119,11 +119,13 @@ export async function chatViaOllama(messages: ChatMsg[]): Promise<string> {
 async function chatViaClaude(messages: ChatMsg[]): Promise<string> {
   const Anthropic = (await import("@anthropic-ai/sdk")).default;
   const client = new Anthropic({ apiKey: ENV.anthropicApiKey });
+  const { anthropicCreate } = await import("./anthropicClient");
   const system = messages.find(m => m.role === "system")?.content ?? "";
   const conv = messages
     .filter(m => m.role === "user" || m.role === "assistant")
     .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
-  const resp = await client.messages.create(
+  const resp = await anthropicCreate(
+    client,
     {
       model: ENV.anthropicModel,
       max_tokens: 1200,

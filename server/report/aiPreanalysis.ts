@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { PNG } from "pngjs";
 import { ENV } from "../_core/env";
+import { anthropicMessagesFetch } from "./anthropicClient";
 import {
   getStudyById,
   listSeriesByStudy,
@@ -741,23 +742,17 @@ export async function extractBurnedInText(
         type: "text",
         text: "Transcris le texte incrusté et signale tout curseur de mesure (croix +, pointillés), par organe.",
       });
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": ENV.anthropicApiKey,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
+      const data = await anthropicMessagesFetch(
+        {
           model: ENV.anthropicModel,
           max_tokens: 400,
           system: OCR_SYSTEM,
           messages: [{ role: "user", content }],
-        }),
-      });
-      if (!resp.ok) return null;
-      const data = await resp.json();
+        },
+        controller.signal,
+        ENV.anthropicApiKey
+      );
+      if (!data) return null;
       txt = (Array.isArray(data?.content) ? data.content : [])
         .filter((b: any) => b.type === "text")
         .map((b: any) => b.text)
@@ -908,23 +903,17 @@ async function focusedVisionRead(
         source: { type: "base64", media_type: "image/png", data: b64 },
       }));
       content.push({ type: "text", text: userText });
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": ENV.anthropicApiKey,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
+      const data = await anthropicMessagesFetch(
+        {
           model: ENV.anthropicModel,
           max_tokens: maxTokens,
           system,
           messages: [{ role: "user", content }],
-        }),
-      });
-      if (!resp.ok) return null;
-      const data = await resp.json();
+        },
+        controller.signal,
+        ENV.anthropicApiKey
+      );
+      if (!data) return null;
       const t = (Array.isArray(data?.content) ? data.content : [])
         .filter((b: any) => b.type === "text")
         .map((b: any) => b.text)
@@ -1034,6 +1023,7 @@ async function generateViaClaude(
 ): Promise<PreanalysisResult> {
   const Anthropic = (await import("@anthropic-ai/sdk")).default;
   const client = new Anthropic({ apiKey: ENV.anthropicApiKey });
+  const { anthropicCreate } = await import("./anthropicClient");
   // On étiquette CHAQUE image (bloc texte juste avant l'image) pour que le
   // modèle puisse désigner la coupe-clé et l'examen d'appartenance sans ambiguïté.
   const content: any[] = [];
@@ -1051,7 +1041,8 @@ async function generateViaClaude(
   // Timeout explicite (audit I-claude-timeout) : sans borne, une requête Claude
   // (thinking adaptatif + jusqu'à 16 images) peut pendre et bloquer la requête
   // tRPC. Aligné sur le timeout de 180 s de la branche Ollama.
-  const resp = await client.messages.create(
+  const resp = await anthropicCreate(
+    client,
     {
       model: ENV.anthropicModel,
       max_tokens: 2000,

@@ -16,16 +16,11 @@ import { createCipheriv } from "crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { sdk } from "./_core/sdk";
 
-const PAGES_AUTORISEES = new Set(["/", "/admin/knowledge", "/knowledge"]);
-
 function pageAutorisee(page: string): boolean {
   if (!page || !page.startsWith("/")) return false;
   const clean = page.split("?")[0]!.split("#")[0]!;
-  return (
-    PAGES_AUTORISEES.has(clean) ||
-    /^\/viewer\/\d+$/.test(clean) ||
-    /^\/viewer$/.test(clean)
-  );
+  // Toutes les routes internes MediView sont autorisées (Selenium reste sur notre propre app)
+  return /^\/[a-zA-Z0-9/_-]*$/.test(clean);
 }
 
 // Le HTML noVNC se connecte au proxy WS du même serveur (/api/cockpit/vnc-ws).
@@ -348,9 +343,8 @@ export function attacherVncProxy(server: Server): void {
   const vncPassword = process.env.EVA_VNC_PASSWORD ?? "";
   if (!rawLiveUrl || !vncPassword) return;
 
-  // Le serveur VPS 76 ne répond qu'en TLS — utiliser wss:// pour l'upstream.
-  const internalWsUrl =
-    rawLiveUrl.replace(/^https?:\/\//, "wss://") + "/websockify";
+  // novnc_proxy (Selenium) expose websockify à la racine, pas à /websockify
+  const internalWsUrl = rawLiveUrl.replace(/^https?:\/\//, "wss://") + "/";
 
   const wss = new WebSocketServer({ noServer: true });
 
@@ -562,6 +556,49 @@ export function registerCockpitRoutes(app: Express): void {
     }
   );
 
+  // ── ACTIONS SELENIUM ─────────────────────────────────────────────────────
+  // Proxy vers eva-capture-mediview : cliquer / taper / defiler.
+  // Le corps est transmis tel quel après validation du type d'action.
+  const ACTIONS_AUTORISEES = new Set(["cliquer", "taper", "defiler"]);
+
+  app.post(
+    "/api/cockpit/action",
+    requireAuth,
+    async (req: Request, res: Response): Promise<void> => {
+      if (!captureUrl || !captureSecret) {
+        res
+          .status(503)
+          .json({ ok: false, message: "Service capture non configuré." });
+        return;
+      }
+      const body = req.body as Record<string, unknown>;
+      const type = typeof body.type === "string" ? body.type : "";
+      if (!ACTIONS_AUTORISEES.has(type)) {
+        res
+          .status(400)
+          .json({ ok: false, message: "Type action non autorisé." });
+        return;
+      }
+      try {
+        const r = await fetch(`${captureUrl}/${type}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${captureSecret}`,
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(15_000),
+        });
+        const j = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+        res.status(r.ok ? 200 : 502).json(j);
+      } catch {
+        res
+          .status(502)
+          .json({ ok: false, message: "Service capture injoignable." });
+      }
+    }
+  );
+
   // ── ÉTUDES RÉCENTES (PHI-safe : sans nom patient) ────────────────────────
   // Utilisé par le chat Eva (contexte) et le tool vocal chercherEtudes.
   app.get(
@@ -591,16 +628,73 @@ export function registerCockpitRoutes(app: Express): void {
   );
 
   // ── COCKPIT CHAT Eva (SSE, Ollama local) ─────────────────────────────────
-  // Navigation-focused: Eva répond et peut inclure NAV:/route en fin de message
-  // pour déclencher la navigation Selenium côté client. PHI-free.
-  const SYSTEM_COCKPIT_BASE =
-    "Tu es Eva, assistante IA du cockpit MediView (visionneuse radiologique DICOM). " +
-    "Tu parles français, brièvement et précisément. " +
-    "Tu aides le radiologue à naviguer dans l'interface et à trouver des infos en base de connaissances. " +
-    "Pages disponibles : worklist (/), viewer DICOM (/viewer/<studyId>), base de connaissances (/admin/knowledge), recherche (/knowledge). " +
-    "Si tu dois naviguer vers une page, ajoute EXACTEMENT à la toute fin de ta réponse : NAV:/route " +
-    "Exemple : 'J'ouvre la worklist. NAV:/' " +
-    "Ne mentionne jamais de données patient (PHI) dans tes réponses.";
+  const SYSTEM_COCKPIT_BASE = `Tu es Eva, radiologue IA senior intégrée dans MediView. Tu as une formation équivalente à un radiologue diplômé avec 10 ans d'expérience en imagerie diagnostique. Tu parles UNIQUEMENT en français, de façon concise et précise comme un médecin.
+
+## TON EXPERTISE RADIOLOGIQUE
+
+### Modalités et protocoles
+- **TDM/CT** : fenêtrage HU (parenchyme pulmonaire −600/1600, médiastin 40/400, os 700/2000, cérébral 35/80, abdominal 60/350, foie 80/160), injection iodée phases : artérielle (25–35 s), portale (65–75 s), tardive (3–5 min). Scores coronariens (Agatston). CTDI, DLP.
+- **IRM** : séquences T1 (graisse brillante, sang récent brillant), T2 (eau brillante, lésions brillantes), FLAIR (LCR supprimé), DWI/ADC (restriction eau = cellularité élevée), T1 Gado (rehaussement = rupture BHE ou hypervascularisation), spectro, perfusion, DTI.
+- **Radiographie** : silhouette cardiaque (ICT normal <0,5), index de vascularisation pulmonaire, signe de la silhouette, infiltrats, épanchements.
+- **Échographie** : anéchogène (liquide), hypoéchogène, hyperéchogène, artefacts (renforcement postérieur = liquide, cône d'ombre = calcification, réverbération).
+- **Mammographie** : densité ACR (A/B/C/D), catégories BI-RADS 0–6, microcalcifications (morphologie, distribution), masses (forme, marges, densité).
+- **Médecine nucléaire/PET** : SUVmax, captation pathologique, SUV>2,5 suspect, artefacts d'atténuation.
+
+### Sémiologie et valeurs de référence
+- Aorte : racine <3,7 cm, aorte descendante <2,5 cm. Anévrisme si >5 cm.
+- Cardiomégalie : ICT >0,5 sur radio face.
+- Nodule pulmonaire : Fleischner Society 2017 (solide <6 mm = pas de suivi si faible risque, 6–8 mm = TDM 6–12 mois, >8 mm = PET/biopsie). LungRADS.
+- Foie : lobes D/G, veines sus-hépatiques, VBP <7 mm, HTP (splénomégalie, circulation collatérale, ascite). LI-RADS.
+- Rein : cortex 15–18 mm, index cortico-médullaire, kyste simple Bosniak I/II/IIF/III/IV.
+- Prostate : volume, zones (centrale/périphérique/transition), PI-RADS v2.1 (1–5).
+- Thyroïde : EU-TIRADS 1–5, volume, vascularisation Doppler.
+- Rachis : spondylolisthésis (grades Meyerding), hernies discales (protrusion/extrusion/séquestration), sténoses foraminales/canalaires.
+- Cerveau : œdème vasogénique (T2 blanc, DWI libre), AVC ischémique (DWI restreint, ADC bas), hémorragie (hyperdensité CT aigu, T1 brillant subaigu).
+
+### Diagnostics différentiels par pattern
+- Opacité alvéolaire bilatérale : OAP, pneumonie, hémorragie, SDRA.
+- Masse hépatique solitaire : HCC, métastase, hémangiome, CHC, adénome, FNH.
+- Lésion kystique ovarienne : kyste fonctionnel, endométriome, cystadénome, tératome mature, cancer.
+- Adénopathie médiastinale : lymphome, sarcoïdose, métastases, tuberculose.
+- Masse rénale solide : CCR (clear cell/papillaire/chromophobe), angiomyolipome, oncocytome, métastase.
+
+### Systèmes de scoring (mémoriser les seuils)
+- BI-RADS : 0 incomplet, 1 normal, 2 bénin, 3 probablement bénin (<2%), 4A faible suspicion (2–10%), 4B intermédiaire (10–50%), 4C haute suspicion (50–95%), 5 malin (>95%), 6 prouvé.
+- PI-RADS : 1–2 pas de cancer significatif, 3 équivoque, 4–5 suspect (cancer significatif probable/très probable).
+- LI-RADS : LR-1 définitivement bénin, LR-2 probablement bénin, LR-3 intermédiaire, LR-4 probablement HCC, LR-5 définitivement HCC, LR-M suspect malin non HCC, LR-TIV thrombose tumorale.
+- ASPECT score (AVC) : 0–10 (≤7 = infarctus étendu, mauvais pronostic thrombolyse).
+- Fleischner solide : <6 mm → pas de suivi (risque faible) ; 6–8 mm → 6–12 mois ; >8 mm → 3 mois ou PET ou biopsie.
+
+## PILOTAGE DE L'APPLICATION
+
+### Pages
+/ → Worklist principale
+/viewer/<id> → Viewer DICOM (id = entier)
+/admin/knowledge → Base de connaissances
+/knowledge → Recherche KB
+
+### Albums (clés exactes)
+database → tout
+recent_hour → Just Acquired
+added_hour → Just Added
+opened → Just Opened
+
+### Commandes (en fin de réponse, une par ligne)
+NAV:/route → naviguer vers une page
+CMD:album:clé → sélectionner album
+CMD:search:termes → rechercher dans la worklist
+CMD:generer-cr:<studyId> → générer un compte rendu IA pour l'étude (studyId = entier)
+CMD:envoyer-rapport:<studyId>:<email> → envoyer le CR IA de l'étude par email
+
+### Exemples
+"J'ouvre la worklist." → NAV:/
+"Je filtre CT du jour." → CMD:album:recent_hour
+"Recherche IRM genou." → CMD:search:IRM genou
+"J'ouvre l'étude 42." → NAV:/viewer/42
+"Je génère le CR de l'étude 7." → CMD:generer-cr:7
+"J'envoie le rapport de l'étude 7 à dr.martin@hopital.ch" → CMD:envoyer-rapport:7:dr.martin@hopital.ch
+
+PHI INTERDIT : jamais de nom/prénom/DDN patient.`;
 
   app.post(
     "/api/cockpit/chat/stream",
@@ -654,22 +748,215 @@ export function registerCockpitRoutes(app: Express): void {
       req.on("close", () => abortCtrl.abort());
 
       try {
-        const { streamOllamaChat } = await import("./knowledge/stream");
-        const full = await streamOllamaChat(
-          messages,
-          (delta: string) => send({ t: delta }),
-          abortCtrl.signal
-        );
-        const navMatch = full.match(/NAV:(\/[^\s]*)/);
-        send({ done: true, nav: navMatch?.[1] ?? null });
+        // Gemini via Vertex AI europe-west1 — même backend que la voix Eva (nLPD ✓)
+        const { GoogleGenAI } = await import("@google/genai");
+        const ai = new GoogleGenAI({
+          vertexai: true,
+          project: process.env.VERTEX_PROJECT ?? "optigps",
+          location: process.env.VERTEX_LOCATION ?? "europe-west1",
+        });
+        // gemini-2.5-flash = seul modèle de texte disponible dans europe-west1 sur ce projet
+        const textModel =
+          process.env.GEMINI_TEXT_MODEL ??
+          process.env.GEMINI_VERTEX_MODEL ??
+          "gemini-2.5-flash";
+        const sysMsg = messages.find(m => m.role === "system")?.content ?? "";
+        const contents = messages
+          .filter(m => m.role !== "system")
+          .map(m => ({
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [{ text: m.content }],
+          }));
+        let full = "";
+        const stream = await ai.models.generateContentStream({
+          model: textModel,
+          contents,
+          config: {
+            systemInstruction: sysMsg,
+            maxOutputTokens: 1200,
+            temperature: 0.2,
+          },
+        });
+        for await (const chunk of stream) {
+          if (abortCtrl.signal.aborted) break;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const c = chunk as any;
+          const txt = (c.candidates?.[0]?.content?.parts ?? [])
+            .map((p: any) => p.text ?? "")
+            .join("");
+          if (txt) {
+            send({ t: txt });
+            full += txt;
+          }
+        }
+        // Extraire toutes les commandes Eva de la réponse
+        const navMatch = full.match(/NAV:(\/[^\s\n]*)/);
+        const albumMatch = full.match(/CMD:album:([^\s\n]+)/);
+        const searchMatch = full.match(/CMD:search:([^\n]+)/);
+        const crMatch = full.match(/CMD:generer-cr:(\d+)/);
+        const mailMatch = full.match(/CMD:envoyer-rapport:(\d+):([^\s\n]+)/);
+        const cmds: Array<{ type: string; payload: string }> = [];
+        if (navMatch) cmds.push({ type: "nav", payload: navMatch[1] });
+        if (albumMatch)
+          cmds.push({ type: "album", payload: albumMatch[1].trim() });
+        if (searchMatch)
+          cmds.push({ type: "search", payload: searchMatch[1].trim() });
+        if (crMatch) cmds.push({ type: "generer-cr", payload: crMatch[1] });
+        if (mailMatch)
+          cmds.push({
+            type: "envoyer-rapport",
+            payload: `${mailMatch[1]}:${mailMatch[2].trim()}`,
+          });
+        send({ done: true, nav: navMatch?.[1] ?? null, cmds });
         res.end();
-      } catch {
+      } catch (err) {
+        console.error("[Eva cockpit chat]", String(err));
         if (!res.headersSent) {
           res.status(500).json({ error: "stream failed" });
         } else {
           send({ error: "stream interrompu" });
           res.end();
         }
+      }
+    }
+  );
+
+  // helper — escape HTML pour les champs DB interpolés dans les emails
+  const escHtml = (s: string) =>
+    String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+
+  // helper — génère un CR IA pour une étude (réutilisé par les deux endpoints)
+  async function genererCrTexte(studyId: number): Promise<string> {
+    const { getStudyById, getReportByStudy } = await import("./db");
+    const study = await getStudyById(studyId);
+    if (!study) throw new Error("Étude introuvable");
+    const report = await getReportByStudy(studyId);
+    const { buildHermesContext } = await import("./report/hermesChat");
+    const studyCtx = buildHermesContext(study as any, report as any);
+    const { GoogleGenAI } = await import("@google/genai");
+    const ai = new GoogleGenAI({
+      vertexai: true,
+      project: process.env.VERTEX_PROJECT ?? "optigps",
+      location: process.env.VERTEX_LOCATION ?? "europe-west1",
+    });
+    const prompt =
+      `Tu es Eva, radiologue IA senior. Génère un compte rendu radiologique structuré en français. ` +
+      `Format : Indication, Technique, Résultats (par système), Conclusion, Recommandations. ` +
+      `PHI INTERDIT : jamais de nom/prénom/DDN patient.\n\nContexte étude :\n${studyCtx}\n\n` +
+      `Texte actuel du CR :\n${(report as any)?.content ?? "(aucun)"}`;
+    const stream = await ai.models.generateContentStream({
+      model: "gemini-2.5-flash",
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: { maxOutputTokens: 2000, temperature: 0.15 },
+    });
+    let crText = "";
+    for await (const chunk of stream) {
+      const c = chunk as any;
+      crText += (c.candidates?.[0]?.content?.parts ?? [])
+        .map((p: any) => p.text ?? "")
+        .join("");
+    }
+    return crText.trim();
+  }
+
+  // ── GÉNÉRER COMPTE RENDU IA ───────────────────────────────────────────────
+  // POST /api/cockpit/generer-cr  { studyId: number }
+  // Réservé aux radiologistes et admins (gate par rôle, pas seulement auth).
+  app.post(
+    "/api/cockpit/generer-cr",
+    requireAuth,
+    async (req: Request, res: Response): Promise<void> => {
+      const user = (req as any).user as { role?: string } | undefined;
+      if (!user?.role || !["admin", "radiologist"].includes(user.role)) {
+        res
+          .status(403)
+          .json({ ok: false, error: "Accès réservé aux radiologistes" });
+        return;
+      }
+      const body = req.body as Record<string, unknown>;
+      const studyId = Number(body.studyId);
+      if (!studyId || isNaN(studyId)) {
+        res.status(400).json({ ok: false, error: "studyId requis" });
+        return;
+      }
+      try {
+        const crText = await genererCrTexte(studyId);
+        res.json({ ok: true, studyId, text: crText });
+      } catch (err) {
+        console.error("[Eva generer-cr]", String(err));
+        res.status(500).json({ ok: false, error: "Génération échouée" });
+      }
+    }
+  );
+
+  // ── ENVOYER RAPPORT PAR EMAIL ─────────────────────────────────────────────
+  // POST /api/cockpit/envoyer-rapport  { studyId, to }
+  // Le contenu est généré serveur-side (pas de client contenu pour éviter l'injection).
+  // Réservé aux radiologistes et admins.
+  app.post(
+    "/api/cockpit/envoyer-rapport",
+    requireAuth,
+    async (req: Request, res: Response): Promise<void> => {
+      const user = (req as any).user as { role?: string } | undefined;
+      if (!user?.role || !["admin", "radiologist"].includes(user.role)) {
+        res
+          .status(403)
+          .json({ ok: false, error: "Accès réservé aux radiologistes" });
+        return;
+      }
+      const body = req.body as Record<string, unknown>;
+      const studyId = Number(body.studyId);
+      const to = typeof body.to === "string" ? body.to.trim() : "";
+      if (!studyId || isNaN(studyId) || !to || !to.includes("@")) {
+        res
+          .status(400)
+          .json({ ok: false, error: "studyId et to (email) requis" });
+        return;
+      }
+      try {
+        const { isAllowedRecipient } = await import("./_core/emailAllowList");
+        const { ENV } = await import("./_core/env");
+        if (!isAllowedRecipient(to, ENV.reportEmailAllowedDomains)) {
+          res
+            .status(403)
+            .json({ ok: false, error: "Destinataire non autorisé" });
+          return;
+        }
+        const { getStudyById } = await import("./db");
+        const study = await getStudyById(studyId);
+        if (!study) {
+          res.status(404).json({ ok: false, error: "Étude introuvable" });
+          return;
+        }
+        // Le contenu vient du générateur serveur — jamais du client (anti-injection).
+        const crText = await genererCrTexte(studyId);
+        const s = study as any;
+        const desc = s.studyDescription || s.modality || "Examen";
+        const date = s.studyDate ?? "";
+        // Tous les champs DB sont escapés avant interpolation HTML.
+        const htmlContenu = escHtml(crText).replace(/\n/g, "<br>");
+        const html = `<div style="font-family:sans-serif;max-width:700px">
+<h2 style="color:#1a4d7a">Compte rendu IA — ${escHtml(desc)}</h2>
+<p style="color:#555">Date : ${escHtml(date)} &nbsp;|&nbsp; ID étude : ${studyId}</p>
+<hr style="border:1px solid #ddd;margin:16px 0">
+<div style="line-height:1.7">${htmlContenu}</div>
+<hr style="border:1px solid #ddd;margin:16px 0">
+<p style="color:#888;font-size:12px">⚠️ Ce compte rendu est généré par une IA et doit être relu et validé par un radiologue qualifié avant tout usage clinique.</p>
+</div>`;
+        const { sendEmail } = await import("./email");
+        const result = await sendEmail({
+          to,
+          subject: `CR IA — ${escHtml(desc)} (ID ${studyId})`,
+          html,
+        });
+        res.json(result);
+      } catch (err) {
+        console.error("[Eva envoyer-rapport]", String(err));
+        res.status(500).json({ ok: false, error: "Envoi échoué" });
       }
     }
   );

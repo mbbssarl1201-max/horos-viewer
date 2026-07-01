@@ -477,3 +477,15 @@ export const reportAiSnapshots = mysqlTable("report_ai_snapshots", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type ReportAiSnapshot = typeof reportAiSnapshots.$inferSelect;
+
+export const reportShareTokens = mysqlTable("report_share_tokens", {
+  id: int("id").autoincrement().primaryKey(),
+  token: varchar("token", { length: 64 }).notNull().unique(),
+  reportId: int("reportId").notNull(),
+  studyId: int("studyId").notNull(),
+  recipientEmail: varchar("recipientEmail", { length: 255 }).notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  usedAt: timestamp("usedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type ReportShareToken = typeof reportShareTokens.$inferSelect;

@@ -66,6 +66,14 @@
   }
 }
 
+/* Toolbar scrollable sans scrollbar visible */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* Custom scrollbar for dark theme */
 ::-webkit-scrollbar {
   width: 8px;

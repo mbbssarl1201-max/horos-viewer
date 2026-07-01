@@ -14,9 +14,7 @@ const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0;
 
 const buildEndpointUrl = (baseUrl: string): string => {
-  const normalizedBase = baseUrl.endsWith("/")
-    ? baseUrl
-    : `${baseUrl}/`;
+  const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
   return new URL(
     "webdevtoken.v1.WebDevService/SendNotification",
     normalizedBase
@@ -58,7 +56,7 @@ const validatePayload = (input: NotificationPayload): NotificationPayload => {
 };
 
 /**
- * Dispatches a project-owner notification through the Manus Notification Service.
+ * Dispatches a project-owner notification through the platform notification service.
  * Returns `true` if the request was accepted, `false` when the upstream service
  * cannot be reached (callers can fall back to email/slack). Validation errors
  * bubble up as TRPC errors so callers can fix the payload.

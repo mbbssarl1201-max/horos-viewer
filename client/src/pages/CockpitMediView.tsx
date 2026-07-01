@@ -3,6 +3,7 @@
 // COCKPIT écran scindé MediView : navigation + chat Eva (gauche) + Selenium live (droite).
 // PHI-safe : aucune donnée patient ne transite par Eva ou le chat.
 import { useRef, useState, useEffect, useCallback } from "react";
+import { useLocation } from "wouter";
 import {
   Home,
   BookOpen,
@@ -11,15 +12,9 @@ import {
   RotateCcw,
   Maximize2,
   MonitorPlay,
-  ChevronRight,
   Send,
-  MessageCircle,
-  Activity,
-  Calendar,
   ExternalLink,
   GripVertical,
-  Sparkles,
-  Zap,
 } from "lucide-react";
 import EvaVoiceMV from "@/components/EvaVoiceMV";
 
@@ -49,9 +44,10 @@ const RACCOURCIS = [
 ];
 
 const SUGGESTIONS = [
-  "Liste les examens d'aujourd'hui",
-  "Ouvre la worklist",
-  "Quels examens sont en attente ?",
+  "Ouvre les examens du jour",
+  "Quelle est la valeur HU normale du parenchyme pulmonaire ?",
+  "Explique les critères Fleischner pour les nodules",
+  "Recherche les IRM cérébrales récentes",
 ];
 
 const MODALITY_COLOR: Record<string, string> = {
@@ -82,7 +78,10 @@ async function naviguerSelenium(page: string): Promise<void> {
 async function streamChat(
   messages: ChatMsg[],
   onToken: (t: string) => void,
-  onDone: (nav: string | null) => void
+  onDone: (
+    nav: string | null,
+    cmds: Array<{ type: string; payload: string }>
+  ) => void
 ): Promise<void> {
   const resp = await fetch("/api/cockpit/chat/stream", {
     method: "POST",
@@ -106,10 +105,11 @@ async function streamChat(
           t?: string;
           done?: boolean;
           nav?: string | null;
+          cmds?: Array<{ type: string; payload: string }>;
           error?: string;
         };
         if (d.t) onToken(d.t);
-        if (d.done) onDone(d.nav ?? null);
+        if (d.done) onDone(d.nav ?? null, d.cmds ?? []);
       } catch {
         /* ignore */
       }
@@ -122,6 +122,7 @@ export default function CockpitMediView({
 }: {
   embedded?: boolean;
 }) {
+  const [, reactNavigate] = useLocation();
   const [routeAffichee, setRouteAffichee] = useState("/");
   const [navEnCours, setNavEnCours] = useState(false);
   const [saisieRoute, setSaisieRoute] = useState("");
@@ -191,11 +192,15 @@ export default function CockpitMediView({
     widthStart.current = panelWidth;
   };
 
-  const naviguer = useCallback((route: string) => {
-    setRouteAffichee(route);
-    setNavEnCours(true);
-    void naviguerSelenium(route).finally(() => setNavEnCours(false));
-  }, []);
+  const naviguer = useCallback(
+    (route: string) => {
+      setRouteAffichee(route);
+      setNavEnCours(true);
+      reactNavigate(route); // BUG-2/3 fix: React router EN PREMIER
+      void naviguerSelenium(route).finally(() => setNavEnCours(false));
+    },
+    [reactNavigate]
+  );
 
   const recharger = () => {
     if (iframeRef.current) {
@@ -240,19 +245,119 @@ export default function CockpitMediView({
             return updated;
           });
         },
-        nav => {
+        (nav, cmds) => {
+          // Nettoyer les commandes du texte affiché
           setChatMessages(prev => {
             const updated = [...prev];
             const last = updated[updated.length - 1];
             if (last?.role === "assistant") {
               updated[updated.length - 1] = {
                 role: "assistant",
-                content: last.content.replace(/\s*NAV:\/[^\s]*/g, "").trim(),
+                content: last.content
+                  .replace(/\s*NAV:\/[^\s\n]*/g, "")
+                  .replace(/\s*CMD:[^\n]*/g, "")
+                  .trim(),
               };
             }
             return updated;
           });
-          if (nav) naviguer(nav);
+          // Exécuter toutes les commandes Eva
+          for (const cmd of cmds) {
+            if (cmd.type === "nav") {
+              reactNavigate(cmd.payload);
+              void naviguerSelenium(cmd.payload);
+            } else if (cmd.type === "album") {
+              window.dispatchEvent(
+                new CustomEvent("eva:selectAlbum", { detail: cmd.payload })
+              );
+            } else if (cmd.type === "search") {
+              window.dispatchEvent(
+                new CustomEvent("eva:search", { detail: cmd.payload })
+              );
+            } else if (cmd.type === "generer-cr") {
+              const studyId = Number(cmd.payload);
+              if (studyId) {
+                setChatMessages(prev => [
+                  ...prev,
+                  {
+                    role: "assistant",
+                    content: "⏳ Génération du compte rendu IA…",
+                  },
+                ]);
+                fetch("/api/cockpit/generer-cr", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ studyId }),
+                })
+                  .then(r => r.json())
+                  .then((d: any) => {
+                    setChatMessages(prev => [
+                      ...prev.slice(0, -1),
+                      {
+                        role: "assistant",
+                        content: d.ok
+                          ? `**Compte rendu IA — étude ${studyId}**\n\n${d.text}`
+                          : `Erreur génération CR : ${d.error}`,
+                      },
+                    ]);
+                  })
+                  .catch(() =>
+                    setChatMessages(prev => [
+                      ...prev.slice(0, -1),
+                      {
+                        role: "assistant",
+                        content: "Erreur lors de la génération du CR.",
+                      },
+                    ])
+                  );
+              }
+            } else if (cmd.type === "envoyer-rapport") {
+              const [studyIdStr, email] = cmd.payload.split(":");
+              const studyId = Number(studyIdStr);
+              if (studyId && email?.includes("@")) {
+                // Récupère le dernier CR affiché dans le chat pour l'envoyer
+                const lastCr =
+                  [...chatMessages]
+                    .reverse()
+                    .find(
+                      m =>
+                        m.role === "assistant" &&
+                        m.content.includes("Compte rendu")
+                    )?.content ?? "";
+                fetch("/api/cockpit/envoyer-rapport", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ studyId, to: email, contenu: lastCr }),
+                })
+                  .then(r => r.json())
+                  .then((d: any) => {
+                    setChatMessages(prev => [
+                      ...prev,
+                      {
+                        role: "assistant",
+                        content: d.success
+                          ? `✅ Rapport envoyé à ${email}.`
+                          : `❌ Envoi échoué : ${d.error}`,
+                      },
+                    ]);
+                  })
+                  .catch(() =>
+                    setChatMessages(prev => [
+                      ...prev,
+                      {
+                        role: "assistant",
+                        content: "Erreur lors de l'envoi du rapport.",
+                      },
+                    ])
+                  );
+              }
+            }
+          }
+          // Fallback nav (compatibilité)
+          if (nav && !cmds.some(c => c.type === "nav")) {
+            reactNavigate(nav);
+            void naviguerSelenium(nav);
+          }
         }
       );
     } catch {
@@ -282,268 +387,158 @@ export default function CockpitMediView({
     >
       {/* ── GAUCHE : panneau Eva ─────────────────────────────────────────── */}
       <aside
-        style={{ width: panelWidth }}
-        className="flex min-w-0 flex-col bg-[#0d1520] shadow-2xl"
+        style={embedded ? undefined : { width: panelWidth }}
+        className={`flex flex-col bg-[#0d1520] shadow-2xl ${embedded ? "w-full min-w-0" : "min-w-0"}`}
       >
         {/* Avatar + identité */}
-        <div className="relative flex flex-col items-center gap-2 px-4 pb-4 pt-6">
-          <div className="absolute right-3 top-3">
+        <div className="relative flex flex-col items-center gap-1 border-b border-slate-800/80 px-3 pb-3 pt-4">
+          <div className="absolute right-2 top-2">
             <EvaVoiceMV onNavigation={naviguer} />
           </div>
-          <div className="relative">
-            {/* Glow ring animé */}
-            <div className="absolute -inset-1 rounded-full bg-gradient-to-br from-violet-500/40 to-purple-800/20 blur-md" />
-            <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-violet-900 shadow-xl ring-2 ring-violet-400/30">
-              <span className="text-3xl font-bold text-white">E</span>
+
+          {/* Photo Eva */}
+          <div className="relative flex items-center justify-center">
+            <div
+              className={`absolute inset-[-5px] rounded-full transition-all duration-700 ${chatEnCours ? "shadow-[0_0_32px_10px_rgba(20,184,166,0.5)]" : "shadow-[0_0_16px_5px_rgba(20,184,166,0.25)]"}`}
+            />
+            <div
+              className={`absolute inset-[-3px] rounded-full border-2 transition-all duration-500 ${chatEnCours ? "border-teal-400/80" : "border-teal-500/50"}`}
+            />
+            <div
+              className={`relative overflow-hidden rounded-full shadow-2xl ${embedded ? "h-16 w-16" : "h-20 w-20"}`}
+            >
+              <img
+                src="/eva.png"
+                alt="Eva"
+                className="h-full w-full object-cover object-top"
+              />
             </div>
-            <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full bg-emerald-400 ring-2 ring-[#0d1520]" />
+            <span className="absolute bottom-0.5 right-0.5 h-3 w-3 rounded-full bg-emerald-400 ring-2 ring-[#0d1520]" />
           </div>
-          <div className="text-center">
-            <p className="text-base font-semibold text-white">Eva</p>
-            <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-violet-400">
-              Assistante Radiologique IA · cerveau 72B
+
+          <div className="mt-1.5 text-center">
+            <p
+              className={`font-semibold text-white tracking-wide ${embedded ? "text-base" : "text-lg"}`}
+            >
+              Eva
+            </p>
+            <span className="text-[9px] font-semibold uppercase tracking-[0.18em] text-teal-400">
+              Assistante Radiologique · Gemini EU
+            </span>
+          </div>
+
+          {/* Statut */}
+          <div className="mt-1 flex items-center gap-1.5 rounded-full border border-teal-500/20 bg-teal-500/10 px-2.5 py-0.5">
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${chatEnCours ? "bg-teal-300 animate-pulse" : "bg-emerald-400"}`}
+            />
+            <span className="text-[9px] text-teal-300 font-medium">
+              {chatEnCours ? "Eva réfléchit…" : "En ligne · prête à piloter"}
             </span>
           </div>
         </div>
 
-        {/* Texte d'accueil */}
-        <div className="mx-3 mb-3 rounded-xl border border-slate-700/40 bg-slate-800/40 px-3 py-2.5 text-[12px] leading-relaxed text-slate-300">
-          Bonjour 👋 Je suis Eva. Dites-moi quoi faire — j&apos;ouvre les
-          études, navigue dans MediView et réponds à vos questions
-          radiologiques.
+        {/* Raccourcis rapides */}
+        <div className="flex gap-1.5 border-b border-slate-800/60 px-3 py-2">
+          {RACCOURCIS.map(({ icon: Icon, label, route }) => (
+            <button
+              key={route}
+              onClick={() => naviguer(route)}
+              disabled={navEnCours}
+              title={label}
+              className="flex flex-1 flex-col items-center gap-0.5 rounded-lg py-1.5 text-slate-500 transition hover:bg-slate-800 hover:text-teal-400 disabled:opacity-40"
+            >
+              <Icon className="h-4 w-4" />
+              <span className="text-[9px]">{label}</span>
+            </button>
+          ))}
         </div>
 
-        {/* Corps scrollable */}
-        <div className="flex flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto px-3 pb-3">
-          {/* À traiter */}
-          {!etudesChargement && etudes.length > 0 && (
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2.5">
-              <div className="mb-1.5 flex items-center gap-1.5">
-                <Activity className="h-3.5 w-3.5 text-amber-400" />
-                <p className="text-[11px] font-semibold text-amber-300">
-                  À traiter aujourd&apos;hui
+        {/* Chat — zone principale */}
+        <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
+            {chatMessages.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3">
+                <p className="text-[11px] text-slate-600 text-center px-4">
+                  Posez une question à Eva ou choisissez une suggestion
                 </p>
-              </div>
-              <p className="text-xs text-amber-200/80">
-                • {etudes.length} étude{etudes.length > 1 ? "s" : ""} récente
-                {etudes.length > 1 ? "s" : ""} cette semaine
-              </p>
-              {etudes.filter(e => e.modality === "CT" || e.modality === "MR")
-                .length > 0 && (
-                <p className="text-xs text-amber-200/80">
-                  •{" "}
-                  {
-                    etudes.filter(
-                      e => e.modality === "CT" || e.modality === "MR"
-                    ).length
-                  }{" "}
-                  examen
-                  {etudes.filter(
-                    e => e.modality === "CT" || e.modality === "MR"
-                  ).length > 1
-                    ? "s"
-                    : ""}{" "}
-                  CT/MR à analyser
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Suggestions navigation */}
-          <div>
-            <div className="mb-2 flex items-center gap-1.5">
-              <Zap className="h-3 w-3 text-amber-500" />
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-                Suggestions
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              {RACCOURCIS.map(({ icon: Icon, label, route }) => (
-                <button
-                  key={route}
-                  onClick={() => naviguer(route)}
-                  disabled={navEnCours}
-                  className="flex w-full items-center gap-3 rounded-xl bg-slate-800/60 px-3 py-2.5 text-left text-sm text-slate-300 transition hover:bg-slate-700/80 hover:text-white disabled:opacity-40"
-                >
-                  <Icon className="h-4 w-4 shrink-0 text-violet-400" />
-                  <span className="flex-1 truncate">{label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Route libre */}
-          <form onSubmit={soumettre} className="flex gap-1.5">
-            <input
-              value={saisieRoute}
-              onChange={e => setSaisieRoute(e.target.value)}
-              placeholder="/viewer/42"
-              className="flex-1 rounded-xl border border-slate-700 bg-slate-800/60 px-3 py-2 text-xs text-slate-100 placeholder-slate-600 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50"
-            />
-            <button
-              type="submit"
-              disabled={!saisieRoute.trim() || navEnCours}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-700 text-white transition hover:bg-violet-600 disabled:opacity-40"
-            >
-              {navEnCours ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <ChevronRight className="h-3.5 w-3.5" />
-              )}
-            </button>
-          </form>
-
-          {/* Études récentes */}
-          <div>
-            <div className="mb-2 flex items-center gap-1.5">
-              <Calendar className="h-3 w-3 text-slate-500" />
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-                Études récentes
-              </p>
-              {etudesChargement && (
-                <Loader2 className="h-3 w-3 animate-spin text-slate-600" />
-              )}
-            </div>
-            {etudes.length === 0 && !etudesChargement ? (
-              <p className="text-xs text-slate-600">
-                Aucune étude cette semaine.
-              </p>
-            ) : (
-              <div className="space-y-1">
-                {etudes.slice(0, 8).map(e => {
-                  const actif = routeAffichee === `/viewer/${e.id}`;
-                  return (
+                <div className="flex flex-col gap-2 w-full">
+                  {SUGGESTIONS.map(s => (
                     <button
-                      key={e.id}
-                      onClick={() => naviguer(`/viewer/${e.id}`)}
-                      disabled={navEnCours}
+                      key={s}
+                      onClick={() => void envoyerChat(s)}
+                      disabled={chatEnCours}
+                      className="rounded-xl border border-slate-700/60 bg-slate-800/50 px-3 py-2.5 text-left text-[11px] text-slate-400 transition hover:border-teal-500/40 hover:bg-slate-700/60 hover:text-slate-200 disabled:opacity-40"
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <>
+                {chatMessages.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                  >
+                    {m.role === "assistant" && (
+                      <div className="mr-2 mt-1 h-6 w-6 shrink-0 overflow-hidden rounded-full">
+                        <img
+                          src="/eva.png"
+                          alt="Eva"
+                          className="h-full w-full object-cover object-top"
+                        />
+                      </div>
+                    )}
+                    <div
                       className={[
-                        "flex w-full flex-col gap-0.5 rounded-xl px-2.5 py-2 text-left transition disabled:opacity-40",
-                        actif
-                          ? "bg-violet-600/20 ring-1 ring-violet-500/40"
-                          : "bg-slate-800/40 hover:bg-slate-700/60",
+                        "max-w-[80%] rounded-2xl px-3 py-2 text-[12px] leading-relaxed whitespace-pre-wrap",
+                        m.role === "user"
+                          ? "rounded-br-sm bg-teal-600 text-white"
+                          : "rounded-bl-sm bg-slate-800 text-slate-200",
                       ].join(" ")}
                     >
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className={`inline-flex items-center rounded border px-1 py-0 text-[9px] font-bold leading-4 ${modalityClass(e.modality)}`}
-                        >
-                          {e.modality ?? "?"}
+                      {m.content || (
+                        <span className="flex items-center gap-1.5 opacity-60">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Eva réfléchit…
                         </span>
-                        <span className="truncate text-xs font-medium text-slate-200">
-                          {e.studyDescription ?? "Sans titre"}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1 text-[10px] text-slate-500">
-                        <Calendar className="h-2.5 w-2.5 shrink-0" />
-                        <span>{e.studyDate ?? "—"}</span>
-                        {e.numberOfSeries != null && (
-                          <span className="ml-auto text-slate-600">
-                            {e.numberOfSeries} série
-                            {e.numberOfSeries !== 1 ? "s" : ""}
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
+              </>
             )}
           </div>
 
-          <div className="border-t border-slate-800/80" />
-
-          {/* Chat Eva */}
-          <div className="flex min-h-[180px] flex-1 flex-col">
-            <div className="mb-2 flex items-center gap-1.5">
-              <Sparkles className="h-3 w-3 text-violet-500" />
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-                Conversation
-              </p>
-            </div>
-
-            <div className="flex-1 overflow-y-auto rounded-xl border border-slate-700/60 bg-slate-800/40 p-2">
-              {chatMessages.length === 0 ? (
-                <div className="flex h-full flex-col items-center justify-center gap-3 py-4">
-                  <div className="flex flex-wrap justify-center gap-1.5">
-                    {SUGGESTIONS.map(s => (
-                      <button
-                        key={s}
-                        onClick={() => void envoyerChat(s)}
-                        disabled={chatEnCours}
-                        className="rounded-full border border-slate-700 bg-slate-800 px-2.5 py-1 text-[10px] text-slate-400 transition hover:border-violet-500/60 hover:bg-slate-700 hover:text-slate-200 disabled:opacity-40"
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {chatMessages.map((m, i) => (
-                    <div
-                      key={i}
-                      className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-                    >
-                      <div
-                        className={[
-                          "max-w-[88%] rounded-xl px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap",
-                          m.role === "user"
-                            ? "bg-violet-600 text-white"
-                            : "bg-slate-700 text-slate-200",
-                        ].join(" ")}
-                      >
-                        {m.content || (
-                          <span className="flex items-center gap-1 opacity-60">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Eva réfléchit…
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  <div ref={chatEndRef} />
-                </div>
-              )}
-            </div>
-
-            {chatMessages.length > 0 && !chatEnCours && (
-              <div className="mt-1.5 flex gap-1 overflow-x-auto pb-0.5">
-                {SUGGESTIONS.map(s => (
-                  <button
-                    key={s}
-                    onClick={() => void envoyerChat(s)}
-                    className="shrink-0 rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-500 transition hover:border-violet-500/50 hover:text-slate-300"
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
-
+          {/* Input */}
+          <div className="border-t border-slate-800/60 px-3 py-2.5">
             <form
               onSubmit={e => {
                 e.preventDefault();
                 void envoyerChat(chatInput);
               }}
-              className="mt-1.5 flex gap-1.5"
+              className="flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-800/80 px-3 py-2"
             >
               <input
                 value={chatInput}
                 onChange={e => setChatInput(e.target.value)}
-                placeholder="Demandez à Eva…"
+                placeholder="Message à Eva…"
                 disabled={chatEnCours}
-                className="flex-1 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-slate-100 placeholder-slate-600 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/40 disabled:opacity-50"
+                className="flex-1 bg-transparent text-[12px] text-slate-100 placeholder-slate-600 outline-none disabled:opacity-50"
               />
               <button
                 type="submit"
                 disabled={!chatInput.trim() || chatEnCours}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-violet-700 text-white transition hover:bg-violet-600 disabled:opacity-40"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-teal-600 text-white transition hover:bg-teal-500 disabled:opacity-30"
               >
                 {chatEnCours ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Loader2 className="h-3 w-3 animate-spin" />
                 ) : (
-                  <Send className="h-3.5 w-3.5" />
+                  <Send className="h-3 w-3" />
                 )}
               </button>
             </form>
@@ -617,7 +612,7 @@ export default function CockpitMediView({
                     <MonitorPlay className="h-3 w-3 shrink-0 text-emerald-500" />
                   )}
                   <span className="font-medium text-slate-500">
-                    mediview.mbbssarl.ch
+                    mediview.ch
                   </span>
                   <span className="truncate text-slate-400">
                     {routeAffichee}
@@ -626,7 +621,7 @@ export default function CockpitMediView({
               )}
 
               <a
-                href={`https://mediview.mbbssarl.ch${routeAffichee}`}
+                href={`https://mediview.ch${routeAffichee}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-800 hover:text-slate-300"
@@ -635,7 +630,7 @@ export default function CockpitMediView({
                 <ExternalLink className="h-3.5 w-3.5" />
               </a>
               <a
-                href={`https://mediview.mbbssarl.ch${routeAffichee}`}
+                href={`https://mediview.ch${routeAffichee}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hidden h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-800 hover:text-slate-300 sm:flex"

@@ -255,12 +255,6 @@ async function startServer() {
       return;
     }
 
-    // Si garde H4 (Claude) active : pas de streaming → 409, le client bascule en non-streaming.
-    if (prep.useClaude) {
-      res.status(409).json({ error: "streaming indisponible (backend cloud)" });
-      return;
-    }
-
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
@@ -268,17 +262,52 @@ async function startServer() {
     const send = (obj: unknown) =>
       res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
-    // Si le client ferme la connexion, on avorte le flux Ollama (pas de CPU
-    // gaspillé sur le VPS contendu).
     const abortCtrl = new AbortController();
     req.on("close", () => abortCtrl.abort());
 
     try {
-      await streamOllamaChat(
-        prep.messages,
-        delta => send({ t: delta }),
-        abortCtrl.signal
-      );
+      // Vertex AI (Gemini) si disponible, sinon Ollama local
+      const hasVertex =
+        !!process.env.VERTEX_PROJECT &&
+        !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      if (prep.useClaude || hasVertex) {
+        const { GoogleGenAI } = await import("@google/genai");
+        const ai = new GoogleGenAI({
+          vertexai: true,
+          project: process.env.VERTEX_PROJECT ?? "optigps",
+          location: process.env.VERTEX_LOCATION ?? "europe-west1",
+        });
+        const sysMsg =
+          prep.messages.find((m: any) => m.role === "system")?.content ?? "";
+        const contents = prep.messages
+          .filter((m: any) => m.role !== "system")
+          .map((m: any) => ({
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [{ text: m.content }],
+          }));
+        const gStream = await ai.models.generateContentStream({
+          model: process.env.GEMINI_TEXT_MODEL ?? "gemini-2.5-flash",
+          contents,
+          config: {
+            systemInstruction: sysMsg,
+            maxOutputTokens: 1200,
+            temperature: 0.3,
+          },
+        });
+        for await (const chunk of gStream) {
+          if (abortCtrl.signal.aborted) break;
+          const txt = ((chunk as any).candidates?.[0]?.content?.parts ?? [])
+            .map((p: any) => p.text ?? "")
+            .join("");
+          if (txt) send({ t: txt });
+        }
+      } else {
+        await streamOllamaChat(
+          prep.messages,
+          delta => send({ t: delta }),
+          abortCtrl.signal
+        );
+      }
       const { recordAccess } = await import("../db");
       await recordAccess({
         userId: user.id,
@@ -350,11 +379,6 @@ async function startServer() {
       res.status(code).json({ error: err?.message ?? "Erreur" });
       return;
     }
-    if (prep.useClaude) {
-      res.status(409).json({ error: "streaming indisponible (backend cloud)" });
-      return;
-    }
-
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
@@ -365,11 +389,47 @@ async function startServer() {
     req.on("close", () => abortCtrl.abort());
 
     try {
-      await streamOllamaChat(
-        prep.messages,
-        delta => send({ t: delta }),
-        abortCtrl.signal
-      );
+      const hasVertex =
+        !!process.env.VERTEX_PROJECT &&
+        !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      if (prep.useClaude || hasVertex) {
+        const { GoogleGenAI } = await import("@google/genai");
+        const ai = new GoogleGenAI({
+          vertexai: true,
+          project: process.env.VERTEX_PROJECT ?? "optigps",
+          location: process.env.VERTEX_LOCATION ?? "europe-west1",
+        });
+        const sysMsg =
+          prep.messages.find((m: any) => m.role === "system")?.content ?? "";
+        const contents = prep.messages
+          .filter((m: any) => m.role !== "system")
+          .map((m: any) => ({
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [{ text: m.content }],
+          }));
+        const gStream = await ai.models.generateContentStream({
+          model: process.env.GEMINI_TEXT_MODEL ?? "gemini-2.5-flash",
+          contents,
+          config: {
+            systemInstruction: sysMsg,
+            maxOutputTokens: 1200,
+            temperature: 0.3,
+          },
+        });
+        for await (const chunk of gStream) {
+          if (abortCtrl.signal.aborted) break;
+          const txt = ((chunk as any).candidates?.[0]?.content?.parts ?? [])
+            .map((p: any) => p.text ?? "")
+            .join("");
+          if (txt) send({ t: txt });
+        }
+      } else {
+        await streamOllamaChat(
+          prep.messages,
+          delta => send({ t: delta }),
+          abortCtrl.signal
+        );
+      }
       const { recordAccess } = await import("../db");
       await recordAccess({
         userId: user.id,
@@ -585,6 +645,22 @@ async function startServer() {
       if (!res.headersSent) {
         res.status(500).json({ error: err.message || "PDF generation failed" });
       }
+    }
+  });
+
+  // Lien OTP : accès public sécurisé à un CR signé (7j, usage unique, référent).
+  // Redirige vers le viewer après validation du token. Pas de PHI dans l'URL.
+  app.get("/r/:token", async (req, res) => {
+    try {
+      const { resolveShareToken } = await import("../report/reportShareToken");
+      const payload = await resolveShareToken(req.params.token as string);
+      if (!payload) {
+        res.status(410).send("Lien expiré ou déjà utilisé.");
+        return;
+      }
+      res.redirect(`/viewer/${payload.studyId}?share=1`);
+    } catch {
+      res.status(500).send("Erreur serveur.");
     }
   });
 

@@ -227,6 +227,84 @@ export default function EvaVoiceMV({ onNavigation }: Props) {
                       },
                     });
                   }
+                } else if (fc.name === "selectAlbum") {
+                  const album = String(fc.args.album ?? "database");
+                  window.dispatchEvent(
+                    new CustomEvent("eva:selectAlbum", { detail: album })
+                  );
+                  responses.push({
+                    id: fc.id,
+                    name: fc.name,
+                    response: { output: "Album sélectionné : " + album },
+                  });
+                } else if (fc.name === "searchWorklist") {
+                  const query = String(fc.args.query ?? "");
+                  window.dispatchEvent(
+                    new CustomEvent("eva:search", { detail: query })
+                  );
+                  responses.push({
+                    id: fc.id,
+                    name: fc.name,
+                    response: { output: "Recherche lancée : " + query },
+                  });
+                } else if (fc.name === "genererCompteRendu") {
+                  const studyId = Number(fc.args.studyId);
+                  try {
+                    const r = await fetch("/api/cockpit/generer-cr", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ studyId }),
+                    });
+                    const d = (await r.json()) as {
+                      ok: boolean;
+                      text?: string;
+                      error?: string;
+                    };
+                    responses.push({
+                      id: fc.id,
+                      name: fc.name,
+                      response: {
+                        output: d.ok
+                          ? `Compte rendu généré pour l'étude ${studyId}. Résumé : ${(d.text ?? "").slice(0, 300)}…`
+                          : `Erreur : ${d.error}`,
+                      },
+                    });
+                  } catch {
+                    responses.push({
+                      id: fc.id,
+                      name: fc.name,
+                      response: { output: "Génération du CR échouée." },
+                    });
+                  }
+                } else if (fc.name === "envoyerRapport") {
+                  const studyId = Number(fc.args.studyId);
+                  const email = String(fc.args.emailDestinataire ?? "");
+                  try {
+                    const r = await fetch("/api/cockpit/envoyer-rapport", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ studyId, to: email, contenu: "" }),
+                    });
+                    const d = (await r.json()) as {
+                      success: boolean;
+                      error?: string;
+                    };
+                    responses.push({
+                      id: fc.id,
+                      name: fc.name,
+                      response: {
+                        output: d.success
+                          ? `Rapport de l'étude ${studyId} envoyé à ${email}.`
+                          : `Échec d'envoi : ${d.error}`,
+                      },
+                    });
+                  } catch {
+                    responses.push({
+                      id: fc.id,
+                      name: fc.name,
+                      response: { output: "Envoi du rapport échoué." },
+                    });
+                  }
                 }
               }
               if (responses.length)

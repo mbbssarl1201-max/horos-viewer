@@ -1925,6 +1925,20 @@ export const appRouter = router({
         });
         // Dépôt automatique du CR + ciné vers MediCentral (non-bloquant).
         void deposerVersMediCentral(report.studyId);
+        // Hermès Apprentissage : compare brouillon↔signé pour détecter les patterns
+        // récurrents par modalité et proposer des fiches RAG. Non-bloquant.
+        void (async () => {
+          try {
+            const { getAgentState } = await import("./agents/state");
+            const s = await getAgentState("apprentissage");
+            if (s?.enabled) {
+              const { runLearningAgent } = await import("./agents/learning");
+              await runLearningAgent();
+            }
+          } catch {
+            /* best-effort */
+          }
+        })();
         return { success: true, pdfStorageKey: key };
       }),
 
@@ -2040,14 +2054,38 @@ export const appRouter = router({
           ctx as any
         );
         try {
-          const { logAgentActivity } = await import("./agents/state");
+          const { logAgentActivity, getAgentState } = await import(
+            "./agents/state"
+          );
           await logAgentActivity("referent", "sendReport", "ok", {
             studyId: report.studyId,
           });
+          // Hermès Apprentissage : déclenché après signAndSend aussi.
+          const s = await getAgentState("apprentissage");
+          if (s?.enabled) {
+            const { runLearningAgent } = await import("./agents/learning");
+            void runLearningAgent();
+          }
         } catch {
           /* best-effort */
         }
-        return { ok: true, email };
+        // Génère un lien OTP sécurisé (7 jours, usage unique) inclus dans l'email.
+        let shareUrl: string | null = null;
+        try {
+          const { createShareToken } = await import(
+            "./report/reportShareToken"
+          );
+          const token = await createShareToken(
+            report.id,
+            report.studyId,
+            email
+          );
+          const base = process.env.APP_BASE_URL ?? "https://mediview.ch";
+          shareUrl = `${base}/r/${token}`;
+        } catch {
+          /* best-effort — l'email part quand même */
+        }
+        return { ok: true, email, shareUrl };
       }),
 
     // Addendum (correction post-signature) : append-only, possible uniquement

@@ -463,6 +463,10 @@ export async function generatePreanalysis(
   // vers Claude (cloud US) sans consentement documenté (DPA). Sinon → repli
   // Ollama local (PHI-safe), pour ne JAMAIS exfiltrer par défaut.
   const useClaude = claudeConfigured && ENV.cloudAiPhiConsent;
+  // Infomaniak (CH, nLPD natif) : priorité sur Claude dès que la clé est
+  // présente. Pas de flag DPA supplémentaire requis (hébergement suisse).
+  const useInfomaniakCR =
+    !!ENV.infomaniakVisionKey && !!ENV.infomaniakVisionUrl;
   if (claudeConfigured && !ENV.cloudAiPhiConsent) {
     console.warn(
       "[aiPreanalysis] AI_BACKEND=claude ignoré : MEDIVIEW_CLOUD_AI_PHI_CONSENT non activé (nLPD/DPA) → repli sur Ollama local."
@@ -472,12 +476,11 @@ export async function generatePreanalysis(
   // Budget d'images adapté au modèle : Claude (grand contexte, cloud) encaisse
   // PLUS de coupes en PLEINE résolution → meilleure lecture de l'examen. Le
   // modèle local (GPU L4) reste à 16/768 px pour ne pas le saturer.
-  const maxImages = opts.maxImages ?? (useClaude ? 32 : 16);
-  // Résolution d'envoi : Claude lit mieux les PETITS signes (microcalcifications,
-  // trait de fracture fin, micronodule) en haute déf. 1568 px = côté optimal
-  // recommandé par Anthropic (au-delà l'image est redimensionnée côté serveur
-  // sans gain). Le modèle local reste à VISION_MAX_DIM (768) — au-delà il sature.
-  const visionDim = useClaude ? 1568 : VISION_MAX_DIM;
+  const maxImages = opts.maxImages ?? (useClaude || useInfomaniakCR ? 32 : 16);
+  // Résolution d'envoi : Claude/Infomaniak lisent mieux les PETITS signes en
+  // haute déf. 1568 px = côté optimal (au-delà redimensionné sans gain).
+  // Le modèle local reste à VISION_MAX_DIM (768) — au-delà il sature.
+  const visionDim = useClaude || useInfomaniakCR ? 1568 : VISION_MAX_DIM;
   const perStudy = comparing
     ? Math.max(1, Math.floor(maxImages / 2))
     : maxImages;
@@ -583,6 +586,9 @@ export async function generatePreanalysis(
   const base = buildSystemPrompt(opts.modality);
   const system = comparing ? `${base}\n${COMPARATIVE_ADDENDUM}` : base;
 
+  if (useInfomaniakCR) {
+    return generateViaInfomaniak(images, userText, labels, system);
+  }
   if (useClaude) {
     return generateViaClaude(images, userText, labels, system);
   }
@@ -692,8 +698,41 @@ export async function extractBurnedInText(
   const timeout = setTimeout(() => controller.abort(), 120_000);
   try {
     let txt = "";
-    // Cloud (Opus) : lit les petits curseurs/chiffres bien mieux que le local.
-    if (opts.cloud && ENV.anthropicApiKey) {
+    const ikOcr =
+      opts.cloud && !!ENV.infomaniakVisionKey && !!ENV.infomaniakVisionUrl;
+    // Infomaniak (CH) en priorité cloud ; Anthropic en repli ; sinon local.
+    if (ikOcr) {
+      const content: any[] = [
+        ...picks.map(b64 => ({
+          type: "image_url",
+          image_url: { url: `data:image/png;base64,${b64}` },
+        })),
+        {
+          type: "text",
+          text: "Transcris le texte incrusté et signale tout curseur de mesure (croix +, pointillés), par organe.",
+        },
+      ];
+      const r = await fetch(ENV.infomaniakVisionUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ENV.infomaniakVisionKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: ENV.infomaniakVisionModel,
+          max_tokens: 400,
+          messages: [
+            { role: "system", content: OCR_SYSTEM },
+            { role: "user", content },
+          ],
+        }),
+      });
+      if (!r.ok) return null;
+      const d = await r.json();
+      txt = (d?.choices?.[0]?.message?.content ?? "").trim();
+    } else if (opts.cloud && ENV.anthropicApiKey) {
+      // Cloud (Opus) : lit les petits curseurs/chiffres bien mieux que le local.
       const content: any[] = picks.map(b64 => ({
         type: "image",
         source: { type: "base64", media_type: "image/png", data: b64 },
@@ -833,7 +872,37 @@ async function focusedVisionRead(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000);
   try {
-    if (cloud && ENV.anthropicApiKey) {
+    const ikFvr =
+      cloud && !!ENV.infomaniakVisionKey && !!ENV.infomaniakVisionUrl;
+    if (ikFvr) {
+      const content: any[] = [
+        ...imagesB64.map(b64 => ({
+          type: "image_url",
+          image_url: { url: `data:image/png;base64,${b64}` },
+        })),
+        { type: "text", text: userText },
+      ];
+      const r = await fetch(ENV.infomaniakVisionUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ENV.infomaniakVisionKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: ENV.infomaniakVisionModel,
+          max_tokens: maxTokens,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content },
+          ],
+        }),
+      });
+      if (!r.ok) return null;
+      const d = await r.json();
+      const t = (d?.choices?.[0]?.message?.content ?? "").trim();
+      return t || null;
+    } else if (cloud && ENV.anthropicApiKey) {
       const content: any[] = imagesB64.map(b64 => ({
         type: "image",
         source: { type: "base64", media_type: "image/png", data: b64 },
@@ -1002,6 +1071,64 @@ async function generateViaClaude(
     evolution: parseEvolution(text).evolution,
     model: ENV.anthropicModel,
   };
+}
+
+async function generateViaInfomaniak(
+  images: string[],
+  userText: string,
+  labels: string[],
+  system: string
+): Promise<PreanalysisResult> {
+  const content: any[] = [];
+  images.forEach((b64, i) => {
+    content.push({
+      type: "text",
+      text: labels[i] ?? `Coupe n° ${i + 1} :`,
+    });
+    content.push({
+      type: "image_url",
+      image_url: { url: `data:image/png;base64,${b64}` },
+    });
+  });
+  content.push({ type: "text", text: userText });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 240_000);
+  try {
+    const resp = await fetch(ENV.infomaniakVisionUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ENV.infomaniakVisionKey}`,
+        "Content-Type": "application/json",
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: ENV.infomaniakVisionModel,
+        max_tokens: 2000,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content },
+        ],
+      }),
+    });
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => "");
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: `Infomaniak CR: HTTP ${resp.status} — ${err.slice(0, 200)}`,
+      });
+    }
+    const data = await resp.json();
+    const text: string = data?.choices?.[0]?.message?.content ?? "";
+    return {
+      ...parseSections(text),
+      ...parseKeySlice(text),
+      evolution: parseEvolution(text).evolution,
+      model: ENV.infomaniakVisionModel,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // Indirection pour permettre au test de mocker l'appel réseau.

@@ -165,14 +165,14 @@ class SDKServer {
     if (!secret || secret.length < 16) {
       throw new Error(
         "[Auth] JWT_SECRET is missing or too short (min 16 chars). " +
-          "Set a strong JWT_SECRET before signing or verifying sessions.",
+          "Set a strong JWT_SECRET before signing or verifying sessions."
       );
     }
     return new TextEncoder().encode(secret);
   }
 
   /**
-   * Create a session token for a Manus user openId
+   * Create a session token for a platform user openId
    * @example
    * const sessionToken = await sdk.createSessionToken(userInfo.openId);
    */
@@ -214,9 +214,12 @@ class SDKServer {
       .sign(secretKey);
   }
 
-  async verifySession(
-    cookieValue: string | undefined | null
-  ): Promise<{ openId: string; appId: string; name: string; sv: number } | null> {
+  async verifySession(cookieValue: string | undefined | null): Promise<{
+    openId: string;
+    appId: string;
+    name: string;
+    sv: number;
+  } | null> {
     if (!cookieValue) {
       console.warn("[Auth] Missing session cookie");
       return null;
@@ -230,7 +233,7 @@ class SDKServer {
       const { openId, appId, name, sv } = payload as Record<string, unknown>;
 
       // openId is the only field that identifies the session. appId and name
-      // are Manus-OAuth concepts that are empty for self-hosted local auth, so
+      // are legacy OAuth concepts that are empty for self-hosted local auth, so
       // requiring them here would reject every local session — keep them
       // optional.
       if (!isNonEmptyString(openId)) {
@@ -354,7 +357,7 @@ function buildCronUser(
   return {
     id: -1,
     openId: userInfo.openId,
-    name: userInfo.name || "Manus Scheduled Task",
+    name: userInfo.name || "MediView Scheduled Task",
     email: null,
     loginMethod: null,
     role: "user",

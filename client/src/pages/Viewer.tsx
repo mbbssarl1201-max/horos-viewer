@@ -92,6 +92,7 @@ import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
 import HermesChatPanel from "@/components/HermesChatPanel";
 import EvaViewerPanel from "@/components/EvaViewerPanel";
 import CurvedMprPanel from "@/components/CurvedMprPanel";
+import RegulatoryNotice from "@/components/RegulatoryNotice";
 import SeriesThumbnail from "@/components/SeriesThumbnail";
 import {
   Dialog,
@@ -440,6 +441,8 @@ export default function Viewer() {
   // Résultat du calcul du facteur SUV (lu des métadonnées DICOM de la série PET
   // fusionnée). null tant que non calculé / indisponible.
   const [suvResult, setSuvResult] = useState<SuvFactorResult | null>(null);
+  // SUVmax calculé depuis le volume PET chargé (Cornerstone cache). Best-effort.
+  const [suvMax, setSuvMax] = useState<number | null>(null);
   // Panneau Curved MPR (bêta) — overlay autonome, ne touche pas aux viewports.
   const [curvedMprOpen, setCurvedMprOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
@@ -677,6 +680,51 @@ export default function Viewer() {
       clearTimeout(t);
     };
   }, [fusionActive, petImageUrls]);
+
+  // SUVmax : calculé depuis le volume PET en cache une fois le facteur SUV connu.
+  // Scan du tableau scalaire en un seul passage → linéaire, non bloquant (useEffect).
+  useEffect(() => {
+    setSuvMax(null);
+    if (!suvResult?.factor || !fusionActive) return;
+    const factor = suvResult.factor;
+    let cancelled = false;
+    (async () => {
+      try {
+        const cs: any = await import("@cornerstonejs/core");
+        const PET_VOL = "cornerstoneStreamingImageVolume:HOROS_PET_VOL";
+        const vol = cs.cache?.getVolume?.(PET_VOL);
+        if (!vol) return;
+        const vm = vol.voxelManager;
+        let scalars: ArrayLike<number> | undefined;
+        for (const g of [
+          () => vm?.getCompleteScalarDataArray?.(),
+          () => vm?.getScalarData?.(),
+          () => vol.getScalarData?.(),
+        ]) {
+          try {
+            const s = g();
+            if (s?.length > 0) {
+              scalars = s;
+              break;
+            }
+          } catch {
+            /* */
+          }
+        }
+        if (!scalars || cancelled) return;
+        let max = -Infinity;
+        for (let i = 0; i < scalars.length; i++) {
+          if ((scalars[i] as number) > max) max = scalars[i] as number;
+        }
+        if (!cancelled && isFinite(max)) setSuvMax(max * factor);
+      } catch {
+        /* best-effort */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [suvResult, fusionActive]);
 
   // Coupes triées selon le mode « Sort By » (n° d'instance / position, ↑↓).
   // Par défaut n° d'instance croissant = ordre serveur historique inchangé.
@@ -1632,11 +1680,9 @@ export default function Viewer() {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
-      {/* Top Toolbar */}
-      {/* Barre d'outils : `flex-wrap` + hauteur mini pour que TOUS les boutons
-          restent visibles (sinon, avec ~48 boutons, les derniers — dont
-          « Compte rendu »/« Email » — débordaient hors écran et étaient coupés). */}
-      <div className="min-h-12 border-b border-border bg-card flex flex-wrap items-center px-2 gap-1 shrink-0 relative z-[1]">
+      <RegulatoryNotice />
+      {/* Top Toolbar — scroll horizontal au lieu de wrap : hauteur fixe = 1 rangée */}
+      <div className="h-12 border-b border-border bg-card flex items-center px-2 gap-1 shrink-0 relative z-[1] overflow-x-auto scrollbar-none">
         <Button
           variant="ghost"
           size="sm"
@@ -1659,7 +1705,9 @@ export default function Viewer() {
           onClick={openReport}
         >
           <FileText className="w-4 h-4" />
-          <span className="text-[9px] font-semibold">Compte rendu IA</span>
+          <span className="hidden sm:inline text-[9px] font-semibold">
+            Compte rendu IA
+          </span>
         </button>
 
         <button
@@ -1668,7 +1716,7 @@ export default function Viewer() {
           onClick={() => setEvaOpen(o => !o)}
         >
           <MessageSquare className="w-4 h-4" />
-          <span className="text-[9px] font-semibold">Eva</span>
+          <span className="hidden sm:inline text-[9px] font-semibold">Eva</span>
         </button>
 
         <Separator orientation="vertical" className="h-7 mx-1" />
@@ -1682,7 +1730,7 @@ export default function Viewer() {
             title={tool.description}
           >
             <tool.icon className="w-4 h-4" />
-            <span className="text-[9px]">{tool.label}</span>
+            <span className="hidden lg:inline text-[9px]">{tool.label}</span>
           </button>
         ))}
 
@@ -2372,6 +2420,15 @@ export default function Viewer() {
                             {suvResult?.factor != null
                               ? `SUV ×${suvResult.factor.toExponential(2)}`
                               : "SUV n/d"}
+                          </span>
+                        )}
+                        {/* SUVmax : calculé depuis les scalaires du volume PET. */}
+                        {fusionActive && suvMax != null && (
+                          <span
+                            className="text-[10px] font-semibold text-orange-400 bg-orange-400/10 px-1.5 py-0.5 rounded"
+                            title="SUVmax de la série PET (valeur maximale sur l'ensemble du volume)"
+                          >
+                            SUVmax {suvMax.toFixed(1)}
                           </span>
                         )}
                       </>
@@ -3064,752 +3121,796 @@ export default function Viewer() {
 
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Eva split panel */}
-        {evaOpen && (
-          <EvaViewerPanel
-            onClose={() => setEvaOpen(false)}
-            studyDescription={study?.studyDescription}
-            modality={study?.modality}
-            width={evaPanelWidth}
-            onWidthChange={setEvaPanelWidth}
-          />
-        )}
-        {/* Left Panel - Series Thumbnails (masqué sur très petit écran) */}
-        <div className="hidden sm:flex w-48 border-r border-border bg-sidebar flex-col shrink-0">
-          <div className="p-2 border-b border-border">
-            <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-              Series ({seriesList?.length || 0})
-            </h3>
-          </div>
-          <ScrollArea className="flex-1 min-h-0">
-            <div className="p-2 space-y-2">
-              {seriesList?.map((s: any) => (
-                <button
-                  key={s.id}
-                  onClick={() => setSelectedSeries(s.id)}
-                  className={`w-full rounded border p-2 text-left transition-colors ${
-                    selectedSeries === s.id
-                      ? "border-primary bg-primary/10"
-                      : "border-border hover:border-primary/50"
-                  }`}
-                >
-                  {/* Vignette réelle (coupe représentative rendue hors écran),
+        {/* ── Écran scindé Eva : panneau chat gauche + noVNC Selenium droite ── */}
+        {evaOpen ? (
+          <>
+            <EvaViewerPanel
+              onClose={() => setEvaOpen(false)}
+              studyDescription={study?.studyDescription}
+              modality={study?.modality}
+              studyId={studyId}
+            />
+            {/* Navigateur Selenium live — plein écran droite */}
+            <div className="relative flex-1 bg-black">
+              <iframe
+                src="/api/cockpit/viewer"
+                className="absolute inset-0 h-full w-full border-0"
+                title="Eva Selenium live"
+                sandbox="allow-same-origin allow-scripts allow-forms"
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Left Panel - Series Thumbnails (masqué sur très petit écran) */}
+            <div className="hidden sm:flex w-48 border-r border-border bg-sidebar flex-col shrink-0">
+              <div className="p-2 border-b border-border">
+                <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
+                  Series ({seriesList?.length || 0})
+                </h3>
+              </div>
+              <ScrollArea className="flex-1 min-h-0">
+                <div className="p-2 space-y-2">
+                  {seriesList?.map((s: any) => (
+                    <button
+                      key={s.id}
+                      onClick={() => setSelectedSeries(s.id)}
+                      className={`w-full rounded border p-2 text-left transition-colors ${
+                        selectedSeries === s.id
+                          ? "border-primary bg-primary/10"
+                          : "border-border hover:border-primary/50"
+                      }`}
+                    >
+                      {/* Vignette réelle (coupe représentative rendue hors écran),
                       avec repli sur le placeholder noir tant qu'elle n'est pas
                       prête ou si la série n'est pas chargeable. */}
-                  <SeriesThumbnail
-                    seriesId={s.id}
-                    windowWidth={windowWidth}
-                    windowCenter={windowCenter}
-                  />
-                  <div className="text-[10px] text-foreground truncate">
-                    {s.seriesDescription || `Series ${s.seriesNumber || s.id}`}
-                  </div>
-                  <div className="text-[9px] text-muted-foreground flex items-center gap-1">
-                    <Badge variant="secondary" className="text-[8px] px-1 py-0">
-                      {s.modality || "?"}
-                    </Badge>
-                    <span>{s.numberOfInstances || 0} img</span>
-                  </div>
-                </button>
-              ))}
-              {(!seriesList || seriesList.length === 0) && (
-                <div className="text-center py-8">
-                  <Layers className="w-8 h-8 text-muted-foreground/20 mx-auto mb-2" />
-                  <p className="text-[10px] text-muted-foreground">
-                    No series available
-                  </p>
+                      <SeriesThumbnail
+                        seriesId={s.id}
+                        windowWidth={windowWidth}
+                        windowCenter={windowCenter}
+                      />
+                      <div className="text-[10px] text-foreground truncate">
+                        {s.seriesDescription ||
+                          `Series ${s.seriesNumber || s.id}`}
+                      </div>
+                      <div className="text-[9px] text-muted-foreground flex items-center gap-1">
+                        <Badge
+                          variant="secondary"
+                          className="text-[8px] px-1 py-0"
+                        >
+                          {s.modality || "?"}
+                        </Badge>
+                        <span>{s.numberOfInstances || 0} img</span>
+                      </div>
+                    </button>
+                  ))}
+                  {(!seriesList || seriesList.length === 0) && (
+                    <div className="text-center py-8">
+                      <Layers className="w-8 h-8 text-muted-foreground/20 mx-auto mb-2" />
+                      <p className="text-[10px] text-muted-foreground">
+                        No series available
+                      </p>
+                    </div>
+                  )}
                 </div>
-              )}
+              </ScrollArea>
             </div>
-          </ScrollArea>
-        </div>
 
-        {/* Viewport Area */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* Viewport */}
-          <div
-            ref={viewportRef}
-            className="flex-1 relative bg-black"
-            onWheel={handleWheel}
-          >
-            {/* DICOM Viewport - Cornerstone3D */}
-            {/* En 1x1 et en MPR/3D, l'id `cornerstone-viewport` reste sur ce
+            {/* Viewport Area */}
+            <div className="flex-1 flex flex-col min-w-0">
+              {/* Viewport */}
+              <div
+                ref={viewportRef}
+                className="flex-1 relative bg-black"
+                onWheel={handleWheel}
+              >
+                {/* DICOM Viewport - Cornerstone3D */}
+                {/* En 1x1 et en MPR/3D, l'id `cornerstone-viewport` reste sur ce
                 conteneur (capture/print/email/compte rendu inchangés). En
                 mosaïque 2D, l'id est déplacé sur la CELLULE ACTIVE (plus bas)
                 pour que la capture suive le viewport piloté. */}
-            <div
-              className="absolute inset-0 dicom-viewport"
-              id={
-                viewMode === "2d" && viewportLayout !== "1x1"
-                  ? undefined
-                  : "cornerstone-viewport"
-              }
-            >
-              {!instancesList || instancesList.length === 0 ? (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="text-center">
-                    <Layers className="w-16 h-16 text-muted-foreground/20 mx-auto mb-4" />
-                    <p className="text-sm text-muted-foreground">
-                      {studyId
-                        ? "Select a series to view"
-                        : "No study selected"}
-                    </p>
-                    <p className="text-xs text-muted-foreground/60 mt-1">
-                      Double-click a study from the main list to open it
-                    </p>
-                  </div>
-                </div>
-              ) : viewMode === "2d" ? (
-                comparePriorStudyId != null ? (
-                  // ── Mode comparatif : courant (gauche) + antériorité (droite).
-                  // Synchro ON → les 2 viewers partagent currentSlice + W/L (le
-                  // viewer droit est borné à son propre total de coupes).
-                  // Synchro OFF → le viewer droit a son état local prior*.
-                  <div className="absolute inset-0 grid grid-cols-2 gap-0.5 bg-border">
-                    <div
-                      id="cornerstone-viewport"
-                      className="relative bg-black overflow-hidden ring-1 ring-border"
-                    >
-                      <CornerstoneViewer
-                        ref={activeViewerRef}
-                        imageUrls={cellImageUrls}
-                        currentSlice={currentSlice}
-                        onSliceChange={setCurrentSlice}
-                        activeTool={activeTool}
-                        windowWidth={windowWidth}
-                        windowCenter={windowCenter}
-                        onWindowLevelChange={(ww, wc) => {
-                          setWindowWidth(ww);
-                          setWindowCenter(wc);
-                        }}
-                        onZoomChange={setZoomPercent}
-                        instances={cellInstances}
-                        savedAnnotations={savedAnnotations}
-                        onSaveAnnotation={handleSaveAnnotation}
-                        onRoiStats={setHuStats}
-                      />
-                    </div>
-                    <div className="relative bg-black overflow-hidden ring-1 ring-border">
-                      {priorImageUrls.length > 0 ? (
-                        <CornerstoneViewer
-                          instanceKey="priorCompare"
-                          imageUrls={priorImageUrls}
-                          currentSlice={
-                            compareSyncOn
-                              ? clampPriorSlice(
-                                  currentSlice,
-                                  priorImageUrls.length
-                                )
-                              : clampPriorSlice(
-                                  priorSlice,
-                                  priorImageUrls.length
-                                )
-                          }
-                          onSliceChange={
-                            compareSyncOn ? setCurrentSlice : setPriorSlice
-                          }
-                          activeTool={activeTool}
-                          windowWidth={
-                            compareSyncOn ? windowWidth : priorWindowWidth
-                          }
-                          windowCenter={
-                            compareSyncOn ? windowCenter : priorWindowCenter
-                          }
-                          onWindowLevelChange={(ww, wc) => {
-                            if (compareSyncOn) {
-                              setWindowWidth(ww);
-                              setWindowCenter(wc);
-                            } else {
-                              setPriorWindowWidth(ww);
-                              setPriorWindowCenter(wc);
-                            }
-                          }}
-                          instances={priorInstances}
-                        />
-                      ) : (
-                        <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
-                          Aucune image dans cette antériorité
-                        </div>
-                      )}
-                      {/* En-tête : quel examen antérieur on regarde + sélecteur de série */}
-                      <div className="absolute top-2 left-2 right-2 flex items-center gap-2 text-[10px] font-mono text-amber-300/90 pointer-events-none">
-                        <span className="bg-black/60 px-1.5 py-0.5 rounded">
-                          ANTÉRIEUR · {comparedPrior?.modality || "?"} ·{" "}
-                          {comparedPrior?.studyDate || "date ?"}
-                        </span>
-                        {(priorSeriesList ?? []).length > 1 && (
-                          <select
-                            className="pointer-events-auto bg-black/70 border border-border rounded px-1 py-0.5 text-[10px] text-foreground"
-                            value={comparePriorSeriesId ?? ""}
-                            onChange={e =>
-                              setComparePriorSeriesId(Number(e.target.value))
-                            }
-                          >
-                            {(priorSeriesList ?? []).map((s: any) => (
-                              <option key={s.id} value={s.id}>
-                                {s.seriesDescription ||
-                                  s.modality ||
-                                  `Série ${s.id}`}
-                              </option>
-                            ))}
-                          </select>
-                        )}
+                <div
+                  className="absolute inset-0 dicom-viewport"
+                  id={
+                    viewMode === "2d" && viewportLayout !== "1x1"
+                      ? undefined
+                      : "cornerstone-viewport"
+                  }
+                >
+                  {!instancesList || instancesList.length === 0 ? (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="text-center">
+                        <Layers className="w-16 h-16 text-muted-foreground/20 mx-auto mb-4" />
+                        <p className="text-sm text-muted-foreground">
+                          {studyId
+                            ? "Select a series to view"
+                            : "No study selected"}
+                        </p>
+                        <p className="text-xs text-muted-foreground/60 mt-1">
+                          Double-click a study from the main list to open it
+                        </p>
                       </div>
                     </div>
-                  </div>
-                ) : viewportLayout === "1x1" ? (
-                  slab2dOn && reconstructable ? (
-                    // « Épaisseur 2D » : viewport volumique mono-plan (thick-slab
-                    // MIP/MinIP/Moyenne) à la place du StackViewport. Mirror du
-                    // chemin MPR (même imageUrls). Repli stack si la série n'est
-                    // pas reconstructible (toggle auto-désactivé en amont).
-                    <VolumeViewer
-                      mode="slab2d"
-                      imageUrls={volumeImageUrls}
-                      slabThicknessMm={slabThicknessMm}
-                      slabMode={slabMode}
-                    />
-                  ) : (
-                    // 1x1 : rendu STRICTEMENT identique à l'historique — un seul
-                    // CornerstoneViewer, sans instanceKey (ids historiques),
-                    // remplissant le conteneur #cornerstone-viewport.
-                    <CornerstoneViewer
-                      ref={activeViewerRef}
-                      imageUrls={cellImageUrls}
-                      currentSlice={currentSlice}
-                      onSliceChange={setCurrentSlice}
-                      activeTool={activeTool}
-                      windowWidth={windowWidth}
-                      windowCenter={windowCenter}
-                      onWindowLevelChange={(ww, wc) => {
-                        setWindowWidth(ww);
-                        setWindowCenter(wc);
-                      }}
-                      onZoomChange={setZoomPercent}
-                      onCursor={setCursor}
-                      instances={cellInstances}
-                      savedAnnotations={savedAnnotations}
-                      onSaveAnnotation={handleSaveAnnotation}
-                      onRoiStats={setHuStats}
-                    />
-                  )
-                ) : (
-                  // Mosaïque 2D : N cellules de la MÊME série, chacune avec son
-                  // propre moteur/tool group/viewport (instanceKey unique). Seule
-                  // la cellule active pilote la barre d'outils, persiste les
-                  // annotations et reçoit l'id #cornerstone-viewport (capture).
-                  <div
-                    className={`absolute inset-0 ${layoutGridClass(
-                      viewportLayout
-                    )} gap-0.5 bg-border`}
-                  >
-                    {Array.from({
-                      length: layoutCellCount(viewportLayout),
-                    }).map((_, i) => {
-                      const isActive = i === activeCell;
-                      return (
+                  ) : viewMode === "2d" ? (
+                    comparePriorStudyId != null ? (
+                      // ── Mode comparatif : courant (gauche) + antériorité (droite).
+                      // Synchro ON → les 2 viewers partagent currentSlice + W/L (le
+                      // viewer droit est borné à son propre total de coupes).
+                      // Synchro OFF → le viewer droit a son état local prior*.
+                      <div className="absolute inset-0 grid grid-cols-2 gap-0.5 bg-border">
                         <div
-                          key={`cell-${i}`}
-                          id={isActive ? "cornerstone-viewport" : undefined}
-                          onMouseDownCapture={() => setActiveCell(i)}
-                          onWheelCapture={() => setActiveCell(i)}
-                          className={`relative bg-black overflow-hidden ring-inset ${
-                            isActive
-                              ? "ring-2 ring-primary"
-                              : "ring-1 ring-border"
-                          }`}
+                          id="cornerstone-viewport"
+                          className="relative bg-black overflow-hidden ring-1 ring-border"
                         >
                           <CornerstoneViewer
-                            ref={isActive ? activeViewerRef : undefined}
-                            instanceKey={`cell${i}`}
+                            ref={activeViewerRef}
                             imageUrls={cellImageUrls}
                             currentSlice={currentSlice}
-                            onSliceChange={
-                              isActive ? setCurrentSlice : () => {}
-                            }
+                            onSliceChange={setCurrentSlice}
                             activeTool={activeTool}
                             windowWidth={windowWidth}
                             windowCenter={windowCenter}
-                            onWindowLevelChange={
-                              isActive
-                                ? (ww, wc) => {
-                                    setWindowWidth(ww);
-                                    setWindowCenter(wc);
-                                  }
-                                : () => {}
-                            }
-                            onZoomChange={isActive ? setZoomPercent : undefined}
-                            onCursor={isActive ? setCursor : undefined}
+                            onWindowLevelChange={(ww, wc) => {
+                              setWindowWidth(ww);
+                              setWindowCenter(wc);
+                            }}
+                            onZoomChange={setZoomPercent}
                             instances={cellInstances}
-                            // Seule la cellule active hydrate/persiste les
-                            // annotations : évite la double-sauvegarde (les
-                            // événements d'annotation sont globaux à Cornerstone).
-                            savedAnnotations={
-                              isActive ? savedAnnotations : undefined
-                            }
-                            onSaveAnnotation={
-                              isActive ? handleSaveAnnotation : undefined
-                            }
-                            onRoiStats={isActive ? setHuStats : undefined}
+                            savedAnnotations={savedAnnotations}
+                            onSaveAnnotation={handleSaveAnnotation}
+                            onRoiStats={setHuStats}
                           />
                         </div>
-                      );
-                    })}
-                  </div>
-                )
-              ) : (
-                <VolumeViewer
-                  mode={viewMode === "3d" ? "3d" : "mpr"}
-                  imageUrls={volumeImageUrls}
-                  slabThicknessMm={slabThicknessMm}
-                  slabMode={slabMode}
-                  preset3d={preset3d}
-                  realistic3d={realistic3d}
-                  surface3d={surface3d}
-                  turntableNonce={turntableNonce}
-                  clipPlanes={clipPlanes}
-                  obliqueClip={obliqueClip}
-                  opacityPoints={opacityPoints}
-                  colorPoints={colorPoints}
-                  surfaceIso={suggestIsoForModality(study?.modality)}
-                  flyThruNonce={flyThruNonce}
-                  cropFraction={cropFraction}
-                  petImageUrls={fusionActive ? petImageUrls : undefined}
-                  fusionOpacity={fusionOpacity}
-                  petColormapId={petColormapId}
-                />
-              )}
-            </div>
+                        <div className="relative bg-black overflow-hidden ring-1 ring-border">
+                          {priorImageUrls.length > 0 ? (
+                            <CornerstoneViewer
+                              instanceKey="priorCompare"
+                              imageUrls={priorImageUrls}
+                              currentSlice={
+                                compareSyncOn
+                                  ? clampPriorSlice(
+                                      currentSlice,
+                                      priorImageUrls.length
+                                    )
+                                  : clampPriorSlice(
+                                      priorSlice,
+                                      priorImageUrls.length
+                                    )
+                              }
+                              onSliceChange={
+                                compareSyncOn ? setCurrentSlice : setPriorSlice
+                              }
+                              activeTool={activeTool}
+                              windowWidth={
+                                compareSyncOn ? windowWidth : priorWindowWidth
+                              }
+                              windowCenter={
+                                compareSyncOn ? windowCenter : priorWindowCenter
+                              }
+                              onWindowLevelChange={(ww, wc) => {
+                                if (compareSyncOn) {
+                                  setWindowWidth(ww);
+                                  setWindowCenter(wc);
+                                } else {
+                                  setPriorWindowWidth(ww);
+                                  setPriorWindowCenter(wc);
+                                }
+                              }}
+                              instances={priorInstances}
+                            />
+                          ) : (
+                            <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
+                              Aucune image dans cette antériorité
+                            </div>
+                          )}
+                          {/* En-tête : quel examen antérieur on regarde + sélecteur de série */}
+                          <div className="absolute top-2 left-2 right-2 flex items-center gap-2 text-[10px] font-mono text-amber-300/90 pointer-events-none">
+                            <span className="bg-black/60 px-1.5 py-0.5 rounded">
+                              ANTÉRIEUR · {comparedPrior?.modality || "?"} ·{" "}
+                              {comparedPrior?.studyDate || "date ?"}
+                            </span>
+                            {(priorSeriesList ?? []).length > 1 && (
+                              <select
+                                className="pointer-events-auto bg-black/70 border border-border rounded px-1 py-0.5 text-[10px] text-foreground"
+                                value={comparePriorSeriesId ?? ""}
+                                onChange={e =>
+                                  setComparePriorSeriesId(
+                                    Number(e.target.value)
+                                  )
+                                }
+                              >
+                                {(priorSeriesList ?? []).map((s: any) => (
+                                  <option key={s.id} value={s.id}>
+                                    {s.seriesDescription ||
+                                      s.modality ||
+                                      `Série ${s.id}`}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : viewportLayout === "1x1" ? (
+                      slab2dOn && reconstructable ? (
+                        // « Épaisseur 2D » : viewport volumique mono-plan (thick-slab
+                        // MIP/MinIP/Moyenne) à la place du StackViewport. Mirror du
+                        // chemin MPR (même imageUrls). Repli stack si la série n'est
+                        // pas reconstructible (toggle auto-désactivé en amont).
+                        <VolumeViewer
+                          mode="slab2d"
+                          imageUrls={volumeImageUrls}
+                          slabThicknessMm={slabThicknessMm}
+                          slabMode={slabMode}
+                        />
+                      ) : (
+                        // 1x1 : rendu STRICTEMENT identique à l'historique — un seul
+                        // CornerstoneViewer, sans instanceKey (ids historiques),
+                        // remplissant le conteneur #cornerstone-viewport.
+                        <CornerstoneViewer
+                          ref={activeViewerRef}
+                          imageUrls={cellImageUrls}
+                          currentSlice={currentSlice}
+                          onSliceChange={setCurrentSlice}
+                          activeTool={activeTool}
+                          windowWidth={windowWidth}
+                          windowCenter={windowCenter}
+                          onWindowLevelChange={(ww, wc) => {
+                            setWindowWidth(ww);
+                            setWindowCenter(wc);
+                          }}
+                          onZoomChange={setZoomPercent}
+                          onCursor={setCursor}
+                          instances={cellInstances}
+                          savedAnnotations={savedAnnotations}
+                          onSaveAnnotation={handleSaveAnnotation}
+                          onRoiStats={setHuStats}
+                        />
+                      )
+                    ) : (
+                      // Mosaïque 2D : N cellules de la MÊME série, chacune avec son
+                      // propre moteur/tool group/viewport (instanceKey unique). Seule
+                      // la cellule active pilote la barre d'outils, persiste les
+                      // annotations et reçoit l'id #cornerstone-viewport (capture).
+                      <div
+                        className={`absolute inset-0 ${layoutGridClass(
+                          viewportLayout
+                        )} gap-0.5 bg-border`}
+                      >
+                        {Array.from({
+                          length: layoutCellCount(viewportLayout),
+                        }).map((_, i) => {
+                          const isActive = i === activeCell;
+                          return (
+                            <div
+                              key={`cell-${i}`}
+                              id={isActive ? "cornerstone-viewport" : undefined}
+                              onMouseDownCapture={() => setActiveCell(i)}
+                              onWheelCapture={() => setActiveCell(i)}
+                              className={`relative bg-black overflow-hidden ring-inset ${
+                                isActive
+                                  ? "ring-2 ring-primary"
+                                  : "ring-1 ring-border"
+                              }`}
+                            >
+                              <CornerstoneViewer
+                                ref={isActive ? activeViewerRef : undefined}
+                                instanceKey={`cell${i}`}
+                                imageUrls={cellImageUrls}
+                                currentSlice={currentSlice}
+                                onSliceChange={
+                                  isActive ? setCurrentSlice : () => {}
+                                }
+                                activeTool={activeTool}
+                                windowWidth={windowWidth}
+                                windowCenter={windowCenter}
+                                onWindowLevelChange={
+                                  isActive
+                                    ? (ww, wc) => {
+                                        setWindowWidth(ww);
+                                        setWindowCenter(wc);
+                                      }
+                                    : () => {}
+                                }
+                                onZoomChange={
+                                  isActive ? setZoomPercent : undefined
+                                }
+                                onCursor={isActive ? setCursor : undefined}
+                                instances={cellInstances}
+                                // Seule la cellule active hydrate/persiste les
+                                // annotations : évite la double-sauvegarde (les
+                                // événements d'annotation sont globaux à Cornerstone).
+                                savedAnnotations={
+                                  isActive ? savedAnnotations : undefined
+                                }
+                                onSaveAnnotation={
+                                  isActive ? handleSaveAnnotation : undefined
+                                }
+                                onRoiStats={isActive ? setHuStats : undefined}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )
+                  ) : (
+                    <VolumeViewer
+                      mode={viewMode === "3d" ? "3d" : "mpr"}
+                      imageUrls={volumeImageUrls}
+                      slabThicknessMm={slabThicknessMm}
+                      slabMode={slabMode}
+                      preset3d={preset3d}
+                      realistic3d={realistic3d}
+                      surface3d={surface3d}
+                      turntableNonce={turntableNonce}
+                      clipPlanes={clipPlanes}
+                      obliqueClip={obliqueClip}
+                      opacityPoints={opacityPoints}
+                      colorPoints={colorPoints}
+                      surfaceIso={suggestIsoForModality(study?.modality)}
+                      flyThruNonce={flyThruNonce}
+                      cropFraction={cropFraction}
+                      petImageUrls={fusionActive ? petImageUrls : undefined}
+                      fusionOpacity={fusionOpacity}
+                      petColormapId={petColormapId}
+                    />
+                  )}
+                </div>
 
-            {/* Calque de caviardage (PHI brûlé). Affiche les rectangles déjà
+                {/* Calque de caviardage (PHI brûlé). Affiche les rectangles déjà
                 posés (toujours visibles en 2D) et, quand l'outil « Caviarder »
                 est actif, capte la souris pour tracer un nouveau rectangle. Les
                 zones sont recomposées en noir opaque sur les exports. */}
-            {viewMode === "2d" &&
-              viewportLayout === "1x1" &&
-              (currentRedactions.length > 0 || redactActive) && (
-                <div
-                  className="absolute inset-0"
-                  style={{
-                    pointerEvents: redactActive ? "auto" : "none",
-                    cursor: redactActive ? "crosshair" : "default",
-                    zIndex: 20,
-                  }}
-                  onMouseDown={redactActive ? handleRedactDown : undefined}
-                  onMouseMove={redactActive ? handleRedactMove : undefined}
-                  onMouseUp={redactActive ? handleRedactUp : undefined}
-                  onMouseLeave={
-                    redactActive
-                      ? () => redactDraft && setRedactDraft(null)
-                      : undefined
-                  }
-                >
-                  {/* Rectangles posés : noir opaque (rendu à l'identique de
+                {viewMode === "2d" &&
+                  viewportLayout === "1x1" &&
+                  (currentRedactions.length > 0 || redactActive) && (
+                    <div
+                      className="absolute inset-0"
+                      style={{
+                        pointerEvents: redactActive ? "auto" : "none",
+                        cursor: redactActive ? "crosshair" : "default",
+                        zIndex: 20,
+                      }}
+                      onMouseDown={redactActive ? handleRedactDown : undefined}
+                      onMouseMove={redactActive ? handleRedactMove : undefined}
+                      onMouseUp={redactActive ? handleRedactUp : undefined}
+                      onMouseLeave={
+                        redactActive
+                          ? () => redactDraft && setRedactDraft(null)
+                          : undefined
+                      }
+                    >
+                      {/* Rectangles posés : noir opaque (rendu à l'identique de
                       l'export). */}
-                  {currentRedactions.map((r, i) => (
-                    <div
-                      key={`redact-${i}`}
-                      className="absolute bg-black"
-                      style={{
-                        left: `${r.x * 100}%`,
-                        top: `${r.y * 100}%`,
-                        width: `${r.w * 100}%`,
-                        height: `${r.h * 100}%`,
-                      }}
-                    />
-                  ))}
-                  {/* Rectangle en cours de tracé (contour pointillé). */}
-                  {redactDraft && (
-                    <div
-                      className="absolute bg-black/70 border border-dashed border-white/70"
-                      style={{
-                        left: Math.min(redactDraft.startX, redactDraft.curX),
-                        top: Math.min(redactDraft.startY, redactDraft.curY),
-                        width: Math.abs(redactDraft.curX - redactDraft.startX),
-                        height: Math.abs(redactDraft.curY - redactDraft.startY),
-                      }}
-                    />
+                      {currentRedactions.map((r, i) => (
+                        <div
+                          key={`redact-${i}`}
+                          className="absolute bg-black"
+                          style={{
+                            left: `${r.x * 100}%`,
+                            top: `${r.y * 100}%`,
+                            width: `${r.w * 100}%`,
+                            height: `${r.h * 100}%`,
+                          }}
+                        />
+                      ))}
+                      {/* Rectangle en cours de tracé (contour pointillé). */}
+                      {redactDraft && (
+                        <div
+                          className="absolute bg-black/70 border border-dashed border-white/70"
+                          style={{
+                            left: Math.min(
+                              redactDraft.startX,
+                              redactDraft.curX
+                            ),
+                            top: Math.min(redactDraft.startY, redactDraft.curY),
+                            width: Math.abs(
+                              redactDraft.curX - redactDraft.startX
+                            ),
+                            height: Math.abs(
+                              redactDraft.curY - redactDraft.startY
+                            ),
+                          }}
+                        />
+                      )}
+                    </div>
                   )}
-                </div>
-              )}
 
-            {/* Barre de caviardage : annuler / tout effacer (2D, outil actif ou
+                {/* Barre de caviardage : annuler / tout effacer (2D, outil actif ou
                 zones présentes). */}
-            {viewMode === "2d" &&
-              viewportLayout === "1x1" &&
-              (redactActive || currentRedactions.length > 0) && (
-                <div
-                  className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-card/90 border border-border rounded px-2 py-1 text-[11px]"
-                  style={{ zIndex: 30 }}
-                >
-                  <span className="text-muted-foreground">
-                    Caviardage : {currentRedactions.length} zone(s)
-                  </span>
-                  <button
-                    className="px-2 py-0.5 rounded bg-secondary hover:bg-secondary/80 disabled:opacity-40"
-                    onClick={undoRedaction}
-                    disabled={currentRedactions.length === 0}
-                  >
-                    Annuler
-                  </button>
-                  <button
-                    className="px-2 py-0.5 rounded bg-secondary hover:bg-secondary/80 disabled:opacity-40"
-                    onClick={clearRedactions}
-                    disabled={currentRedactions.length === 0}
-                  >
-                    Tout effacer
-                  </button>
-                </div>
-              )}
+                {viewMode === "2d" &&
+                  viewportLayout === "1x1" &&
+                  (redactActive || currentRedactions.length > 0) && (
+                    <div
+                      className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-card/90 border border-border rounded px-2 py-1 text-[11px]"
+                      style={{ zIndex: 30 }}
+                    >
+                      <span className="text-muted-foreground">
+                        Caviardage : {currentRedactions.length} zone(s)
+                      </span>
+                      <button
+                        className="px-2 py-0.5 rounded bg-secondary hover:bg-secondary/80 disabled:opacity-40"
+                        onClick={undoRedaction}
+                        disabled={currentRedactions.length === 0}
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        className="px-2 py-0.5 rounded bg-secondary hover:bg-secondary/80 disabled:opacity-40"
+                        onClick={clearRedactions}
+                        disabled={currentRedactions.length === 0}
+                      >
+                        Tout effacer
+                      </button>
+                    </div>
+                  )}
 
-            {/* Overlay - Patient Info (top-left) — niveau « full » uniquement
+                {/* Overlay - Patient Info (top-left) — niveau « full » uniquement
                 (équivalent « Full (Patient Name) » de Horos) */}
-            {study && annotationLevel === "full" && (
-              <div className="absolute top-3 left-3 text-[11px] text-green-400/80 font-mono space-y-0.5 pointer-events-none">
-                <div>{study.patientName || "Unknown"}</div>
-                <div>{study.patientId || ""}</div>
-                <div>{study.studyDate || ""}</div>
-                <div>{study.studyDescription || ""}</div>
-              </div>
-            )}
+                {study && annotationLevel === "full" && (
+                  <div className="absolute top-3 left-3 text-[11px] text-green-400/80 font-mono space-y-0.5 pointer-events-none">
+                    <div>{study.patientName || "Unknown"}</div>
+                    <div>{study.patientId || ""}</div>
+                    <div>{study.studyDate || ""}</div>
+                    <div>{study.studyDescription || ""}</div>
+                  </div>
+                )}
 
-            {/* Overlay - Window/Level (top-right) — masqué au niveau « none » */}
-            {annotationLevel !== "none" && (
-              <div className="absolute top-3 right-3 text-[11px] text-green-400/80 font-mono space-y-0.5 pointer-events-none text-right">
-                <div>WW: {windowWidth}</div>
-                <div>WC: {windowCenter}</div>
-                <div>
-                  Slice: {currentSlice + 1}/{totalSlices}
-                </div>
-              </div>
-            )}
+                {/* Overlay - Window/Level (top-right) — masqué au niveau « none » */}
+                {annotationLevel !== "none" && (
+                  <div className="absolute top-3 right-3 text-[11px] text-green-400/80 font-mono space-y-0.5 pointer-events-none text-right">
+                    <div>WW: {windowWidth}</div>
+                    <div>WC: {windowCenter}</div>
+                    <div>
+                      Slice: {currentSlice + 1}/{totalSlices}
+                    </div>
+                  </div>
+                )}
 
-            {/* Overlay - HU Statistics (bottom-left) */}
-            {/* Barre CLUT (« Color Look Up Table Bar ») : palette active + bornes */}
-            {viewMode === "2d" && clutGradient && (
-              <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1">
-                <span className="font-mono text-[9px] text-green-400/80">
-                  {Math.round(windowCenter + windowWidth / 2)}
-                </span>
+                {/* Overlay - HU Statistics (bottom-left) */}
+                {/* Barre CLUT (« Color Look Up Table Bar ») : palette active + bornes */}
+                {viewMode === "2d" && clutGradient && (
+                  <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1">
+                    <span className="font-mono text-[9px] text-green-400/80">
+                      {Math.round(windowCenter + windowWidth / 2)}
+                    </span>
+                    <div
+                      className="h-32 w-3 rounded-sm border border-green-400/30"
+                      style={{ background: clutGradient }}
+                    />
+                    <span className="font-mono text-[9px] text-green-400/80">
+                      {Math.round(windowCenter - windowWidth / 2)}
+                    </span>
+                  </div>
+                )}
+                {/* Étiquettes d'orientation anatomique aux bords (A/P/L/R/H/F) */}
+                {viewMode === "2d" && orientLabels && (
+                  <div className="pointer-events-none absolute inset-0 text-[11px] font-mono font-semibold text-green-400/70">
+                    <span className="absolute top-1 left-1/2 -translate-x-1/2">
+                      {orientLabels.top}
+                    </span>
+                    <span className="absolute bottom-9 left-1/2 -translate-x-1/2">
+                      {orientLabels.bottom}
+                    </span>
+                    <span className="absolute left-1 top-1/2 -translate-y-1/2">
+                      {orientLabels.left}
+                    </span>
+                    <span className="absolute right-1 top-1/2 -translate-y-1/2">
+                      {orientLabels.right}
+                    </span>
+                  </div>
+                )}
                 <div
-                  className="h-32 w-3 rounded-sm border border-green-400/30"
-                  style={{ background: clutGradient }}
-                />
-                <span className="font-mono text-[9px] text-green-400/80">
-                  {Math.round(windowCenter - windowWidth / 2)}
-                </span>
-              </div>
-            )}
-            {/* Étiquettes d'orientation anatomique aux bords (A/P/L/R/H/F) */}
-            {viewMode === "2d" && orientLabels && (
-              <div className="pointer-events-none absolute inset-0 text-[11px] font-mono font-semibold text-green-400/70">
-                <span className="absolute top-1 left-1/2 -translate-x-1/2">
-                  {orientLabels.top}
-                </span>
-                <span className="absolute bottom-9 left-1/2 -translate-x-1/2">
-                  {orientLabels.bottom}
-                </span>
-                <span className="absolute left-1 top-1/2 -translate-y-1/2">
-                  {orientLabels.left}
-                </span>
-                <span className="absolute right-1 top-1/2 -translate-y-1/2">
-                  {orientLabels.right}
-                </span>
-              </div>
-            )}
-            <div
-              className="absolute bottom-3 left-3 text-[10px] text-green-400/60 font-mono pointer-events-none"
-              style={{
-                display: annotationLevel === "none" ? "none" : undefined,
-              }}
-            >
-              <div>Zoom: {zoomPercent}%</div>
-              {/* Lecture curseur façon Horos : px + mm (si calibré) + valeur. */}
-              {viewMode === "2d" && cursor && (
-                <div className="mt-0.5">{formatCursorReadout(cursor)}</div>
-              )}
-              {/* Infos image (dimensions) — angle omis si non disponible. */}
-              {viewMode === "2d" &&
-                formatImageInfo({
-                  cols: imageDims?.cols,
-                  rows: imageDims?.rows,
-                }).map((line, i) => (
-                  <div key={`imginfo-${i}`} className="mt-0.5">
-                    {line}
-                  </div>
-                ))}
-              {huStats && (
-                <div className="mt-1 border border-green-400/30 rounded px-2 py-1 bg-black/60">
-                  <div className="text-green-400/90 font-semibold text-[9px] mb-0.5">
-                    ROI Statistics (HU)
-                  </div>
-                  <div>Mean: {huStats.mean.toFixed(1)} HU</div>
-                  <div>StdDev: {huStats.stdDev.toFixed(1)} HU</div>
-                  <div>
-                    Min: {huStats.min.toFixed(0)} / Max:{" "}
-                    {huStats.max.toFixed(0)}
-                  </div>
-                  <div>Area: {huStats.area.toFixed(1)} mm²</div>
-                  {huStats.histogram && huStats.histogram.length > 0 && (
-                    <div className="mt-1">
-                      <div className="text-green-400/70 text-[8px] mb-0.5">
-                        Histogramme
+                  className="absolute bottom-3 left-3 text-[10px] text-green-400/60 font-mono pointer-events-none"
+                  style={{
+                    display: annotationLevel === "none" ? "none" : undefined,
+                  }}
+                >
+                  <div>Zoom: {zoomPercent}%</div>
+                  {/* Lecture curseur façon Horos : px + mm (si calibré) + valeur. */}
+                  {viewMode === "2d" && cursor && (
+                    <div className="mt-0.5">{formatCursorReadout(cursor)}</div>
+                  )}
+                  {/* Infos image (dimensions) — angle omis si non disponible. */}
+                  {viewMode === "2d" &&
+                    formatImageInfo({
+                      cols: imageDims?.cols,
+                      rows: imageDims?.rows,
+                    }).map((line, i) => (
+                      <div key={`imginfo-${i}`} className="mt-0.5">
+                        {line}
                       </div>
-                      <div className="flex items-end gap-px h-8 w-40">
-                        {(() => {
-                          const max = Math.max(...huStats.histogram!, 1);
-                          return huStats.histogram!.map((c, i) => (
-                            <div
-                              key={i}
-                              className="flex-1 bg-green-400/50"
-                              style={{
-                                height: `${Math.max(1, (c / max) * 100)}%`,
-                              }}
-                              title={`${c}`}
-                            />
-                          ));
-                        })()}
+                    ))}
+                  {huStats && (
+                    <div className="mt-1 border border-green-400/30 rounded px-2 py-1 bg-black/60">
+                      <div className="text-green-400/90 font-semibold text-[9px] mb-0.5">
+                        ROI Statistics (HU)
                       </div>
+                      <div>Mean: {huStats.mean.toFixed(1)} HU</div>
+                      <div>StdDev: {huStats.stdDev.toFixed(1)} HU</div>
+                      <div>
+                        Min: {huStats.min.toFixed(0)} / Max:{" "}
+                        {huStats.max.toFixed(0)}
+                      </div>
+                      <div>Area: {huStats.area.toFixed(1)} mm²</div>
+                      {huStats.histogram && huStats.histogram.length > 0 && (
+                        <div className="mt-1">
+                          <div className="text-green-400/70 text-[8px] mb-0.5">
+                            Histogramme
+                          </div>
+                          <div className="flex items-end gap-px h-8 w-40">
+                            {(() => {
+                              const max = Math.max(...huStats.histogram!, 1);
+                              return huStats.histogram!.map((c, i) => (
+                                <div
+                                  key={i}
+                                  className="flex-1 bg-green-400/50"
+                                  style={{
+                                    height: `${Math.max(1, (c / max) * 100)}%`,
+                                  }}
+                                  title={`${c}`}
+                                />
+                              ));
+                            })()}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
-            </div>
 
-            {/* Report panel — overlays the right side of the viewport */}
-            {reportOpen && study && (
-              <ReportPanel
-                key={study.id}
-                studyId={study.id}
-                seriesId={selectedSeries!}
-                windowWidth={windowWidth}
-                windowCenter={windowCenter}
-                keyImages={reportKeyImages}
-                seriesList={seriesList as any}
-                onRemoveKeyImage={i =>
-                  setReportKeyImages(p => p.filter((_, idx) => idx !== i))
-                }
-                onAddKeyImage={img => setReportKeyImages(p => [...p, img])}
-                comparePriorStudyId={comparePriorStudyId}
-                comparePriorSeriesId={comparePriorSeriesId}
-                studyModality={study.modality ?? null}
-                onClose={() => setReportOpen(false)}
-              />
-            )}
+                {/* Report panel — overlays the right side of the viewport */}
+                {reportOpen && study && (
+                  <ReportPanel
+                    key={study.id}
+                    studyId={study.id}
+                    seriesId={selectedSeries!}
+                    windowWidth={windowWidth}
+                    windowCenter={windowCenter}
+                    keyImages={reportKeyImages}
+                    seriesList={seriesList as any}
+                    onRemoveKeyImage={i =>
+                      setReportKeyImages(p => p.filter((_, idx) => idx !== i))
+                    }
+                    onAddKeyImage={img => setReportKeyImages(p => [...p, img])}
+                    comparePriorStudyId={comparePriorStudyId}
+                    comparePriorSeriesId={comparePriorSeriesId}
+                    studyModality={study.modality ?? null}
+                    onClose={() => setReportOpen(false)}
+                  />
+                )}
 
-            {/* Chat Hermès radiologue — overlay autonome côté droit */}
-            {hermesOpen && study && (
-              <HermesChatPanel
-                studyId={study.id}
-                onClose={() => setHermesOpen(false)}
-              />
-            )}
+                {/* Chat Hermès radiologue — overlay autonome côté droit */}
+                {hermesOpen && study && (
+                  <HermesChatPanel
+                    studyId={study.id}
+                    onClose={() => setHermesOpen(false)}
+                  />
+                )}
 
-            {/* Panneau Curved MPR (bêta) : overlay autonome, n'altère pas les
+                {/* Panneau Curved MPR (bêta) : overlay autonome, n'altère pas les
                 viewports. Disponible en mode MPR (volume chargé). */}
-            {curvedMprOpen && viewMode === "mpr" && (
-              <CurvedMprPanel onClose={() => setCurvedMprOpen(false)} />
-            )}
-          </div>
+                {curvedMprOpen && viewMode === "mpr" && (
+                  <CurvedMprPanel onClose={() => setCurvedMprOpen(false)} />
+                )}
+              </div>
 
-          {/* Bottom Controls */}
-          <div className="h-10 border-t border-border bg-card flex items-center px-3 gap-3 shrink-0">
-            {/* En 3D (volume rendering / surface / fly-thru), pas de notion de
+              {/* Bottom Controls */}
+              <div className="h-10 border-t border-border bg-card flex items-center px-3 gap-3 shrink-0">
+                {/* En 3D (volume rendering / surface / fly-thru), pas de notion de
                 « coupe » : on navigue en faisant pivoter le volume, pas en
                 avançant/reculant. On masque donc la nav de coupes + le ciné et
                 on affiche un indice d'interaction. */}
-            {viewMode === "3d" && (
-              <div className="flex-1 text-[10px] text-muted-foreground">
-                Volume 3D — glissez pour pivoter · molette ou clic droit : zoom
-                · clic du milieu : déplacer
-              </div>
-            )}
-            {viewMode !== "3d" && (
-              <>
-                {/* Slice navigation */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={() => setCurrentSlice(0)}
-                >
-                  <SkipBack className="w-3 h-3" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={() => setCurrentSlice(prev => Math.max(0, prev - 1))}
-                >
-                  <ChevronLeft className="w-3 h-3" />
-                </Button>
+                {viewMode === "3d" && (
+                  <div className="flex-1 text-[10px] text-muted-foreground">
+                    Volume 3D — glissez pour pivoter · molette ou clic droit :
+                    zoom · clic du milieu : déplacer
+                  </div>
+                )}
+                {viewMode !== "3d" && (
+                  <>
+                    {/* Slice navigation */}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() => setCurrentSlice(0)}
+                    >
+                      <SkipBack className="w-3 h-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() =>
+                        setCurrentSlice(prev => Math.max(0, prev - 1))
+                      }
+                    >
+                      <ChevronLeft className="w-3 h-3" />
+                    </Button>
 
-                <div className="flex-1 flex items-center gap-2">
-                  <Slider
-                    value={[currentSlice]}
-                    max={Math.max(0, totalSlices - 1)}
-                    step={1}
-                    onValueChange={([v]) => setCurrentSlice(v)}
-                    className="flex-1"
-                  />
-                  <span className="text-[10px] text-muted-foreground font-mono w-16 text-right">
-                    {currentSlice + 1} / {totalSlices}
-                  </span>
-                </div>
+                    <div className="flex-1 flex items-center gap-2">
+                      <Slider
+                        value={[currentSlice]}
+                        max={Math.max(0, totalSlices - 1)}
+                        step={1}
+                        onValueChange={([v]) => setCurrentSlice(v)}
+                        className="flex-1"
+                      />
+                      <span className="text-[10px] text-muted-foreground font-mono w-16 text-right">
+                        {currentSlice + 1} / {totalSlices}
+                      </span>
+                    </div>
 
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={() =>
-                    setCurrentSlice(prev => Math.min(totalSlices - 1, prev + 1))
-                  }
-                >
-                  <ChevronRight className="w-3 h-3" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={() => setCurrentSlice(totalSlices - 1)}
-                >
-                  <SkipForward className="w-3 h-3" />
-                </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() =>
+                        setCurrentSlice(prev =>
+                          Math.min(totalSlices - 1, prev + 1)
+                        )
+                      }
+                    >
+                      <ChevronRight className="w-3 h-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() => setCurrentSlice(totalSlices - 1)}
+                    >
+                      <SkipForward className="w-3 h-3" />
+                    </Button>
+
+                    <Separator orientation="vertical" className="h-6" />
+
+                    {/* Ciné / boucle */}
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6"
+                        onClick={toggleCine}
+                        disabled={totalSlices <= 1}
+                        title={
+                          cinePlaying
+                            ? "Pause (Espace)"
+                            : "Lecture en boucle (Espace)"
+                        }
+                      >
+                        {cinePlaying ? (
+                          <Pause className="w-3 h-3" />
+                        ) : (
+                          <Play className="w-3 h-3" />
+                        )}
+                      </Button>
+                      <select
+                        value={cineFps}
+                        onChange={e => setCineFps(Number(e.target.value))}
+                        className="bg-transparent text-[10px] border border-border rounded px-1 py-0.5 text-muted-foreground"
+                        title="Cadence du ciné (images/seconde)"
+                      >
+                        {CINE_FPS_OPTIONS.map(fps => (
+                          <option key={fps} value={fps}>
+                            {fps} ips
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
 
                 <Separator orientation="vertical" className="h-6" />
 
-                {/* Ciné / boucle */}
+                {/* W/L Presets */}
                 <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6"
-                    onClick={toggleCine}
-                    disabled={totalSlices <= 1}
-                    title={
-                      cinePlaying
-                        ? "Pause (Espace)"
-                        : "Lecture en boucle (Espace)"
-                    }
-                  >
-                    {cinePlaying ? (
-                      <Pause className="w-3 h-3" />
-                    ) : (
-                      <Play className="w-3 h-3" />
-                    )}
-                  </Button>
-                  <select
-                    value={cineFps}
-                    onChange={e => setCineFps(Number(e.target.value))}
-                    className="bg-transparent text-[10px] border border-border rounded px-1 py-0.5 text-muted-foreground"
-                    title="Cadence du ciné (images/seconde)"
-                  >
-                    {CINE_FPS_OPTIONS.map(fps => (
-                      <option key={fps} value={fps}>
-                        {fps} ips
-                      </option>
-                    ))}
-                  </select>
+                  {QUICK_PRESETS.map(preset => (
+                    <button
+                      key={preset.name}
+                      onClick={() => {
+                        setWindowWidth(preset.ww);
+                        setWindowCenter(preset.wc);
+                      }}
+                      className="text-[9px] px-2 py-1 rounded bg-secondary hover:bg-accent text-secondary-foreground transition-colors"
+                      title={`${preset.name} (WW:${preset.ww} WC:${preset.wc})`}
+                    >
+                      {preset.name}
+                    </button>
+                  ))}
                 </div>
-              </>
-            )}
-
-            <Separator orientation="vertical" className="h-6" />
-
-            {/* W/L Presets */}
-            <div className="flex items-center gap-1">
-              {QUICK_PRESETS.map(preset => (
-                <button
-                  key={preset.name}
-                  onClick={() => {
-                    setWindowWidth(preset.ww);
-                    setWindowCenter(preset.wc);
-                  }}
-                  className="text-[9px] px-2 py-1 rounded bg-secondary hover:bg-accent text-secondary-foreground transition-colors"
-                  title={`${preset.name} (WW:${preset.ww} WC:${preset.wc})`}
-                >
-                  {preset.name}
-                </button>
-              ))}
+              </div>
             </div>
-          </div>
-        </div>
 
-        {/* Right Panel - Info (masqué sous lg : métadonnées secondaires) */}
-        <div className="hidden lg:flex w-56 border-l border-border bg-sidebar flex-col shrink-0">
-          <div className="p-3 border-b border-border">
-            <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-              Study Info
-            </h3>
-          </div>
-          <ScrollArea className="flex-1">
-            <div className="p-3 space-y-3">
-              {study ? (
-                <>
-                  <InfoRow label="Patient" value={study.patientName || "-"} />
-                  <InfoRow label="DOB" value={study.birthDate || "-"} />
-                  <InfoRow label="Study Date" value={study.studyDate || "-"} />
-                  <InfoRow label="Modality" value={study.modality || "-"} />
-                  <InfoRow
-                    label="Description"
-                    value={study.studyDescription || "-"}
-                  />
-                  <InfoRow
-                    label="Institution"
-                    value={study.institution || "-"}
-                  />
-                  <InfoRow
-                    label="Referring"
-                    value={study.referringPhysician || "-"}
-                  />
-                  <InfoRow
-                    label="Series"
-                    value={String(study.numberOfSeries || 0)}
-                  />
-                  <InfoRow
-                    label="Images"
-                    value={String(study.numberOfInstances || 0)}
-                  />
-                  <Separator className="my-2" />
-                  <InfoRow label="Window Width" value={String(windowWidth)} />
-                  <InfoRow label="Window Center" value={String(windowCenter)} />
-                  <InfoRow
-                    label="Current Slice"
-                    value={`${currentSlice + 1}/${totalSlices}`}
-                  />
-                </>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  No study selected
-                </p>
-              )}
-            </div>
-          </ScrollArea>
+            {/* Right Panel - Info (masqué sous lg : métadonnées secondaires) */}
+            <div className="hidden lg:flex w-56 border-l border-border bg-sidebar flex-col shrink-0">
+              <div className="p-3 border-b border-border">
+                <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
+                  Study Info
+                </h3>
+              </div>
+              <ScrollArea className="flex-1">
+                <div className="p-3 space-y-3">
+                  {study ? (
+                    <>
+                      <InfoRow
+                        label="Patient"
+                        value={study.patientName || "-"}
+                      />
+                      <InfoRow label="DOB" value={study.birthDate || "-"} />
+                      <InfoRow
+                        label="Study Date"
+                        value={study.studyDate || "-"}
+                      />
+                      <InfoRow label="Modality" value={study.modality || "-"} />
+                      <InfoRow
+                        label="Description"
+                        value={study.studyDescription || "-"}
+                      />
+                      <InfoRow
+                        label="Institution"
+                        value={study.institution || "-"}
+                      />
+                      <InfoRow
+                        label="Referring"
+                        value={study.referringPhysician || "-"}
+                      />
+                      <InfoRow
+                        label="Series"
+                        value={String(study.numberOfSeries || 0)}
+                      />
+                      <InfoRow
+                        label="Images"
+                        value={String(study.numberOfInstances || 0)}
+                      />
+                      <Separator className="my-2" />
+                      <InfoRow
+                        label="Window Width"
+                        value={String(windowWidth)}
+                      />
+                      <InfoRow
+                        label="Window Center"
+                        value={String(windowCenter)}
+                      />
+                      <InfoRow
+                        label="Current Slice"
+                        value={`${currentSlice + 1}/${totalSlices}`}
+                      />
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No study selected
+                    </p>
+                  )}
+                </div>
+              </ScrollArea>
 
-          {/* W/L Presets Panel */}
-          <div className="border-t border-border p-3">
-            <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
-              W/L Presets
-            </h3>
-            <div className="space-y-1">
-              {WL_PRESETS.map(preset => (
-                <button
-                  key={preset.name}
-                  onClick={() => {
-                    setWindowWidth(preset.ww);
-                    setWindowCenter(preset.wc);
-                  }}
-                  className="w-full text-left text-[10px] px-2 py-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
-                >
-                  {preset.name}{" "}
-                  <span className="text-muted-foreground/60">
-                    ({preset.ww}/{preset.wc})
-                  </span>
-                </button>
-              ))}
+              {/* W/L Presets Panel */}
+              <div className="border-t border-border p-3">
+                <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
+                  W/L Presets
+                </h3>
+                <div className="space-y-1">
+                  {WL_PRESETS.map(preset => (
+                    <button
+                      key={preset.name}
+                      onClick={() => {
+                        setWindowWidth(preset.ww);
+                        setWindowCenter(preset.wc);
+                      }}
+                      className="w-full text-left text-[10px] px-2 py-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+                    >
+                      {preset.name}{" "}
+                      <span className="text-muted-foreground/60">
+                        ({preset.ww}/{preset.wc})
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          </>
+        )}
       </div>
     </div>
   );

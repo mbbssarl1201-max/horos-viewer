@@ -65,7 +65,7 @@ import {
   ClipboardList,
   LayoutDashboard,
 } from "lucide-react";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import CockpitMediView from "@/pages/CockpitMediView";
 import { matchAllFields } from "@/lib/studySearch";
 import { matchesTodayModality } from "@/lib/quickAlbums";
@@ -125,6 +125,21 @@ function recordOpenedId(id: number): number[] {
 }
 
 // Parse une date d'étude (DICOM YYYYMMDD ou ISO) ou un timestamp → ms, ou null.
+function formatStudyDate(v: unknown): string {
+  if (v == null) return "-";
+  const s = String(v).trim();
+  // Format DICOM YYYYMMDD
+  if (/^\d{8}$/.test(s)) {
+    return `${s.slice(6, 8)}.${s.slice(4, 6)}.${s.slice(0, 4)}`;
+  }
+  // ISO ou autre format reconnaissable
+  const t = Date.parse(s);
+  if (Number.isFinite(t)) {
+    return new Date(t).toLocaleDateString("fr-CH");
+  }
+  return s || "-";
+}
+
 function parseStudyMs(v: unknown): number | null {
   if (v == null) return null;
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
@@ -286,6 +301,34 @@ export default function Home() {
           : `Échec de l'envoi : ${err.message}`
       ),
   });
+
+  // Écouter les commandes Eva pour contrôler l'app
+  useEffect(() => {
+    const onAlbum = (e: Event) => {
+      const albumKey = (e as CustomEvent<string>).detail;
+      if (!albumKey) return;
+      // Gère "today:CT" → modality CT + timeFilter today
+      const [prefix, modality] = albumKey.split(":");
+      if (prefix === "today" && modality) {
+        setSelectedAlbum("database");
+        setSelectedModality(modality);
+        setTimeFilter("today");
+      } else {
+        setSelectedAlbum(albumKey);
+        setSelectedModality(null);
+        setTimeFilter("none");
+      }
+    };
+    const onSearch = (e: Event) => {
+      setSearchQuery((e as CustomEvent<string>).detail ?? "");
+    };
+    window.addEventListener("eva:selectAlbum", onAlbum);
+    window.addEventListener("eva:search", onSearch);
+    return () => {
+      window.removeEventListener("eva:selectAlbum", onAlbum);
+      window.removeEventListener("eva:search", onSearch);
+    };
+  }, []);
 
   const allStudies = studiesData ?? [];
   // Filtrage par smart album (côté client) PUIS recherche multi-champs façon
@@ -700,195 +743,199 @@ export default function Home() {
       </div>
 
       {/* Main Content */}
-      <div className="flex flex-1 overflow-hidden">
-        {cockpitOpen ? (
-          <CockpitMediView embedded />
-        ) : (
-          <div className="w-52 border-r border-border bg-sidebar flex flex-col shrink-0">
-            <div className="flex-1 overflow-y-auto min-h-0">
-              {/* Albums */}
-              <div className="p-3">
-                <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
-                  Albums
-                </h3>
-                <div className="space-y-0.5">
-                  {SMART_ALBUMS.map(album => (
+      <div className="flex flex-1 overflow-hidden min-w-0">
+        {cockpitOpen && (
+          <div className="w-64 lg:w-72 shrink-0 border-r border-slate-800 overflow-hidden">
+            <CockpitMediView embedded />
+          </div>
+        )}
+        {/* Albums sidebar — masquée sur petit écran quand Eva est ouverte */}
+        <div
+          className={`border-r border-border bg-sidebar flex flex-col shrink-0 ${cockpitOpen ? "hidden md:flex w-44 lg:w-52" : "w-52"}`}
+        >
+          <div className="flex-1 overflow-y-auto min-h-0">
+            {/* Albums */}
+            <div className="p-3">
+              <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
+                Albums
+              </h3>
+              <div className="space-y-0.5">
+                {SMART_ALBUMS.map(album => (
+                  <button
+                    key={album.key}
+                    onClick={() => setSelectedAlbum(album.key)}
+                    className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
+                      selectedAlbum === album.key
+                        ? "bg-primary/20 text-primary"
+                        : "text-sidebar-foreground hover:bg-sidebar-accent"
+                    }`}
+                  >
+                    <album.icon className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{album.label}</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground">
+                      {
+                        allStudies.filter((s: any) =>
+                          albumMatches(s, album.key, openedIds)
+                        ).length
+                      }
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* File à signer — brouillons IA en attente de signature */}
+            <div className="p-3">
+              <PendingSignatureList onOpen={openStudy} />
+            </div>
+
+            <Separator />
+
+            {/* Recherche patient Hermès */}
+            <div className="p-3">
+              <HermesFinder onOpen={openStudy} />
+            </div>
+
+            <Separator />
+
+            {/* Today's Studies by modality */}
+            <div className="p-3">
+              <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
+                Today's Studies
+              </h3>
+              <div className="space-y-0.5">
+                {ALL_MODALITIES.slice(0, 10).map(mod => {
+                  const albumKey = `today:${mod.key}`;
+                  const count = allStudies.filter((s: any) =>
+                    albumMatches(s, albumKey, openedIds)
+                  ).length;
+                  return (
                     <button
-                      key={album.key}
-                      onClick={() => setSelectedAlbum(album.key)}
+                      key={mod.key}
+                      onClick={() =>
+                        setSelectedAlbum(
+                          selectedAlbum === albumKey ? "database" : albumKey
+                        )
+                      }
                       className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
-                        selectedAlbum === album.key
+                        selectedAlbum === albumKey
                           ? "bg-primary/20 text-primary"
                           : "text-sidebar-foreground hover:bg-sidebar-accent"
                       }`}
                     >
-                      <album.icon className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">{album.label}</span>
+                      <span className="w-6 font-mono text-[10px] shrink-0">
+                        {mod.key}
+                      </span>
+                      <span className="truncate text-[10px]">
+                        {mod.description}
+                      </span>
                       <span className="ml-auto text-[10px] text-muted-foreground">
-                        {
-                          allStudies.filter((s: any) =>
-                            albumMatches(s, album.key, openedIds)
-                          ).length
-                        }
+                        {count}
                       </span>
                     </button>
-                  ))}
-                </div>
-              </div>
-
-              <Separator />
-
-              {/* File à signer — brouillons IA en attente de signature */}
-              <div className="p-3">
-                <PendingSignatureList onOpen={openStudy} />
-              </div>
-
-              <Separator />
-
-              {/* Recherche patient Hermès */}
-              <div className="p-3">
-                <HermesFinder onOpen={openStudy} />
-              </div>
-
-              <Separator />
-
-              {/* Today's Studies by modality */}
-              <div className="p-3">
-                <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
-                  Today's Studies
-                </h3>
-                <div className="space-y-0.5">
-                  {ALL_MODALITIES.slice(0, 10).map(mod => {
-                    const albumKey = `today:${mod.key}`;
-                    const count = allStudies.filter((s: any) =>
-                      albumMatches(s, albumKey, openedIds)
-                    ).length;
-                    return (
-                      <button
-                        key={mod.key}
-                        onClick={() =>
-                          setSelectedAlbum(
-                            selectedAlbum === albumKey ? "database" : albumKey
-                          )
-                        }
-                        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
-                          selectedAlbum === albumKey
-                            ? "bg-primary/20 text-primary"
-                            : "text-sidebar-foreground hover:bg-sidebar-accent"
-                        }`}
-                      >
-                        <span className="w-6 font-mono text-[10px] shrink-0">
-                          {mod.key}
-                        </span>
-                        <span className="truncate text-[10px]">
-                          {mod.description}
-                        </span>
-                        <span className="ml-auto text-[10px] text-muted-foreground">
-                          {count}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <Separator />
-
-              {/* Sources */}
-              <div className="p-3">
-                <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 flex items-center justify-between">
-                  <span>Sources</span>
-                  <button
-                    onClick={() => setShowAddServer(true)}
-                    className="hover:text-primary"
-                  >
-                    <Plus className="w-3 h-3" />
-                  </button>
-                </h3>
-                <div className="space-y-0.5">
-                  <button className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs bg-primary/10 text-primary">
-                    <Database className="w-3.5 h-3.5" />
-                    <span>Documents DB</span>
-                  </button>
-                  {(pacsServersList || []).map((srv: any) => (
-                    <button
-                      key={srv.id}
-                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-sidebar-foreground hover:bg-sidebar-accent group"
-                      onClick={() => setShowQueryPACS(true)}
-                    >
-                      <Server className="w-3.5 h-3.5" />
-                      <span className="text-[10px] flex-1 text-left truncate">
-                        {srv.name}
-                      </span>
-                      <Trash2
-                        className="w-3 h-3 opacity-0 group-hover:opacity-100 text-destructive hover:text-destructive"
-                        onClick={e => {
-                          e.stopPropagation();
-                          deletePacsServer.mutate({ id: srv.id });
-                        }}
-                      />
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <Separator />
-
-              {/* Réglages agent CR autonome */}
-              <div className="p-3">
-                <AgentCrSettings />
-              </div>
-
-              <Separator />
-
-              {/* Dashboard agents Hermès */}
-              <div className="p-3">
-                <AgentsDashboard />
-              </div>
-
-              <Separator />
-
-              {/* Carnet des référents */}
-              <div className="p-3">
-                <ReferentDirectory />
+                  );
+                })}
               </div>
             </div>
 
-            {/* Activity */}
-            <div className="p-3 border-t border-border">
-              <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1">
-                Activity
+            <Separator />
+
+            {/* Sources */}
+            <div className="p-3">
+              <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 flex items-center justify-between">
+                <span>Sources</span>
+                <button
+                  onClick={() => setShowAddServer(true)}
+                  className="hover:text-primary"
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
               </h3>
-              {(() => {
-                const recent = openedIds
-                  .map(id => allStudies.find((s: any) => s.id === id))
-                  .filter(Boolean)
-                  .slice(0, 6);
-                if (recent.length === 0)
-                  return (
-                    <p className="text-[10px] text-muted-foreground">
-                      Aucune activité récente
-                    </p>
-                  );
-                return (
-                  <div className="space-y-0.5">
-                    {recent.map((s: any) => (
-                      <button
-                        key={s.id}
-                        onClick={() => navigate(`/viewer/${s.id}`)}
-                        className="w-full text-left text-[10px] text-muted-foreground hover:text-foreground truncate"
-                        title={`${s.patientName || "?"} — ${s.modality || ""} ${s.studyDescription || ""}`}
-                      >
-                        • {s.patientName || "Sans nom"}{" "}
-                        <span className="opacity-60">{s.modality || ""}</span>
-                      </button>
-                    ))}
-                  </div>
-                );
-              })()}
+              <div className="space-y-0.5">
+                <button className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs bg-primary/10 text-primary">
+                  <Database className="w-3.5 h-3.5" />
+                  <span>Documents DB</span>
+                </button>
+                {(pacsServersList || []).map((srv: any) => (
+                  <button
+                    key={srv.id}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-sidebar-foreground hover:bg-sidebar-accent group"
+                    onClick={() => setShowQueryPACS(true)}
+                  >
+                    <Server className="w-3.5 h-3.5" />
+                    <span className="text-[10px] flex-1 text-left truncate">
+                      {srv.name}
+                    </span>
+                    <Trash2
+                      className="w-3 h-3 opacity-0 group-hover:opacity-100 text-destructive hover:text-destructive"
+                      onClick={e => {
+                        e.stopPropagation();
+                        deletePacsServer.mutate({ id: srv.id });
+                      }}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Réglages agent CR autonome */}
+            <div className="p-3">
+              <AgentCrSettings />
+            </div>
+
+            <Separator />
+
+            {/* Dashboard agents Hermès */}
+            <div className="p-3">
+              <AgentsDashboard />
+            </div>
+
+            <Separator />
+
+            {/* Carnet des référents */}
+            <div className="p-3">
+              <ReferentDirectory />
             </div>
           </div>
-        )}
+
+          {/* Activity */}
+          <div className="p-3 border-t border-border">
+            <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1">
+              Activity
+            </h3>
+            {(() => {
+              const recent = openedIds
+                .map(id => allStudies.find((s: any) => s.id === id))
+                .filter(Boolean)
+                .slice(0, 6);
+              if (recent.length === 0)
+                return (
+                  <p className="text-[10px] text-muted-foreground">
+                    Aucune activité récente
+                  </p>
+                );
+              return (
+                <div className="space-y-0.5">
+                  {recent.map((s: any) => (
+                    <button
+                      key={s.id}
+                      onClick={() => navigate(`/viewer/${s.id}`)}
+                      className="w-full text-left text-[10px] text-muted-foreground hover:text-foreground truncate"
+                      title={`${s.patientName || "?"} — ${s.modality || ""} ${s.studyDescription || ""}`}
+                    >
+                      • {s.patientName || "Sans nom"}{" "}
+                      <span className="opacity-60">{s.modality || ""}</span>
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
 
         {/* Main Study List */}
         <div className="flex-1 flex flex-col overflow-hidden min-h-0">
@@ -940,8 +987,8 @@ export default function Home() {
             <div className="w-20 px-1 cursor-pointer hover:text-foreground">
               ID
             </div>
-            <div className="flex-1 px-1 cursor-pointer hover:text-foreground">
-              Comments
+            <div className="w-24 px-1 cursor-pointer hover:text-foreground">
+              Date exam.
             </div>
             <div className="w-16 px-1 cursor-pointer hover:text-foreground">
               History
@@ -1095,8 +1142,8 @@ export default function Home() {
                     <div className="w-20 px-1 text-muted-foreground truncate text-[9px]">
                       {study.studyInstanceUid?.slice(-8) || "-"}
                     </div>
-                    <div className="flex-1 px-1 text-muted-foreground truncate">
-                      {"-"}
+                    <div className="w-24 px-1 text-muted-foreground tabular-nums text-[10px]">
+                      {formatStudyDate(study.studyDate)}
                     </div>
                     <div className="w-16 px-1 text-muted-foreground text-[9px]">
                       {study.numberOfSeries

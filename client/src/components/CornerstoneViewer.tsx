@@ -223,7 +223,6 @@ export async function initCornerstone() {
       cornerstoneTools.addTool(cornerstoneTools.BrushTool);
 
       cornerstoneInitialized = true;
-      console.log("[Cornerstone3D] Initialized successfully");
     } catch (err) {
       console.error("[Cornerstone3D] Initialization failed:", err);
       initPromise = null;
@@ -1194,12 +1193,21 @@ const CornerstoneViewer = forwardRef<
           } catch {}
 
           // Labelmap dérivé : un imageId Uint8 par coupe source.
-          const derived = (cornerstone as any).imageLoader
-            .createAndCacheDerivedLabelmapImages
-            ? (
+          // Wrappe dans un try/catch car Cornerstone3D crashe si les images
+          // ne sont pas encore en cache avec leurs métadonnées rows/columns.
+          let derived: any[] | null = null;
+          try {
+            if (
+              (cornerstone as any).imageLoader
+                ?.createAndCacheDerivedLabelmapImages
+            ) {
+              derived = (
                 cornerstone as any
-              ).imageLoader.createAndCacheDerivedLabelmapImages(imageIds)
-            : null;
+              ).imageLoader.createAndCacheDerivedLabelmapImages(imageIds);
+            }
+          } catch {
+            derived = null;
+          }
           const labelmapImageIds: string[] = (derived || [])
             .map((img: any) => img?.imageId)
             .filter((x: any): x is string => typeof x === "string");
@@ -1327,12 +1335,6 @@ const CornerstoneViewer = forwardRef<
             cornerstoneTools.utilities.stackContextPrefetch.disable(el);
           } catch {}
         };
-
-        console.log(
-          "[Cornerstone3D] Viewport setup complete with",
-          imageIds.length,
-          "images"
-        );
       } catch (err: any) {
         console.error("[Cornerstone3D] Viewport setup failed:", err);
         if (mounted) {

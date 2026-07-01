@@ -192,7 +192,9 @@ export async function sendStudyReportImpl(
     ipAddress: ctx.req?.ip ?? null,
   });
 
-  // Lien OTP : accès direct au viewer (7j, usage unique). Non-bloquant si échec.
+  // Lien de consultation en ligne — RÉSERVÉ au personnel MediView authentifié
+  // (7 j, usage unique). Les destinataires externes s'appuient sur le PDF joint.
+  // Non-bloquant si échec.
   let otpBlock = "";
   try {
     const { createShareToken } = await import("./reportShareToken");
@@ -205,8 +207,10 @@ export async function sendStudyReportImpl(
         `<p style="margin:16px 0">` +
         `<a href="${url}" style="display:inline-block;background:#4f46e5;color:#fff;` +
         `padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600">` +
-        `Accéder à l'imagerie en ligne →</a></p>` +
-        `<p style="color:#999;font-size:11px">Lien valable 7 jours · usage unique · accès sécurisé</p>`;
+        `Ouvrir l'imagerie dans MediView →</a></p>` +
+        `<p style="color:#999;font-size:11px">Lien valable 7 jours · usage unique · ` +
+        `réservé aux professionnels disposant d'un accès MediView (connexion requise). ` +
+        `Le compte rendu complet est joint en PDF.</p>`;
     }
   } catch {
     /* best-effort */

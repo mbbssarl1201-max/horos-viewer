@@ -652,17 +652,56 @@ async function startServer() {
   // Redirige vers le viewer après validation du token. Pas de PHI dans l'URL.
   app.get("/r/:token", async (req, res) => {
     try {
-      // GET = validation LECTURE SEULE (peek), jamais de consommation : sinon les
-      // scanners de liens email (Outlook SafeLinks & co) brûlent le token avant le
-      // clic humain (F2). L'« usage unique » (consumeShareToken) sera déclenché à
-      // l'octroi réel de l'accès, après le challenge OTP du destinataire (F1).
-      const { peekShareToken } = await import("../report/reportShareToken");
-      const payload = await peekShareToken(req.params.token as string);
+      const { peekShareToken, consumeShareToken } = await import(
+        "../report/reportShareToken"
+      );
+      const token = req.params.token as string;
+      // 1. Validation LECTURE SEULE (peek) : un GET ne consomme jamais le token,
+      //    sinon les scanners de liens email brûlent l'usage unique avant le clic
+      //    humain (F2). Le peek survit aussi au détour par le login ci-dessous.
+      const payload = await peekShareToken(token);
       if (!payload) {
         res.status(410).send("Lien expiré ou déjà utilisé.");
         return;
       }
-      res.redirect(`/viewer/${payload.studyId}?share=1`);
+      // 2. Accès RÉSERVÉ au personnel médical authentifié (conforme « authz
+      //    dossier=médecin » ; surface PHI minimale). Les destinataires externes
+      //    sans compte MediView reçoivent le compte rendu via le PDF joint à
+      //    l'email — pas d'accès viewer en clair sans authentification (F1).
+      const { sdk } = await import("./sdk");
+      let user;
+      try {
+        user = await sdk.authenticateRequest(req as never);
+      } catch {
+        // Non authentifié → login. Le token n'ayant pas été consommé, le
+        // destinataire re-clique le lien une fois connecté.
+        res.redirect("/login");
+        return;
+      }
+      const { hasMedicalAccess } = await import("../rbac");
+      if (!hasMedicalAccess(user)) {
+        res.status(403).send("Accès réservé au personnel médical.");
+        return;
+      }
+      // 3. Accès accordé à un clinicien authentifié → consommation ATOMIQUE
+      //    (usage unique, F4) + journalisation (audit nLPD), puis deep-link.
+      const consumed = await consumeShareToken(token);
+      if (!consumed) {
+        res.status(410).send("Lien expiré ou déjà utilisé.");
+        return;
+      }
+      try {
+        const { recordAccess } = await import("../db");
+        await recordAccess({
+          userId: user.id,
+          action: "report.share.open",
+          studyId: consumed.studyId,
+          ipAddress: req.ip ?? null,
+        });
+      } catch {
+        /* audit best-effort */
+      }
+      res.redirect(`/viewer/${consumed.studyId}`);
     } catch {
       res.status(500).send("Erreur serveur.");
     }

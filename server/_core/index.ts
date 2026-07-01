@@ -83,9 +83,22 @@ async function startServer() {
     skip: req => !req.originalUrl.includes("auth.login"),
     message: { error: "Too many login attempts, please try again later." },
   });
+  // Limiteur dédié au point PUBLIC non authentifié `/r/:token` (rédemption d'un
+  // lien de partage de CR) : il touche la DB avant tout contrôle d'accès, donc on
+  // borne les tentatives par IP (défense en profondeur ; le token 256 bits rend
+  // déjà le brute-force inatteignable).
+  const RL_SHARE_MAX = parseInt(process.env.RATE_LIMIT_SHARE_MAX ?? "30");
+  const shareLimiter = rateLimit({
+    windowMs: RL_WINDOW_MS,
+    limit: RL_SHARE_MAX,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    message: "Trop de requêtes, réessayez plus tard.",
+  });
   app.use("/api", apiLimiter);
   app.use("/api/export", exportLimiter);
   app.use("/api/trpc", loginLimiter);
+  app.use("/r", shareLimiter);
 
   // CSRF mitigation for the PHI export GET routes: a cross-site context (e.g. a
   // malicious page triggering a navigation/download) is rejected. Same-origin

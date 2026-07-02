@@ -65,9 +65,12 @@ import {
   ClipboardList,
   LayoutDashboard,
 } from "lucide-react";
-import { useState, useCallback, useEffect } from "react";
-import CockpitMediView from "@/pages/CockpitMediView";
+import { useState, useCallback, useEffect, lazy, Suspense } from "react";
 import { matchAllFields } from "@/lib/studySearch";
+
+// Lazy : le panneau Eva/Cockpit n'est chargé qu'à l'ouverture (cockpitOpen) —
+// évite d'embarquer son poids dans le chunk de la worklist (cf. App.tsx).
+const CockpitMediView = lazy(() => import("@/pages/CockpitMediView"));
 import { matchesTodayModality } from "@/lib/quickAlbums";
 import { toast } from "sonner";
 
@@ -746,7 +749,15 @@ export default function Home() {
       <div className="flex flex-1 overflow-hidden min-w-0">
         {cockpitOpen && (
           <div className="w-64 lg:w-72 shrink-0 border-r border-slate-800 overflow-hidden">
-            <CockpitMediView embedded />
+            <Suspense
+              fallback={
+                <div className="flex h-full items-center justify-center">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                </div>
+              }
+            >
+              <CockpitMediView embedded />
+            </Suspense>
           </div>
         )}
         {/* Albums sidebar — masquée sur petit écran quand Eva est ouverte */}

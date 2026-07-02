@@ -60,6 +60,14 @@ export function serveStatic(app: Express) {
 
   app.use(express.static(distPath));
 
+  // Garde « chunk périmé » : un asset hashé manquant (chunk d'un ancien
+  // déploiement) doit répondre 404 — PAS le fallback SPA. Sinon le navigateur
+  // reçoit index.html (HTML) à la place d'un module JS → erreur MIME opaque au
+  // lieu du `vite:preloadError` que la garde client (main.tsx) sait rattraper.
+  app.use("/assets", (_req, res) => {
+    res.status(404).end();
+  });
+
   // fall through to index.html if the file doesn't exist
   app.use("*", (_req, res) => {
     res.sendFile(path.resolve(distPath, "index.html"));

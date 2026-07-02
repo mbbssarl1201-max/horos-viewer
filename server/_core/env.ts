@@ -78,6 +78,11 @@ export const ENV = {
   // Backend IA pour l'analyse d'images : "claude" (Anthropic cloud, meilleure
   // qualité) ou "ollama" (local, PHI-safe). Défaut "ollama".
   aiBackend: process.env.AI_BACKEND ?? "ollama",
+  // Moteur de GÉNÉRATION DE CR (pré-analyse) : "auto" (défaut, historique :
+  // Infomaniak CH prioritaire dès que sa clé est là), "claude" (router le CR
+  // vers Claude — ex. Fable 5 — sans retirer Infomaniak des autres chemins
+  // vision), "infomaniak". Cf. server/report/crProvider.ts.
+  crProvider: (process.env.CR_PROVIDER ?? "auto").toLowerCase(),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
   anthropicModel: process.env.ANTHROPIC_MODEL ?? "claude-opus-4-8",
   // nLPD (audit H4) : envoyer des pixels d'imagerie (PHI potentiellement brûlé)

@@ -1758,7 +1758,12 @@ export function parseKeySlice(text: string): {
   // On lit donc oui/non explicite (prioritaire), puis un vocabulaire
   // positif/négatif. Une fausse réassurance étant le pire risque, en cas de
   // doute (formulation positive trouvée) on conclut abnormal=true.
-  const line = text.match(/(?:^|\n)\s*Anomalie\b\s*:\s*([^\n]*)/i);
+  // Tolère le décor markdown autour de l'étiquette (« **Anomalie :** oui »,
+  // « ## Anomalie ») — cf. parseSections. Le \b reste : il évite de matcher
+  // « anomalie(s) » employé dans une phrase.
+  const line = text.match(
+    /(?:^|\n)\s*(?:#{1,4}[ \t]+)?(?:\*{1,3}|_{1,3})?Anomalie\b\s*:\s*(?:\*{1,3}|_{1,3})?[ \t]*([^\n]*)/i
+  );
   let abnormal: boolean | null = null;
   if (line) {
     const v = line[1].toLowerCase();
@@ -1793,7 +1798,7 @@ export function parseEvolution(text: string): {
   cleaned: string;
 } {
   const m = text.match(
-    /\n?\s*[EÉeé]volution\s*:?\s*(stable|progression|régression|regression)\b/i
+    /\n?\s*(?:#{1,4}[ \t]+)?(?:\*{1,3}|_{1,3})?[EÉeé]volution(?:\*{1,3}|_{1,3})?\s*:?\s*(?:\*{1,3}|_{1,3})?(stable|progression|régression|regression)\b(?:\*{1,3}|_{1,3})?/i
   );
   if (!m) return { evolution: null, cleaned: text };
   const raw = m[1].toLowerCase();
@@ -1861,10 +1866,21 @@ export function parseSections(text: string): {
   resultats: string;
   conclusion: string;
 } {
+  // Décor markdown OPTIONNEL autour d'une étiquette : les prompts demandent du
+  // gras (« conclusion EN GRAS », « **Classification : BI-RADS 1** ») et les
+  // modèles décorent alors souvent l'ÉTIQUETTE elle-même (« **Conclusion :** »,
+  // « ## Conclusion »). Sans cette tolérance, l'étiquette décorée ne matche pas
+  // → Conclusion silencieusement perdue, ou lignes méta qui fuient dans le CR.
+  const B = "(?:#{1,4}[ \\t]+)?(?:\\*{1,3}|_{1,3})?";
+  // Après le deux-points, tolérer aussi la fermeture du gras (« :** »).
+  const A = "\\s*:?\\s*(?:\\*{1,3}|_{1,3})?[ \\t]*";
   // On retire d'abord les lignes méta finales (Anomalie / Coupe-clé) pour
   // qu'elles ne soient pas absorbées dans la Conclusion.
   const cut = text.search(
-    /\n\s*(Anomalie|Coupe[-\s]?cl[ée]|[EÉeé]volution)\s*:/i
+    new RegExp(
+      `\\n\\s*${B}(Anomalie|Coupe[-\\s]?cl[ée]|[EÉeé]volution)${B}\\s*:`,
+      "i"
+    )
   );
   if (cut >= 0) text = text.slice(0, cut);
   // Étiquettes de section TOLÉRANTES : un modèle local (qwen 7b) ne respecte
@@ -1873,15 +1889,15 @@ export function parseSections(text: string): {
   // perdre silencieusement la Conclusion (sinon le médecin reçoit un brouillon
   // amputé). Les classes [eé]/[ée] couvrent les formes sans accent.
   // Technique : "Technique"
-  const T = "Technique";
+  const T = `${B}Technique${B}`;
   // Résultats : "Résultats"/"Resultats"/"Résultat"/"Constatations"/"Constatation"
-  const R = "(?:R[ée]sultats?|Constatations?|Description)";
+  const R = `${B}(?:R[ée]sultats?|Constatations?|Description)${B}`;
   // Conclusion : "Conclusion"/"Conclusions"
-  const C = "Conclusions?";
+  const C = `${B}Conclusions?${B}`;
   // Format attendu : Technique / Résultats / Conclusion.
   const m3 = text.match(
     new RegExp(
-      `${T}\\s*:?\\s*([\\s\\S]*?)\\n\\s*${R}\\s*:?\\s*([\\s\\S]*?)\\n\\s*${C}\\s*:?\\s*([\\s\\S]*)$`,
+      `${T}${A}([\\s\\S]*?)\\n\\s*${R}${A}([\\s\\S]*?)\\n\\s*${C}${A}([\\s\\S]*)$`,
       "i"
     )
   );
@@ -1893,10 +1909,7 @@ export function parseSections(text: string): {
     };
   // Repli : ancien format à 2 sections (Résultats / Conclusion), technique vide.
   const m2 = text.match(
-    new RegExp(
-      `${R}\\s*:?\\s*([\\s\\S]*?)\\n\\s*${C}\\s*:?\\s*([\\s\\S]*)$`,
-      "i"
-    )
+    new RegExp(`${R}${A}([\\s\\S]*?)\\n\\s*${C}${A}([\\s\\S]*)$`, "i")
   );
   if (m2)
     return { technique: "", resultats: m2[1].trim(), conclusion: m2[2].trim() };

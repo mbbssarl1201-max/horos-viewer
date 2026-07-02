@@ -56,7 +56,7 @@ function writeToLogFile(source: LogSource, entries: unknown[]) {
   const logPath = path.join(LOG_DIR, `${source}.log`);
 
   // Format entries with timestamps
-  const lines = entries.map((entry) => {
+  const lines = entries.map(entry => {
     const ts = new Date().toISOString();
     return `[${ts}] ${JSON.stringify(entry)}`;
   });
@@ -132,7 +132,7 @@ function vitePluginManusDebugCollector(): Plugin {
         }
 
         let body = "";
-        req.on("data", (chunk) => {
+        req.on("data", chunk => {
           body += chunk.toString();
         });
 
@@ -150,15 +150,30 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
+const plugins = [
+  react(),
+  tailwindcss(),
+  jsxLocPlugin(),
+  vitePluginManusRuntime(),
+  vitePluginManusDebugCollector(),
+];
 
 export default defineConfig({
   plugins,
   resolve: {
     alias: [
-      { find: "@", replacement: path.resolve(import.meta.dirname, "client", "src") },
-      { find: "@shared", replacement: path.resolve(import.meta.dirname, "shared") },
-      { find: "@assets", replacement: path.resolve(import.meta.dirname, "attached_assets") },
+      {
+        find: "@",
+        replacement: path.resolve(import.meta.dirname, "client", "src"),
+      },
+      {
+        find: "@shared",
+        replacement: path.resolve(import.meta.dirname, "shared"),
+      },
+      {
+        find: "@assets",
+        replacement: path.resolve(import.meta.dirname, "attached_assets"),
+      },
     ],
   },
   optimizeDeps: {
@@ -170,16 +185,11 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          cornerstone: [
-            "@cornerstonejs/core",
-            "@cornerstonejs/tools",
-          ],
-        },
-      },
-    },
+    // Plus de manualChunks : les routes lourdes étant en lazy (App.tsx), les
+    // frontières d'import() découpent naturellement — Cornerstone part dans le
+    // chunk du Viewer, chargé à la navigation seulement. Le chunk forcé créait
+    // au contraire une arête statique index→cornerstone via un helper partagé
+    // colocalisé, ce qui rechargait les 2,9 Mo dès /login.
   },
   worker: {
     format: "es",

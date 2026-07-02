@@ -478,14 +478,22 @@ export const reportAiSnapshots = mysqlTable("report_ai_snapshots", {
 });
 export type ReportAiSnapshot = typeof reportAiSnapshots.$inferSelect;
 
-export const reportShareTokens = mysqlTable("report_share_tokens", {
-  id: int("id").autoincrement().primaryKey(),
-  token: varchar("token", { length: 64 }).notNull().unique(),
-  reportId: int("reportId").notNull(),
-  studyId: int("studyId").notNull(),
-  recipientEmail: varchar("recipientEmail", { length: 255 }).notNull(),
-  expiresAt: timestamp("expiresAt").notNull(),
-  usedAt: timestamp("usedAt"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+export const reportShareTokens = mysqlTable(
+  "report_share_tokens",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    token: varchar("token", { length: 64 }).notNull().unique(),
+    reportId: int("reportId").notNull(),
+    studyId: int("studyId").notNull(),
+    recipientEmail: varchar("recipientEmail", { length: 255 }).notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    usedAt: timestamp("usedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  // Aligné sur la migration 0018 (schema.ts = source de vérité unique).
+  t => ({
+    reportIdIdx: index("report_share_tokens_reportId_idx").on(t.reportId),
+    expiresAtIdx: index("report_share_tokens_expiresAt_idx").on(t.expiresAt),
+  })
+);
 export type ReportShareToken = typeof reportShareTokens.$inferSelect;

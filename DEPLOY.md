@@ -46,6 +46,13 @@ created becomes admin**. Additional accounts default to the unprivileged
 ## Operations
 - Logs: `docker compose logs -f app`
 - Re-run migrations after an update: `docker compose run --rm migrate`
+  - ⚠️ **Instances existantes (avant 2026-07)** : les migrations `0011`–`0019`
+    ont longtemps été absentes du journal drizzle (`drizzle/meta/_journal.json`)
+    et appliquées **à la main** — la table `__drizzle_migrations` de ces bases ne
+    les référence pas. Avant d'y relancer `migrate`, marquer manuellement les
+    migrations déjà appliquées (INSERT dans `__drizzle_migrations`), sinon
+    drizzle retentera des `CREATE TABLE` existants. Les installations fraîches
+    ne sont pas concernées (journal complet, `0000`→`0019`).
 - MinIO console (optional, keep internal): expose `minio:9001` only if needed.
 - Backups: snapshot the `db-data` and `minio-data` volumes.
 

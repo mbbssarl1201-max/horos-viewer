@@ -1,8 +1,7 @@
 // Self-hosted object storage on an S3-compatible backend (MinIO).
-// Replaces the Manus "Forge" presigned-S3 service.
 //
 // Stored objects are raw patient DICOM (PHI). Downloads are served through the
-// authenticated `/manus-storage/{key}` proxy (see storageProxy.ts), which
+// authenticated `/storage/{key}` proxy (see storageProxy.ts), which
 // streams bytes from S3 — the bucket is never exposed publicly.
 
 import { Readable } from "stream";
@@ -72,14 +71,14 @@ export async function storagePut(
     })
   );
 
-  return { key, url: `/manus-storage/${key}` };
+  return { key, url: `/storage/${key}` };
 }
 
 export async function storageGet(
   relKey: string
 ): Promise<{ key: string; url: string }> {
   const key = normalizeKey(relKey);
-  return { key, url: `/manus-storage/${key}` };
+  return { key, url: `/storage/${key}` };
 }
 
 /**

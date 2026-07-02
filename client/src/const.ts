@@ -1,7 +1,7 @@
 export { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 
 // Generate login URL at runtime. Self-hosted local auth uses the in-app
-// /login page; otherwise fall back to the Manus OAuth portal.
+// /login page; otherwise redirect to the configured OAuth portal.
 export const getLoginUrl = () => {
   const authMode = import.meta.env.VITE_AUTH_MODE ?? "local";
   if (authMode === "local") {

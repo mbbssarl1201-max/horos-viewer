@@ -1,12 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import { slabModeToBlend, type SlabMode } from "@/lib/slabBlend";
+import {
+  buildClipPlanes,
+  buildObliqueClipPlane,
+  type ClipPlaneConfig,
+  type ObliqueClipConfig,
+} from "@/lib/clipPlanes";
 import { PRESETS_3D, presetParId } from "@/lib/volumePresets3d";
 import { catmullRomSpline } from "@/lib/flyThruPath";
+import { turntableAngles, orbitAroundFocalPoint } from "@/lib/turntable";
 import {
   clampFusionOpacity,
   petColormapVtkName,
   DEFAULT_PET_COLORMAP_ID,
 } from "@/lib/petFusion";
+import {
+  normalizeOpacityPoints,
+  type OpacityPoint,
+  normalizeColorPoints,
+  type ColorPoint,
+} from "@/lib/transferFunction";
 
 // Ré-export pour compat (Viewer.tsx importe PRESETS_3D depuis ce module).
 export { PRESETS_3D } from "@/lib/volumePresets3d";
@@ -35,7 +48,7 @@ interface VolumeViewerProps {
   orthancImageIds?: string[];
   /** volumeId stable fourni par useOrthancVolume (sinon valeur locale par défaut). */
   volumeId?: string;
-  mode: "mpr" | "3d";
+  mode: "mpr" | "3d" | "slab2d";
   /** Épaisseur de coupe en mm (0 = coupe fine). */
   slabThicknessMm?: number;
   /** Mode de projection slab. */
@@ -52,10 +65,20 @@ interface VolumeViewerProps {
   surface3d?: boolean;
   /** Seuil iso (unités scalaires/HU) pour le rendu surfacique. Défaut ~300 (os CT). */
   surfaceIso?: number;
+  /** Mode "3d" : surcharge la courbe d'opacité (fenêtrage 3D). Vide = preset. */
+  opacityPoints?: OpacityPoint[];
+  /** Mode "3d" : surcharge la couleur (rgbTransferFunction). < 2 points = preset. */
+  colorPoints?: ColorPoint[];
   /** Compteur : chaque incrément déclenche une animation fly-thru (endoscopie). */
   flyThruNonce?: number;
+  /** Mode "3d" : à chaque incrément, exporte une vidéo de rotation (turntable). */
+  turntableNonce?: number;
   /** Scissor : fraction [0..0.9] retirée de chaque côté du volume (0 = aucune découpe). */
   cropFraction?: number;
+  /** Mode "3d" : plans de coupe interactifs par axe (sagittal/coronal/axial). */
+  clipPlanes?: ClipPlaneConfig[];
+  /** Mode "3d" : plan de coupe oblique additif (azimut/élévation/position/invert). */
+  obliqueClip?: ObliqueClipConfig;
   /**
    * Fusion PET-CT (additif, fail-safe) : URLs (MinIO, schéma wadouri:) des
    * coupes de la série PET à superposer sur le CT/volume principal. Si absent
@@ -240,6 +263,27 @@ function applySurface(vp: any, isoValue: number, enabled: boolean) {
   }
 }
 
+/**
+ * Applique l'épaisseur de dalle (slab thickness) + le mode de projection
+ * (MIP/MinIP/Moyenne via BlendModes) à UN viewport ORTHOGRAPHIC. Factorisé pour
+ * être partagé entre le chemin MPR (4 vues) et le chemin slab2d (1 vue) — même
+ * API Cornerstone, déjà éprouvée. `thicknessMm <= 0` → no-op (coupe fine).
+ * Best-effort : chaque appel est isolé par l'appelant en try/catch.
+ */
+function applySlab(
+  vp: any,
+  thicknessMm: number | undefined,
+  mode: SlabMode | undefined,
+  Enums: any
+) {
+  if (!vp || !thicknessMm || thicknessMm <= 0) return;
+  const blendKey = slabModeToBlend(mode ?? "mip");
+  // BlendModes est dans Enums du core (pas dans csToolsEnums).
+  const blend = Enums?.BlendModes?.[blendKey];
+  vp.setSlabThickness(thicknessMm);
+  if (blend !== undefined) vp.setBlendMode(blend);
+}
+
 export default function VolumeViewer({
   imageUrls,
   orthancImageIds,
@@ -251,8 +295,13 @@ export default function VolumeViewer({
   realistic3d = true,
   surface3d = false,
   surfaceIso = 300,
+  opacityPoints,
+  colorPoints,
   flyThruNonce = 0,
+  turntableNonce = 0,
   cropFraction = 0,
+  clipPlanes,
+  obliqueClip,
   petImageUrls,
   petVolumeId,
   fusionOpacity = 0.5,
@@ -263,6 +312,7 @@ export default function VolumeViewer({
   const coronalRef = useRef<HTMLDivElement>(null);
   const obliqueRef = useRef<HTMLDivElement>(null);
   const vr3dRef = useRef<HTMLDivElement>(null);
+  const slab2dRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<any>(null);
   // Module @cornerstonejs/tools capturé au setup pour un teardown SYNCHRONE dans
@@ -550,16 +600,15 @@ export default function VolumeViewer({
           };
 
           // ── Slab thickness + blend mode ───────────────────────────────────
-          const applySlab = () => {
-            if (!slabThicknessMm || slabThicknessMm <= 0) return;
-            const blendKey = slabModeToBlend(slabMode ?? "mip");
-            // BlendModes est dans Enums du core (pas dans csToolsEnums)
-            const blend = (Enums as any).BlendModes?.[blendKey];
+          const applyMprSlab = () => {
             for (const id of allIds) {
               try {
-                const vp = engine.getViewport(id) as any;
-                vp.setSlabThickness(slabThicknessMm);
-                if (blend !== undefined) vp.setBlendMode(blend);
+                applySlab(
+                  engine.getViewport(id),
+                  slabThicknessMm,
+                  slabMode,
+                  Enums
+                );
               } catch {}
             }
             engine.renderViewports(allIds);
@@ -567,10 +616,100 @@ export default function VolumeViewer({
 
           engine.resize(true, false);
           applyMprWindow();
-          applySlab();
+          applyMprSlab();
           volume.load(() => {
             applyMprWindow();
-            applySlab();
+            applyMprSlab();
+          });
+        } else if (mode === "slab2d") {
+          // ── Vue 2D « épaisseur » : UN viewport ORTHOGRAPHIC AXIAL volumique
+          // (plan d'acquisition), thick-slab MIP/MinIP/Moyenne. Mirror du chemin
+          // MPR mais mono-plan. Additif : monté à la place du StackViewport 2D
+          // seulement quand l'utilisateur active le toggle.
+          const csTools = await import("@cornerstonejs/tools");
+          const {
+            init: toolsInit,
+            ToolGroupManager,
+            WindowLevelTool,
+            StackScrollTool,
+            PanTool,
+            ZoomTool,
+            Enums: csToolsEnums,
+            addTool,
+          } = csTools as any;
+          csToolsRef.current = csTools;
+
+          await toolsInit();
+          for (const t of [
+            WindowLevelTool,
+            StackScrollTool,
+            PanTool,
+            ZoomTool,
+          ]) {
+            try {
+              addTool(t);
+            } catch {} // déjà enregistré — ignorer
+          }
+
+          engine.setViewports([
+            {
+              viewportId: "SLAB2D_AXIAL",
+              element: slab2dRef.current!,
+              type: Enums.ViewportType.ORTHOGRAPHIC,
+              defaultOptions: { orientation: Enums.OrientationAxis.AXIAL },
+            },
+          ]);
+          await setVolumesForViewports(
+            engine,
+            [{ volumeId: volId }],
+            ["SLAB2D_AXIAL"]
+          );
+
+          // ── ToolGroup : W/L (droit) + zoom (milieu) + pan + scroll molette ──
+          const TG_ID = "HOROS_SLAB2D_TG";
+          try {
+            ToolGroupManager.destroyToolGroup?.(TG_ID);
+          } catch {}
+          const tg = ToolGroupManager.createToolGroup(TG_ID)!;
+          for (const t of [
+            WindowLevelTool,
+            StackScrollTool,
+            PanTool,
+            ZoomTool,
+          ]) {
+            tg.addTool(t.toolName);
+          }
+          tg.addViewport("SLAB2D_AXIAL", VOLUME_ENGINE_ID);
+          const { MouseBindings } = csToolsEnums;
+          tg.setToolActive(WindowLevelTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Primary }],
+          });
+          tg.setToolActive(ZoomTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Secondary }],
+          });
+          tg.setToolActive(PanTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Auxiliary }],
+          });
+          tg.setToolActive(StackScrollTool.toolName, {
+            bindings: [{ mouseButton: MouseBindings.Wheel }],
+          });
+
+          const applySlab2d = () => {
+            try {
+              applySlab(
+                engine.getViewport("SLAB2D_AXIAL"),
+                slabThicknessMm,
+                slabMode,
+                Enums
+              );
+            } catch {}
+            engine.renderViewports(["SLAB2D_AXIAL"]);
+          };
+
+          engine.resize(true, false);
+          applySlab2d();
+          volume.load(() => {
+            applySlab2d();
           });
         } else {
           engine.setViewports([
@@ -589,6 +728,22 @@ export default function VolumeViewer({
             ["VR_3D"]
           );
           const vp = engine.getViewport("VR_3D") as any;
+
+          // Perf interactive : laisser VTK ABAISSER la qualité d'échantillonnage
+          // pendant la rotation/zoom (sample distance auto) puis raffiner au repos
+          // → rotation fluide même sur un gros volume (CT 400+ coupes), au lieu
+          // d'un rendu pleine qualité à chaque image (saccades). Best-effort.
+          try {
+            const a3d = vp.getActors?.()?.[0];
+            const mapper3d = (
+              a3d?.actor ??
+              a3d?.volumeActor ??
+              a3d
+            )?.getMapper?.();
+            mapper3d?.setAutoAdjustSampleDistances?.(true);
+          } catch {
+            /* API mapper indisponible — rendu par défaut */
+          }
 
           // ── Outils d'interaction 3D (rotation/pan/zoom) ──────────────────
           // Init @cornerstonejs/tools (idempotent) + tool group dédié au 3D :
@@ -709,6 +864,9 @@ export default function VolumeViewer({
         csTools?.ToolGroupManager?.destroyToolGroup?.("HOROS_3D_TG");
       } catch {}
       try {
+        csTools?.ToolGroupManager?.destroyToolGroup?.("HOROS_SLAB2D_TG");
+      } catch {}
+      try {
         engineRef.current?.destroy();
       } catch {}
       engineRef.current = null;
@@ -725,16 +883,41 @@ export default function VolumeViewer({
         })
         .catch(() => {});
     };
-  }, [
-    imageUrls,
-    orthancImageIds,
-    volumeId,
-    mode,
-    slabThicknessMm,
-    slabMode,
-    petImageUrls,
-    petVolumeId,
-  ]);
+    // `slabThicknessMm`/`slabMode` sont volontairement HORS de ces deps : un effet
+    // dédié les ré-applique sur le viewport vivant sans reconstruire le moteur
+    // (évite le « clignotement » au changement d'épaisseur/mode). Cf. plus bas.
+  }, [imageUrls, orthancImageIds, volumeId, mode, petImageUrls, petVolumeId]);
+
+  // Changement d'épaisseur de dalle / mode (MIP·MinIP·Moyenne) : ré-appliquer SANS
+  // reconstruire le moteur (rapide, pas de flicker). Couvre MPR + slab2d.
+  useEffect(() => {
+    if (mode !== "mpr" && mode !== "slab2d") return;
+    let cancelled = false;
+    (async () => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const { Enums } = await import("@cornerstonejs/core");
+      if (cancelled) return;
+      const ids = ["MPR_AXIAL", "MPR_SAGITTAL", "MPR_CORONAL", "SLAB2D_AXIAL"];
+      const live: string[] = [];
+      for (const id of ids) {
+        const vp = engine.getViewport?.(id);
+        if (!vp) continue;
+        try {
+          applySlab(vp, slabThicknessMm, slabMode, Enums);
+          live.push(id);
+        } catch {}
+      }
+      if (live.length) {
+        try {
+          engine.renderViewports(live);
+        } catch {}
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [slabThicknessMm, slabMode, mode]);
 
   // Changement de preset 3D : ré-appliquer SANS reconstruire le moteur (rapide).
   // `preset3d` est volontairement HORS du tableau de deps du useEffect principal.
@@ -834,10 +1017,98 @@ export default function VolumeViewer({
     };
   }, [flyThruNonce, mode]);
 
-  // Scissor editing (« Scissor Editing » de Horos) : découpe du volume 3D par
-  // des plans de coupe vtk recadrant sur la boîte centrale (fraction retirée de
-  // chaque côté). Mécanisme réel de clipping ; 100% try/catch + additif (fraction
-  // 0 = aucun plan = volume inchangé) → ne peut pas casser le rendu 3D existant.
+  // Export turntable (« vidéo de rotation » du rendu 3D) : à chaque incrément de
+  // turntableNonce, on fait orbiter la caméra du viewport VR_3D sur un tour
+  // complet en capturant son canvas via MediaRecorder, puis on télécharge le
+  // WebM en local. 100 % client : aucun pixel ne quitte le navigateur.
+  useEffect(() => {
+    if (mode !== "3d" || !turntableNonce) return;
+    const vp = engineRef.current?.getViewport?.("VR_3D") as any;
+    if (!vp?.getCamera || !vp?.setCamera) return;
+    const canvas: HTMLCanvasElement | null =
+      vp.getCanvas?.() ?? vr3dRef.current?.querySelector("canvas") ?? null;
+    if (
+      !canvas ||
+      typeof (canvas as any).captureStream !== "function" ||
+      typeof MediaRecorder === "undefined"
+    ) {
+      setError("Export rotation indisponible sur ce navigateur.");
+      return;
+    }
+    let cancelled = false;
+    let raf = 0;
+    try {
+      const cam0 = vp.getCamera();
+      const pos0 = cam0.position as number[];
+      const fp = cam0.focalPoint as number[];
+      const up = cam0.viewUp as number[];
+      const FRAMES = 90;
+      const FPS = 30;
+      const angles = turntableAngles(FRAMES);
+      const stream = (canvas as any).captureStream(FPS);
+      const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+        ? "video/webm;codecs=vp9"
+        : "video/webm";
+      const recorder = new MediaRecorder(stream, { mimeType: mime });
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = e => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      recorder.onstop = () => {
+        try {
+          const blob = new Blob(chunks, { type: "video/webm" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = `rotation-3d-${Date.now()}.webm`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+        } catch {}
+      };
+      recorder.start();
+      let i = 0;
+      const step = () => {
+        if (cancelled || i >= angles.length) {
+          try {
+            vp.setCamera(cam0);
+            vp.render();
+          } catch {}
+          try {
+            recorder.stop();
+          } catch {}
+          return;
+        }
+        try {
+          const position = orbitAroundFocalPoint(pos0, fp, up, angles[i]);
+          vp.setCamera({ position, focalPoint: fp, viewUp: up });
+          vp.render();
+        } catch {}
+        i++;
+        raf = requestAnimationFrame(step);
+      };
+      step();
+    } catch {
+      /* caméra/enregistrement indisponible — export ignoré */
+    }
+    return () => {
+      cancelled = true;
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [turntableNonce, mode]);
+
+  const clipSig =
+    (clipPlanes ?? [])
+      .map(
+        c => `${c.axis}:${c.enabled ? 1 : 0}:${c.position}:${c.invert ? 1 : 0}`
+      )
+      .join("|") +
+    "|ob:" +
+    (obliqueClip && obliqueClip.enabled
+      ? `1:${obliqueClip.azimuthDeg}:${obliqueClip.elevationDeg}:${obliqueClip.position}:${obliqueClip.invert ? 1 : 0}`
+      : "0");
+
+  // Scissor (recadrage boîte centrale) + plans de coupe interactifs par axe.
+  // Tout passe dans la MÊME passe (un seul removeAllClippingPlanes) ; additif et
+  // 100% try/catch → ne peut pas casser le rendu 3D. (Étend l'ancien scissor.)
   useEffect(() => {
     if (mode !== "3d") return;
     let cancelled = false;
@@ -850,13 +1121,28 @@ export default function VolumeViewer({
         const mapper = actor?.getMapper?.();
         if (!mapper) return;
         mapper.removeAllClippingPlanes?.();
-        if (cropFraction > 0.01) {
-          const b = actor.getBounds?.();
-          if (b && b.length >= 6) {
-            const vtkPlane = (
-              await import("@kitware/vtk.js/Common/DataModel/Plane")
-            ).default;
-            if (cancelled) return;
+
+        const b = actor.getBounds?.();
+        const interactivePlanes = buildClipPlanes(b, clipPlanes ?? []);
+        const obliquePlane = buildObliqueClipPlane(
+          b,
+          obliqueClip ?? {
+            enabled: false,
+            azimuthDeg: 0,
+            elevationDeg: 0,
+            position: 0.5,
+            invert: false,
+          }
+        );
+        const needScissor = cropFraction > 0.01 && b && b.length >= 6;
+
+        if (needScissor || interactivePlanes.length || obliquePlane) {
+          const vtkPlane = (
+            await import("@kitware/vtk.js/Common/DataModel/Plane")
+          ).default;
+          if (cancelled) return;
+
+          if (needScissor) {
             const cx = (b[0] + b[1]) / 2;
             const cy = (b[2] + b[3]) / 2;
             const cz = (b[4] + b[5]) / 2;
@@ -864,7 +1150,7 @@ export default function VolumeViewer({
             const hx = ((b[1] - b[0]) / 2) * (1 - f);
             const hy = ((b[3] - b[2]) / 2) * (1 - f);
             const hz = ((b[5] - b[4]) / 2) * (1 - f);
-            const planes = [
+            const box = [
               { o: [cx - hx, cy, cz], n: [1, 0, 0] },
               { o: [cx + hx, cy, cz], n: [-1, 0, 0] },
               { o: [cx, cy - hy, cz], n: [0, 1, 0] },
@@ -872,23 +1158,109 @@ export default function VolumeViewer({
               { o: [cx, cy, cz - hz], n: [0, 0, 1] },
               { o: [cx, cy, cz + hz], n: [0, 0, -1] },
             ];
-            for (const p of planes) {
+            for (const p of box) {
               const pl = vtkPlane.newInstance();
               pl.setOrigin(p.o as any);
               pl.setNormal(p.n as any);
               mapper.addClippingPlane?.(pl);
             }
           }
+
+          for (const c of interactivePlanes) {
+            const pl = vtkPlane.newInstance();
+            pl.setOrigin(c.origin as any);
+            pl.setNormal(c.normal as any);
+            mapper.addClippingPlane?.(pl);
+          }
+
+          if (obliquePlane) {
+            const pl = vtkPlane.newInstance();
+            pl.setOrigin(obliquePlane.origin as any);
+            pl.setNormal(obliquePlane.normal as any);
+            mapper.addClippingPlane?.(pl);
+          }
         }
         vp.render?.();
       } catch {
-        /* clipping indisponible — scissor ignoré, rendu inchangé */
+        /* clipping indisponible — rendu inchangé */
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [cropFraction, mode, preset3d, surface3d]);
+  }, [cropFraction, mode, preset3d, surface3d, clipSig]);
+
+  // Surcharge de la courbe d'opacité (éditeur de fonction de transfert) : après
+  // l'application du preset, on réécrit la scalar opacity de l'acteur volume à
+  // partir des points fournis. Vide → on laisse le preset. Best-effort.
+  const opacitySig = (opacityPoints ?? [])
+    .map(p => `${p.value}:${p.opacity}`)
+    .join("|");
+  useEffect(() => {
+    if (mode !== "3d") return;
+    const pts = normalizeOpacityPoints(opacityPoints ?? []);
+    if (pts.length < 2) return;
+    let raf = 0;
+    const apply = () => {
+      try {
+        const vp = engineRef.current?.getViewport?.("VR_3D") as any;
+        const actors = vp?.getActors?.();
+        const actor =
+          actors?.[0]?.actor ?? actors?.[0]?.volumeActor ?? actors?.[0];
+        const property = actor?.getProperty?.();
+        const ofun = property?.getScalarOpacity?.(0);
+        if (!ofun?.addPoint) return;
+        ofun.removeAllPoints?.();
+        for (const p of pts) ofun.addPoint(p.value, p.opacity);
+        vp.render?.();
+      } catch {
+        /* acteur pas prêt / API indispo — ignoré */
+      }
+    };
+    // Laisse le preset s'appliquer d'abord (potentiellement asynchrone), puis surcharge.
+    raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(apply);
+    });
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [mode, preset3d, opacitySig]);
+
+  // Surcharge de la couleur (éditeur de fonction de transfert) : mirror exact de
+  // l'effet d'opacité ci-dessus, mais sur la rgbTransferFunction de l'acteur
+  // volume. < 2 points → on laisse le preset clinique garder la couleur.
+  const colorSig = (colorPoints ?? [])
+    .map(p => `${p.value}:${p.r}:${p.g}:${p.b}`)
+    .join("|");
+  useEffect(() => {
+    if (mode !== "3d") return;
+    const pts = normalizeColorPoints(colorPoints ?? []);
+    if (pts.length < 2) return;
+    let raf = 0;
+    const apply = () => {
+      try {
+        const vp = engineRef.current?.getViewport?.("VR_3D") as any;
+        const actors = vp?.getActors?.();
+        const actor =
+          actors?.[0]?.actor ?? actors?.[0]?.volumeActor ?? actors?.[0];
+        const property = actor?.getProperty?.();
+        const cfun = property?.getRGBTransferFunction?.(0);
+        if (!cfun?.addRGBPoint) return;
+        cfun.removeAllPoints?.();
+        for (const p of pts) cfun.addRGBPoint(p.value, p.r, p.g, p.b);
+        vp.render?.();
+      } catch {
+        /* acteur pas prêt / API indispo — ignoré */
+      }
+    };
+    // Laisse le preset s'appliquer d'abord (potentiellement asynchrone), puis surcharge.
+    raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(apply);
+    });
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [mode, preset3d, colorSig]);
 
   // Changement d'opacité / colormap de la fusion PET : ré-appliquer SANS
   // reconstruire le moteur (rapide, glissement de curseur fluide). N'agit que si
@@ -920,11 +1292,15 @@ export default function VolumeViewer({
       {loading && (
         <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
           <p className="text-xs text-muted-foreground">
-            Building {mode === "mpr" ? "MPR" : "3D"} volume…
+            Building{" "}
+            {mode === "mpr" ? "MPR" : mode === "slab2d" ? "épaisseur 2D" : "3D"}{" "}
+            volume…
           </p>
         </div>
       )}
-      {mode === "mpr" ? (
+      {mode === "slab2d" ? (
+        <div ref={slab2dRef} className="absolute inset-0 bg-black" />
+      ) : mode === "mpr" ? (
         <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-px bg-border">
           <div
             ref={axialRef}

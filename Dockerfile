@@ -23,6 +23,10 @@ COPY --from=builder /app/dist ./dist
 COPY drizzle ./drizzle
 COPY drizzle.config.ts ./
 COPY tsconfig.json ./
+# Sécurité : utilisateur non-root (audit H1).
+RUN addgroup -S mediview && adduser -S mediview -G mediview \
+    && chown -R mediview:mediview /app
+USER mediview
 EXPOSE 3000
 ENV NODE_ENV=production
 CMD ["node", "dist/index.js"]

@@ -19,12 +19,17 @@ import {
   markNotificationRead,
   createNotification,
   recordAccess,
+  countRecentAccess,
   getReportByStudy,
   getReportAddenda,
+  listClinicalUsers,
 } from "./db";
+import { buildShareNotification } from "./studyShare";
 import { storagePut, storageDelete, storageGetSignedUrl } from "./storage";
 import { runAiPreanalysis } from "./report/aiPreanalysis";
+import { runHermesChat } from "./report/hermesChat";
 import { buildReportPdf } from "./report/reportPdf";
+import { deposerVersMediCentral } from "./report/deposerMediCentral";
 import {
   canSignReport,
   canAddAddendum,
@@ -49,10 +54,25 @@ import {
   getSmtpStatus,
 } from "./email";
 import { ENV } from "./_core/env";
+import {
+  decryptField,
+  encryptField,
+  encryptDeterministic,
+} from "./_core/crypto";
 import { isAllowedRecipient } from "./_core/emailAllowList";
 import { shouldNotify, PRIORITY_TRIGGERS, STATUS_TRIGGERS } from "./risNotify";
 import { annotationDataSchema } from "./annotationSchema";
 import dcmjs from "dcmjs";
+import { chunkMarkdown } from "./knowledge/chunk";
+import { embedText } from "./knowledge/embeddings";
+import {
+  insertChunks,
+  searchSimilar,
+  knowledgeStats,
+  clearKnowledge,
+} from "./knowledge/store";
+import { syncVault, listVaultMarkdown } from "./knowledge/vaultSync";
+import { selectRelevant } from "./knowledge/retrieve";
 
 // Garde commune aux endpoints `notifications.notify*` : ils sortent du PHI
 // (patientName) vers un destinataire LIBRE. On applique la même allow-list de
@@ -199,8 +219,9 @@ async function buildSeriesExportContext(seriesId: number): Promise<{
   error?: string;
 }> {
   const { getDb } = await import("./db");
-  const { series, studies, patients, instances, annotations } =
-    await import("../drizzle/schema");
+  const { series, studies, patients, instances, annotations } = await import(
+    "../drizzle/schema"
+  );
   const { eq } = await import("drizzle-orm");
   const db = await getDb();
   if (!db) return { ctx: null, error: "DB indisponible" };
@@ -221,6 +242,11 @@ async function buildSeriesExportContext(seriesId: number): Promise<{
     .where(eq(series.id, seriesId))
     .limit(1);
   if (!row) return { ctx: null, error: "Série introuvable" };
+  // Identités patient chiffrées au repos (nLPD) → déchiffrer pour l'usage aval.
+  row.patientName = decryptField(row.patientName);
+  row.patientDicomId = decryptField(row.patientDicomId);
+  row.birthDate = decryptField(row.birthDate);
+  row.sex = decryptField(row.sex);
 
   const seriesInstances = await db
     .select({
@@ -308,8 +334,9 @@ export const appRouter = router({
             message: "Registration disabled",
           });
         }
-        const { getUserByEmail, countUsers, createLocalUser } =
-          await import("./db");
+        const { getUserByEmail, countUsers, createLocalUser } = await import(
+          "./db"
+        );
         const { hashPassword } = await import("./localAuth");
         const { sdk } = await import("./_core/sdk");
 
@@ -405,8 +432,8 @@ export const appRouter = router({
       .input(
         z
           .object({
-            modality: z.string().optional(),
-            timeFilter: z.string().optional(),
+            modality: z.string().max(16).optional(),
+            timeFilter: z.string().max(40).optional(),
           })
           .optional()
       )
@@ -618,9 +645,14 @@ export const appRouter = router({
           if (STUDY_FIELDS.has(field)) {
             (studyUpdate as Record<string, unknown>)[field] = PLACEHOLDER;
           } else if (PATIENT_FIELDS.has(field)) {
-            // birthDate is varchar(10): the placeholder won't fit, so null it.
+            // Identités chiffrées au repos (nLPD) : on chiffre aussi le
+            // remplaçant d'anonymisation (déterministe pour patientId).
             (patientUpdate as Record<string, unknown>)[field] =
-              field === "birthDate" ? null : PLACEHOLDER;
+              field === "birthDate"
+                ? null
+                : field === "patientId"
+                  ? encryptDeterministic(PLACEHOLDER)
+                  : encryptField(PLACEHOLDER);
           }
         }
 
@@ -753,6 +785,62 @@ export const appRouter = router({
         });
 
         return { success: true };
+      }),
+
+    // Partage INTERNE d'une étude : transmet à un confrère MediView via une
+    // notification. Mono-tenant → n'octroie aucun accès nouveau ; PHI-safe,
+    // audité (recordAccess). Lien externe/OTP hors scope.
+    share: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          recipientUserId: z.number().int(),
+          note: z.string().max(1000).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const recent = await countRecentAccess(ctx.user.id, "study.share", 60);
+        if (recent >= 60)
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: "Limite atteinte.",
+          });
+        if (input.recipientUserId === ctx.user.id)
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Destinataire invalide.",
+          });
+        const study = await getStudyById(input.studyId);
+        if (!study)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
+        const clinical = await listClinicalUsers(ctx.user.id);
+        if (!clinical.some(u => u.id === input.recipientUserId))
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Destinataire non clinique.",
+          });
+        const { title, message } = buildShareNotification(
+          ctx.user.name ?? "",
+          input.note
+        );
+        await createNotification({
+          userId: input.recipientUserId,
+          type: "shared_study",
+          title,
+          message,
+          studyId: input.studyId,
+        });
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "study.share",
+          studyId: input.studyId,
+          detail: `to=${input.recipientUserId}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { ok: true };
       }),
   }),
 
@@ -1101,6 +1189,13 @@ export const appRouter = router({
       }),
   }),
 
+  // Comptes utilisateurs (destinataires de partage interne).
+  users: router({
+    listClinical: medicalProcedure.query(async ({ ctx }) => {
+      return listClinicalUsers(ctx.user.id);
+    }),
+  }),
+
   // Orthanc PACS router
   orthanc: router({
     status: medicalProcedure.query(async () => {
@@ -1163,7 +1258,7 @@ export const appRouter = router({
         z.object({
           aet: aeTitleSchema,
           level: z.enum(["Study", "Series", "Instance"]),
-          query: z.record(z.string(), z.string()),
+          query: z.record(z.string().max(64), z.string().max(256)),
         })
       )
       .mutation(async ({ input }) => {
@@ -1447,8 +1542,9 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        const { sendStudyReportImpl } =
-          await import("./report/sendStudyReport");
+        const { sendStudyReportImpl } = await import(
+          "./report/sendStudyReport"
+        );
         return sendStudyReportImpl(input, ctx as any);
       }),
 
@@ -1463,7 +1559,10 @@ export const appRouter = router({
                 sliceIndex: z.number().int().min(0),
               })
             )
-            .min(1)
+            // 0 autorisé : le serveur échantillonne TOUTE la série lui-même
+            // (sampleSeriesPngs) à partir de seriesId — pas besoin d'une image
+            // clé capturée côté client (qui échoue notamment en 3D/VR).
+            .min(0)
             .max(20),
           indication: z.string().max(5000).optional(),
           antecedents: z.string().max(5000).optional(),
@@ -1472,6 +1571,17 @@ export const appRouter = router({
           windowCenter: z.number().optional(),
           windowWidth: z.number().optional(),
           sampleCount: z.number().int().min(1).max(24).optional(),
+          // Mode précis (CT) : ancrer le rapport dans les volumes segmentés.
+          includeSegmentation: z.boolean().optional(),
+          highResSegmentation: z.boolean().optional(),
+          // Double lecture : avis d'un 2e modèle (détecte les désaccords).
+          doubleRead: z.boolean().optional(),
+          // Analyser TOUTES les séries du dossier (auto à l'ouverture).
+          wholeStudy: z.boolean().optional(),
+          // Comparaison auto avec toutes les antériorités du patient.
+          compareAllPriors: z.boolean().optional(),
+          // Analyse approfondie (beaucoup plus de coupes) — toujours active.
+          deepAnalysis: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -1593,6 +1703,11 @@ export const appRouter = router({
         return { report, addenda };
       }),
 
+    pendingSignature: medicalProcedure.query(async () => {
+      const { listPendingSignatureReports } = await import("./db");
+      return { items: await listPendingSignatureReports() };
+    }),
+
     // Création / mise à jour du brouillon. Refuse toute modification d'un
     // compte-rendu déjà signé (immuable → addendum).
     upsertDraft: adminProcedure
@@ -1683,14 +1798,26 @@ export const appRouter = router({
             .default([]),
           priorStudyId: z.number().int().optional(),
           priorSeriesId: z.number().int().optional(),
+          // Analyser TOUTES les séries du dossier (pas seulement la série vue).
+          wholeStudy: z.boolean().optional(),
+          // Analyse approfondie : beaucoup plus de coupes (cas douteux).
+          deepAnalysis: z.boolean().optional(),
+          // Double lecture (2e modèle) — activée par défaut côté UI simplifiée.
+          doubleRead: z.boolean().optional(),
+          // Comparaison auto avec TOUTES les antériorités du patient.
+          compareAllPriors: z.boolean().optional(),
+          // Segmentation/mesures (CT) ancrées dans le rapport.
+          includeSegmentation: z.boolean().optional(),
+          highResSegmentation: z.boolean().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
         // Antériorité explicite (mode comparatif du viewer) sinon la plus
         // récente du même patient (helper DB existant). Fail-soft : aucune
-        // antériorité → génération simple inchangée.
+        // antériorité → génération simple inchangée. En mode compareAllPriors,
+        // on NE fixe PAS une antériorité unique (runAiPreanalysis les gère toutes).
         let priorStudyId = input.priorStudyId;
-        if (!priorStudyId) {
+        if (!priorStudyId && !input.compareAllPriors) {
           const { listPriorStudiesForStudy } = await import("./db");
           const priors = await listPriorStudiesForStudy(input.studyId);
           priorStudyId = priors[0]?.id;
@@ -1706,6 +1833,12 @@ export const appRouter = router({
             keyImages: input.keyImages,
             priorStudyId,
             priorSeriesId: input.priorSeriesId,
+            wholeStudy: input.wholeStudy,
+            deepAnalysis: input.deepAnalysis,
+            doubleRead: input.doubleRead,
+            compareAllPriors: input.compareAllPriors,
+            includeSegmentation: input.includeSegmentation,
+            highResSegmentation: input.highResSegmentation,
           },
           { user: { id: ctx.user.id }, req: { ip: ctx.req?.ip } }
         );
@@ -1790,7 +1923,169 @@ export const appRouter = router({
           detail: `report ${report.id}`,
           ipAddress: ctx.req?.ip ?? null,
         });
+        // Dépôt automatique du CR + ciné vers MediCentral (non-bloquant).
+        void deposerVersMediCentral(report.studyId);
+        // Hermès Apprentissage : compare brouillon↔signé pour détecter les patterns
+        // récurrents par modalité et proposer des fiches RAG. Non-bloquant.
+        void (async () => {
+          try {
+            const { getAgentState } = await import("./agents/state");
+            const s = await getAgentState("apprentissage");
+            if (s?.enabled) {
+              const { runLearningAgent } = await import("./agents/learning");
+              await runLearningAgent();
+            }
+          } catch {
+            /* best-effort */
+          }
+        })();
         return { success: true, pdfStorageKey: key };
+      }),
+
+    // Signature + envoi automatique au référent. Garde dure : le CR doit être
+    // signé ET un e-mail doit être connu avant tout envoi (assertSendable).
+    // Si le CR est déjà signé, on saute la phase signature et on envoie directement.
+    signAndSend: adminProcedure
+      .input(
+        z.object({
+          reportId: z.number(),
+          recipientEmail: z.string().email().optional(),
+          windowCenter: z.number().finite().default(40),
+          windowWidth: z.number().finite().default(400),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const {
+          getDb,
+          getStudyById,
+          listSeriesByStudy,
+          upsertReferringEmail,
+          resolveReferringEmail,
+        } = await import("./db");
+        const { reports } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const { assertSendable } = await import("./report/signAndSend");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+        const rows = await db
+          .select()
+          .from(reports)
+          .where(eq(reports.id, input.reportId))
+          .limit(1);
+        const report = rows[0];
+        if (!report) throw new TRPCError({ code: "NOT_FOUND" });
+        const sections = validateReportSections(report);
+        const study = (await getStudyById(report.studyId)) as any;
+
+        const email =
+          input.recipientEmail ??
+          (await resolveReferringEmail(study?.referringPhysician));
+        if (!email) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "E-mail du référent requis (renseignez-le).",
+          });
+        }
+        if (input.recipientEmail && study?.referringPhysician) {
+          await upsertReferringEmail(
+            study.referringPhysician,
+            input.recipientEmail
+          );
+        }
+
+        if (report.status !== "signed") {
+          if (!canSignReport(report.status as any, sections)) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Conclusion requise pour signer.",
+            });
+          }
+          const signedAt = new Date();
+          const signature = `Signé par ${ctx.user.name ?? "Dr"} le ${signedAt.toLocaleString("fr-CH")}`;
+          const pdf = buildReportPdf({
+            study,
+            report: sections,
+            signature,
+            keyImages: [],
+            aiAssisted: report.aiGenerated,
+          });
+          const { key } = await storagePut(
+            `reports/${report.studyId}/report-${report.id}.pdf`,
+            pdf,
+            "application/pdf"
+          );
+          await db
+            .update(reports)
+            .set({
+              status: "signed",
+              signedBy: ctx.user.id,
+              signedAt,
+              pdfStorageKey: key,
+            })
+            .where(eq(reports.id, report.id));
+          await recordAccess({
+            userId: ctx.user.id,
+            action: "report.sign",
+            studyId: report.studyId,
+            detail: `report ${report.id} (signAndSend)`,
+            ipAddress: ctx.req?.ip ?? null,
+          });
+          // Dépôt automatique CR + ciné vers MediCentral (non-bloquant).
+          void deposerVersMediCentral(report.studyId);
+        }
+
+        assertSendable("signed", email);
+        const series = await listSeriesByStudy(report.studyId);
+        const { sendStudyReportImpl } = await import(
+          "./report/sendStudyReport"
+        );
+        await sendStudyReportImpl(
+          {
+            to: email,
+            studyId: report.studyId,
+            seriesId: (series as any)[0]?.id ?? 0,
+            windowCenter: input.windowCenter,
+            windowWidth: input.windowWidth,
+            keyImages: [],
+            includeVideo: false,
+            aiAssisted: report.aiGenerated,
+          } as any,
+          ctx as any
+        );
+        try {
+          const { logAgentActivity, getAgentState } = await import(
+            "./agents/state"
+          );
+          await logAgentActivity("referent", "sendReport", "ok", {
+            studyId: report.studyId,
+          });
+          // Hermès Apprentissage : déclenché après signAndSend aussi.
+          const s = await getAgentState("apprentissage");
+          if (s?.enabled) {
+            const { runLearningAgent } = await import("./agents/learning");
+            void runLearningAgent();
+          }
+        } catch {
+          /* best-effort */
+        }
+        // Génère un lien OTP sécurisé (7 jours, usage unique) inclus dans l'email.
+        let shareUrl: string | null = null;
+        try {
+          const { createShareToken } = await import(
+            "./report/reportShareToken"
+          );
+          const token = await createShareToken(
+            report.id,
+            report.studyId,
+            email
+          );
+          const base = process.env.APP_BASE_URL ?? "https://mediview.ch";
+          shareUrl = `${base}/r/${token}`;
+        } catch {
+          /* best-effort — l'email part quand même */
+        }
+        return { ok: true, email, shareUrl };
       }),
 
     // Addendum (correction post-signature) : append-only, possible uniquement
@@ -1877,6 +2172,777 @@ export const appRouter = router({
         const key = rows[0]?.pdfStorageKey;
         if (!key) return { url: null };
         return { url: await storageGetSignedUrl(key) };
+      }),
+  }),
+
+  ai: router({
+    // Chat « Hermès radiologue » : assistant conversationnel sur l'étude courante.
+    // medicalProcedure (rôle clinique) + anti-IDOR (studyId résolu serveur) +
+    // rate-limit + PHI local par défaut (Claude seulement sous garde H4).
+    askHermes: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          messages: z
+            .array(
+              z.object({
+                role: z.enum(["user", "assistant"]),
+                content: z.string().min(1).max(4000),
+              })
+            )
+            .min(1)
+            .max(24),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        return runHermesChat(input, {
+          user: { id: ctx.user.id },
+          req: { ip: ctx.req?.ip },
+        });
+      }),
+    // État du GPU vision (prêt / en veille / en réveil) pour piloter le bouton
+    // « Réveiller l'IA ». Lecture seule, rôle clinique.
+    gpuStatus: medicalProcedure.query(async () => {
+      const { gpuStatus } = await import("./report/gpuControl");
+      return gpuStatus();
+    }),
+    // Réveille le GPU vision (sort de veille). Déclenché par le bouton dédié.
+    gpuWake: medicalProcedure.mutation(async () => {
+      const { gpuWake } = await import("./report/gpuControl");
+      return gpuWake();
+    }),
+
+    // --- IA CERTIFIÉE (dispositifs médicaux CE/FDA tiers) -------------------
+    // Inventaire des moteurs certifiés branchables (configurés ou non) — pour
+    // afficher dans l'UI ce qui est disponible et ce qui est actif.
+    certifiedAiInventory: medicalProcedure.query(async () => {
+      const { certifiedAiInventory } = await import("./report/externalAI");
+      return certifiedAiInventory();
+    }),
+    // Lance une analyse par un moteur CERTIFIÉ pour la modalité de l'étude.
+    // Renvoie { available:false } si aucun fournisseur certifié n'est branché
+    // (cas par défaut tant qu'aucun contrat n'est signé) → l'UI propose alors
+    // uniquement l'aide interne (Claude/Ollama, non certifiée). La modalité et
+    // le StudyInstanceUID sont résolus SERVEUR (la DB les a déjà) pour ne pas
+    // dépendre du client.
+    certifiedAnalysis: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          seriesId: z.number().int().optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { runCertifiedAnalysis } = await import("./report/externalAI");
+        const { getStudyById } = await import("./db");
+        const study: any = await getStudyById(input.studyId);
+        if (!study) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
+        }
+        const rawMod = (study.modality ?? "").trim().toUpperCase();
+        // Normalise les modalités DICOM radio vers notre enum XR.
+        const modality = (
+          ["CR", "DX", "DR", "RX"].includes(rawMod) ? "XR" : rawMod
+        ) as "XR" | "CT" | "MR" | "US" | "MG" | "PT" | "NM";
+        const studyInstanceUid =
+          study.studyInstanceUid ?? study.studyInstanceUID ?? "";
+        const result = await runCertifiedAnalysis({
+          studyId: input.studyId,
+          seriesId: input.seriesId,
+          modality,
+          studyInstanceUid,
+        });
+        return result
+          ? { available: true as const, result }
+          : { available: false as const, modality };
+      }),
+    // --- Mode validation IA -------------------------------------------------
+    // Verdict du médecin sur le brouillon IA d'une étude (juste/partielle/fausse
+    // + anomalie ratée). La lecture humaine = vérité ; sert à mesurer l'accord.
+    recordEvaluation: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          verdict: z.enum(["juste", "partielle", "fausse"]),
+          missedFinding: z.boolean().default(false),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { recordAiVerdict, getStudyById } = await import("./db");
+        // Garde : l'étude doit exister (cohérent avec aiPreanalysis). Mono-tenant
+        // → tout le personnel clinique accède à toutes les études de l'institut ;
+        // pas de propriété d'étude par utilisateur (modèle d'autorisation global).
+        const study = await getStudyById(input.studyId);
+        if (!study)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
+        await recordAiVerdict(input);
+        return { ok: true };
+      }),
+    // Verdict déjà saisi pour une étude (pour pré-cocher l'UI).
+    evaluation: medicalProcedure
+      .input(z.object({ studyId: z.number().int() }))
+      .query(async ({ input }) => {
+        const { getAiEvaluation } = await import("./db");
+        const e = await getAiEvaluation(input.studyId);
+        return e
+          ? { verdict: e.verdict, missedFinding: e.missedFinding }
+          : { verdict: null, missedFinding: false };
+      }),
+    // Statistiques d'accord IA mesurées sur les examens évalués.
+    evaluationStats: medicalProcedure.query(async () => {
+      const { getAiEvaluationStats } = await import("./db");
+      return getAiEvaluationStats();
+    }),
+    // Segmentation CT open-source (TotalSegmentator) auto-hébergée sur le GPU :
+    // renvoie les structures anatomiques + volumes. Anti-IDOR (série ∈ étude).
+    // NON certifié → aide à valider par le médecin.
+    segmentCt: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          seriesId: z.number().int(),
+          highRes: z.boolean().optional(),
+          task: z
+            .enum([
+              "total",
+              "total_mr",
+              "head_glands_cavities",
+              "headneck_bones_vessels",
+              "brain_structures",
+            ])
+            .optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { getStudyById, listSeriesByStudy } = await import("./db");
+        const study = await getStudyById(input.studyId);
+        if (!study)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
+        const series = await listSeriesByStudy(input.studyId);
+        if (!series.some((s: any) => s.id === input.seriesId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Série inconnue pour cette étude",
+          });
+        }
+        const { segmentCtSeries } = await import("./report/ctSegmentation");
+        return segmentCtSeries(input.seriesId, {
+          highRes: input.highRes,
+          overlayCount: 6,
+          task: input.task,
+        });
+      }),
+    // Analyse EXHAUSTIVE (toutes les coupes) — tâche de fond longue (~10-15 min).
+    // Retourne un jobId à sonder via exhaustiveStatus. Anti-IDOR (série ∈ étude).
+    startExhaustive: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          seriesId: z.number().int(),
+          windowCenter: z.number().optional(),
+          windowWidth: z.number().optional(),
+          indication: z.string().max(5000).optional(),
+          antecedents: z.string().max(5000).optional(),
+          // Balayer TOUTES les séries diagnostiques du dossier (pas qu'une).
+          wholeStudy: z.boolean().optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { getStudyById, listSeriesByStudy } = await import("./db");
+        const study = await getStudyById(input.studyId);
+        if (!study)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
+        const series = await listSeriesByStudy(input.studyId);
+        if (!series.some((s: any) => s.id === input.seriesId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Série inconnue pour cette étude",
+          });
+        }
+        const { startExhaustiveJob } = await import(
+          "./report/exhaustivePreanalysis"
+        );
+        return startExhaustiveJob({
+          studyId: input.studyId,
+          seriesId: input.seriesId,
+          windowCenter: input.windowCenter ?? 40,
+          windowWidth: input.windowWidth ?? 400,
+          indication: input.indication,
+          antecedents: input.antecedents,
+          wholeStudy: input.wholeStudy,
+        });
+      }),
+    exhaustiveStatus: medicalProcedure
+      .input(z.object({ jobId: z.string() }))
+      .query(async ({ input }) => {
+        const { getExhaustiveJob } = await import(
+          "./report/exhaustivePreanalysis"
+        );
+        return getExhaustiveJob(input.jobId);
+      }),
+    // Suggestion de codes CIM-10 depuis le compte rendu (LLM texte local).
+    // SUGGESTION à valider ; la facturation réelle reste dans MediAdmin.
+    suggestCodes: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          resultats: z.string().max(20000),
+          conclusion: z.string().max(20000),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { getStudyById } = await import("./db");
+        const study = await getStudyById(input.studyId);
+        if (!study)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
+        const { suggestCodes } = await import("./report/suggestCodes");
+        const { runAgentTool } = await import("./agents/tools");
+        const { logAgentActivity } = await import("./agents/state");
+        const res = await runAgentTool(
+          "codage",
+          "suggestBillingCodes",
+          () => suggestCodes(input.resultats, input.conclusion),
+          null
+        );
+        await logAgentActivity("codage", "suggestBillingCodes", "ok", {
+          detail: `cim=${res.codes.length} tardoc=${res.tardoc.length}`,
+        });
+        return res;
+      }),
+    // Dictée vocale → texte (Whisper sur GPU suisse, PHI-safe). Audio en base64.
+    transcribe: medicalProcedure
+      .input(
+        z.object({
+          audioBase64: z.string().min(1).max(30_000_000),
+          mimeType: z.string().max(100),
+          lang: z.string().max(8).optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { transcribeAudio } = await import("./report/transcribe");
+        return transcribeAudio(input.audioBase64, input.mimeType, input.lang);
+      }),
+  }),
+  knowledge: router({
+    // Ingestion de fichiers .md (coffre Obsidian) → chunks + embeddings locaux + stockage.
+    ingest: adminProcedure
+      .input(
+        z.object({
+          files: z
+            .array(
+              z.object({
+                name: z.string().min(1).max(512),
+                content: z.string().max(2_000_000),
+              })
+            )
+            .min(1)
+            .max(50),
+        })
+      )
+      .mutation(async ({ input }) => {
+        let inserted = 0;
+        const errors: string[] = [];
+        for (const f of input.files) {
+          try {
+            const chunks = chunkMarkdown(f.name, f.content);
+            const rows: {
+              source: string;
+              heading: string;
+              content: string;
+              embedding: number[];
+            }[] = [];
+            for (const c of chunks) {
+              try {
+                const embedding = await embedText(
+                  `${c.heading}\n${c.content}`.trim()
+                );
+                rows.push({ ...c, embedding });
+              } catch {
+                errors.push(`${f.name}: embedding échoué (chunk)`);
+              }
+            }
+            inserted += await insertChunks(rows);
+          } catch {
+            errors.push(`${f.name}: ingestion échouée`);
+          }
+        }
+        return { inserted, errors };
+      }),
+    syncVaultFromDisk: adminProcedure.mutation(async ({ ctx }) => {
+      const { syncVault } = await import("./knowledge/vaultSync");
+      const { ENV } = await import("./_core/env");
+      if (!ENV.knowledgeVaultDir) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "KNOWLEDGE_VAULT_DIR non configuré",
+        });
+      }
+      const result = await syncVault(ENV.knowledgeVaultDir);
+      await recordAccess({
+        userId: ctx.user.id,
+        action: "knowledge.syncVault",
+        studyId: null,
+        detail: `chunks=${result.chunks} removed=${result.removed}`,
+        ipAddress: ctx.req?.ip ?? null,
+      });
+      return result;
+    }),
+    syncGuidelines: adminProcedure.mutation(async ({ ctx }) => {
+      const { syncGuidelines } = await import("./knowledge/guidelinesSync");
+      const result = await syncGuidelines();
+      await recordAccess({
+        userId: ctx.user.id,
+        action: "knowledge.syncGuidelines",
+        studyId: null,
+        detail: `inserted=${result.inserted}`,
+        ipAddress: ctx.req?.ip ?? null,
+      });
+      return result;
+    }),
+    // Recherche par similarité (test/2c).
+    search: adminProcedure
+      .input(
+        z.object({
+          query: z.string().min(1).max(2000),
+          k: z.number().int().min(1).max(20).default(5),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const emb = await embedText(input.query);
+        return { results: await searchSimilar(emb, input.k) };
+      }),
+    // Recherche de connaissances exposée au radiologue (lecture seule).
+    searchPublic: medicalProcedure
+      .input(
+        z.object({
+          query: z.string().min(1).max(2000),
+          k: z.number().int().min(1).max(20).default(8),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const recent = await countRecentAccess(
+          ctx.user.id,
+          "knowledge.search",
+          60
+        );
+        if (recent >= 120) {
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: "Trop de recherches, réessayez plus tard.",
+          });
+        }
+        const emb = await embedText(input.query);
+        const hits = await searchSimilar(emb, input.k);
+        // Recherche directe : on garde tous les résultats au-dessus du seuil
+        // (jusqu'à k), pas la borne d'injection LLM (top-4).
+        const results = selectRelevant(hits, { maxChunks: input.k });
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "knowledge.search",
+          studyId: null,
+          detail: `q.len=${input.query.length}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { results };
+      }),
+    stats: adminProcedure.query(async () => knowledgeStats()),
+    clear: adminProcedure
+      .input(z.object({ source: z.string().max(512).optional() }))
+      .mutation(async ({ input }) => {
+        await clearKnowledge(input.source);
+        return { ok: true };
+      }),
+    // Statut du coffre Obsidian (chemin configuré + nb de .md), sans embedder.
+    vaultStatus: adminProcedure.query(async () => {
+      const dir = ENV.knowledgeVaultDir;
+      if (!dir)
+        return { dir: "", configured: false, exists: false, fileCount: 0 };
+      const files = await listVaultMarkdown(dir);
+      return {
+        dir,
+        configured: true,
+        exists: files.length > 0,
+        fileCount: files.length,
+      };
+    }),
+    // Synchronise le coffre Obsidian dédié → base RAG (chunks + embeddings locaux).
+    syncVault: adminProcedure.mutation(async ({ ctx }) => {
+      const result = await syncVault(ENV.knowledgeVaultDir);
+      await recordAccess({
+        userId: ctx.user.id,
+        action: "knowledge.vault_sync",
+        studyId: null,
+        detail: `files=${result.files} chunks=${result.chunks} removed=${result.removed}`,
+        ipAddress: ctx.req?.ip ?? null,
+      });
+      return result;
+    }),
+  }),
+  // Détecteur d'IA radiologique CERTIFIÉ CE (deepc/Incepto/Blackford) — aide à la
+  // détection (fracture, nodule, hémorragie). Désactivé tant que non configuré (ENV).
+  detectors: router({
+    status: medicalProcedure.query(async () => {
+      const { detectorConfigured } = await import("./report/detectors");
+      return {
+        configured: detectorConfigured(),
+        provider: ENV.detectorProvider || "",
+        certified: ENV.detectorProvider === "http",
+      };
+    }),
+    analyze: medicalProcedure
+      .input(
+        z.object({
+          studyId: z.number().int(),
+          seriesId: z.number().int().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { getStudyById, listSeriesByStudy } = await import("./db");
+        const study = await getStudyById(input.studyId);
+        if (!study)
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Étude introuvable",
+          });
+        if (input.seriesId !== undefined) {
+          const series = await listSeriesByStudy(input.studyId);
+          if (!series.some((s: any) => s.id === input.seriesId)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Série inconnue pour cette étude",
+            });
+          }
+        }
+        const { analyzeStudyWithDetector } = await import("./report/detectors");
+        const result = await analyzeStudyWithDetector(
+          input.studyId,
+          input.seriesId
+        );
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "detectors.analyze",
+          studyId: input.studyId,
+          detail: `provider=${result.provider} findings=${result.findings.length}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return result;
+      }),
+  }),
+  // Agent CR autonome : réglages + statut (incrément 1).
+  agent: router({
+    status: medicalProcedure.query(async () => {
+      const {
+        getAgentSettings,
+        countAiReportsSince,
+        countPendingSignatureReports,
+      } = await import("./db");
+      const s = await getAgentSettings();
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      return {
+        enabled: s?.enabled ?? false,
+        enabledAt: s?.enabledAt ?? null,
+        dailyCap: s?.dailyCap ?? 20,
+        generatedToday: await countAiReportsSince(startOfToday),
+        pendingCount: await countPendingSignatureReports(),
+      };
+    }),
+    configure: adminProcedure
+      .input(
+        z.object({
+          enabled: z.boolean().optional(),
+          dailyCap: z.number().int().min(1).max(500).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { updateAgentSettings } = await import("./db");
+        await updateAgentSettings(input);
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "agent.configure",
+          studyId: null,
+          detail: `enabled=${input.enabled} cap=${input.dailyCap}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { ok: true };
+      }),
+  }),
+  hermes: router({
+    findPatientReport: medicalProcedure
+      .input(z.object({ query: z.string().min(1).max(120) }))
+      .query(async ({ input, ctx }) => {
+        const { searchPatientsByName } = await import("./db");
+        const results = await searchPatientsByName(input.query);
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "hermes.find",
+          studyId: null,
+          detail: `n=${results.length}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { results };
+      }),
+    backfillNameSearch: adminProcedure.mutation(async () => {
+      const { backfillPatientNameSearch } = await import("./db");
+      return { updated: await backfillPatientNameSearch() };
+    }),
+    searchVault: medicalProcedure
+      .input(z.object({ query: z.string().min(1).max(500) }))
+      .query(async ({ input }) => {
+        const { runAgentTool } = await import("./agents/tools");
+        const { searchVaultFn } = await import("./tools/vaultTools");
+        return runAgentTool("copilote", "searchVault", searchVaultFn, {
+          query: input.query,
+        });
+      }),
+    weather: medicalProcedure.query(async () => {
+      const { runAgentTool } = await import("./agents/tools");
+      const { getWeatherFn } = await import("./tools/contextTools");
+      return runAgentTool("copilote", "getWeather", () => getWeatherFn(), null);
+    }),
+    localTime: medicalProcedure.query(async () => {
+      const { runAgentTool } = await import("./agents/tools");
+      const { getLocalTimeFn } = await import("./tools/contextTools");
+      return runAgentTool(
+        "copilote",
+        "getLocalTime",
+        () => getLocalTimeFn(),
+        null
+      );
+    }),
+    calendarToday: medicalProcedure
+      .input(
+        z.object({
+          date: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .optional(),
+        })
+      )
+      .query(async ({ input }) => {
+        const { runAgentTool } = await import("./agents/tools");
+        const { calendarTodayFn } = await import("./tools/contextTools");
+        return runAgentTool("copilote", "calendarToday", calendarTodayFn, {
+          date: input.date,
+        });
+      }),
+    pubmedSearch: medicalProcedure
+      .input(
+        z.object({
+          query: z.string().min(1).max(300),
+          maxResults: z.number().int().min(1).max(10).optional(),
+        })
+      )
+      .query(async ({ input }) => {
+        const { runAgentTool } = await import("./agents/tools");
+        const { pubmedSearchFn } = await import("./tools/researchTools");
+        return runAgentTool("copilote", "pubmedSearch", pubmedSearchFn, input);
+      }),
+    searchGuidelines: medicalProcedure
+      .input(z.object({ query: z.string().min(1).max(300) }))
+      .query(async ({ input }) => {
+        const { runAgentTool } = await import("./agents/tools");
+        const { searchGuidelinesFn } = await import("./tools/researchTools");
+        return runAgentTool(
+          "copilote",
+          "searchGuidelines",
+          searchGuidelinesFn,
+          { query: input.query }
+        );
+      }),
+    listPendingSignatures: medicalProcedure.query(async () => {
+      const { runAgentTool } = await import("./agents/tools");
+      const { listPendingSignaturesFn } = await import("./tools/crTools");
+      return runAgentTool(
+        "copilote",
+        "listPendingSignatures",
+        () => listPendingSignaturesFn(),
+        null
+      );
+    }),
+    getCRDraft: medicalProcedure
+      .input(z.object({ studyId: z.number().int().positive() }))
+      .query(async ({ input }) => {
+        const { runAgentTool } = await import("./agents/tools");
+        const { getCRDraftFn } = await import("./tools/crTools");
+        return runAgentTool("copilote", "getCRDraft", getCRDraftFn, {
+          studyId: input.studyId,
+        });
+      }),
+    requestCRGeneration: medicalProcedure
+      .input(z.object({ studyId: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        const { runAgentTool } = await import("./agents/tools");
+        const { requestCRGenerationFn } = await import("./tools/crTools");
+        return runAgentTool(
+          "copilote",
+          "requestCRGeneration",
+          requestCRGenerationFn,
+          { studyId: input.studyId }
+        );
+      }),
+  }),
+  agentsRegistry: router({
+    list: medicalProcedure.query(async () => {
+      const { AGENTS } = await import("./agents/registry");
+      const { getAgentState } = await import("./agents/state");
+      const { computeAgentKpis } = await import("./agents/metrics");
+      const out = [];
+      for (const spec of AGENTS) {
+        const state = await getAgentState(spec.key);
+        const kpis = await computeAgentKpis(spec.key);
+        out.push({ spec, state, kpis });
+      }
+      return { agents: out };
+    }),
+    configure: adminProcedure
+      .input(
+        z.object({
+          agentKey: z.string().max(64),
+          enabled: z.boolean().optional(),
+          targetsJson: z.string().max(4000).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { setAgentState } = await import("./agents/state");
+        await setAgentState(input.agentKey, {
+          enabled: input.enabled,
+          targetsJson: input.targetsJson,
+        });
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "agents.configure",
+          studyId: null,
+          detail: input.agentKey,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { ok: true };
+      }),
+    activity: medicalProcedure
+      .input(
+        z.object({
+          agentKey: z.string().max(64).optional(),
+          limit: z.number().int().min(1).max(200).default(50),
+        })
+      )
+      .query(async ({ input }) => {
+        const { listAgentActivity } = await import("./agents/state");
+        return { items: await listAgentActivity(input.agentKey, input.limit) };
+      }),
+    suggestions: medicalProcedure.query(async () => {
+      const { getDb } = await import("./db");
+      const { agentSuggestions } = await import("../drizzle/schema");
+      const { eq, desc } = await import("drizzle-orm");
+      const db = await getDb();
+      if (!db) return { items: [] };
+      const items = await db
+        .select()
+        .from(agentSuggestions)
+        .where(eq(agentSuggestions.status, "open"))
+        .orderBy(desc(agentSuggestions.createdAt));
+      return { items };
+    }),
+    refreshSuggestions: adminProcedure.mutation(async () => {
+      const { AGENTS } = await import("./agents/registry");
+      const { computeSuggestions } = await import("./agents/improve");
+      let created = 0;
+      for (const a of AGENTS) created += await computeSuggestions(a.key);
+      return { created };
+    }),
+    runLearning: adminProcedure.mutation(async ({ ctx }) => {
+      const { runLearningAgent } = await import("./agents/learning");
+      const res = await runLearningAgent();
+      await recordAccess({
+        userId: ctx.user.id,
+        action: "agents.runLearning",
+        studyId: null,
+        detail: `proposed=${res.proposed}`,
+        ipAddress: ctx.req?.ip ?? null,
+      });
+      return res;
+    }),
+    resolveSuggestion: adminProcedure
+      .input(
+        z.object({
+          id: z.number().int(),
+          action: z.enum(["approved", "dismissed"]),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { getDb } = await import("./db");
+        const { agentSuggestions } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db
+          .update(agentSuggestions)
+          .set({ status: input.action })
+          .where(eq(agentSuggestions.id, input.id));
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "agents.resolveSuggestion",
+          studyId: null,
+          detail: `${input.id}:${input.action}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        if (input.action === "approved") {
+          const { applyRagFiche } = await import("./agents/learning");
+          await applyRagFiche(input.id); // no-op si la suggestion n'est pas une rag_fiche
+        }
+        return { ok: true };
+      }),
+  }),
+  referringContacts: router({
+    resolve: medicalProcedure
+      .input(z.object({ name: z.string().max(256) }))
+      .query(async ({ input }) => {
+        const { resolveReferringEmail } = await import("./db");
+        return { email: await resolveReferringEmail(input.name) };
+      }),
+    upsert: adminProcedure
+      .input(
+        z.object({
+          name: z.string().min(1).max(256),
+          email: z.string().email(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { upsertReferringEmail } = await import("./db");
+        await upsertReferringEmail(input.name, input.email);
+        return { ok: true };
+      }),
+    list: medicalProcedure.query(async () => {
+      const { listReferringContacts } = await import("./db");
+      return { items: await listReferringContacts() };
+    }),
+    delete: adminProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input, ctx }) => {
+        const { deleteReferringContact } = await import("./db");
+        await deleteReferringContact(input.id);
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "referent.deleteContact",
+          studyId: null,
+          detail: `id=${input.id}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { ok: true };
       }),
   }),
 });

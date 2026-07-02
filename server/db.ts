@@ -1,4 +1,16 @@
-import { eq, desc, and, like, sql, gte, ne, asc } from "drizzle-orm";
+import {
+  eq,
+  desc,
+  and,
+  like,
+  sql,
+  gte,
+  lt,
+  ne,
+  asc,
+  inArray,
+  isNull,
+} from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -14,8 +26,17 @@ import {
   accessLogs,
   reports,
   reportAddenda,
+  aiEvaluations,
+  aiJobs,
+  referringContacts,
+  agentSettings,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import {
+  encryptField,
+  encryptDeterministic,
+  decryptField,
+} from "./_core/crypto";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -243,10 +264,15 @@ export async function listStudies(filters?: {
     .leftJoin(patients, eq(studies.patientId, patients.id))
     .orderBy(desc(studies.createdAt));
 
-  if (conditions.length > 0) {
-    return query.where(and(...conditions));
-  }
-  return query;
+  const rows =
+    conditions.length > 0 ? await query.where(and(...conditions)) : await query;
+  // Déchiffrement des identités patient (chiffrées au repos, nLPD).
+  return rows.map(r => ({
+    ...r,
+    patientName: decryptField(r.patientName),
+    patientDicomId: decryptField(r.patientDicomId),
+    birthDate: decryptField(r.birthDate),
+  }));
 }
 
 export async function getStudyById(studyId: number) {
@@ -277,7 +303,14 @@ export async function getStudyById(studyId: number) {
     .leftJoin(patients, eq(studies.patientId, patients.id))
     .where(eq(studies.id, studyId))
     .limit(1);
-  return result[0] || undefined;
+  const row = result[0];
+  if (!row) return undefined;
+  return {
+    ...row,
+    patientName: decryptField(row.patientName),
+    patientId: decryptField(row.patientId),
+    birthDate: decryptField(row.birthDate),
+  };
 }
 
 /**
@@ -331,6 +364,27 @@ export async function listInstancesBySeries(seriesId: number) {
     .orderBy(instances.instanceNumber);
 }
 
+// ============ PATIENT NAME HELPERS ============
+
+/** Normalise un nom (casse/espaces/accents/^) pour la recherche. */
+export function normalizeName(name?: string | null): string {
+  if (!name) return "";
+  return name
+    .replace(/\^/g, " ")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Empreinte déterministe chiffrée du nom normalisé (blind index). */
+export function nameSearchKey(name?: string | null): string | null {
+  const n = normalizeName(name);
+  if (!n) return null;
+  return encryptDeterministic(n);
+}
+
 // ============ PATIENT QUERIES ============
 
 export async function findOrCreatePatient(patientData: {
@@ -342,27 +396,40 @@ export async function findOrCreatePatient(patientData: {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
+  // patientId chiffré DÉTERMINISTE : la dédup par égalité fonctionne toujours
+  // sur l'index, mais la valeur stockée est chiffrée au repos (nLPD).
+  const encPatientId = encryptDeterministic(patientData.patientId)!;
+
+  const decryptRow = (p: typeof patients.$inferSelect) => ({
+    ...p,
+    patientId: decryptField(p.patientId),
+    patientName: decryptField(p.patientName),
+    birthDate: decryptField(p.birthDate),
+    sex: decryptField(p.sex),
+  });
+
   const existing = await db
     .select()
     .from(patients)
-    .where(eq(patients.patientId, patientData.patientId))
+    .where(eq(patients.patientId, encPatientId))
     .limit(1);
 
-  if (existing.length > 0) return existing[0];
+  if (existing.length > 0) return decryptRow(existing[0]);
 
-  const result = await db.insert(patients).values({
-    patientId: patientData.patientId,
-    patientName: patientData.patientName,
-    birthDate: patientData.birthDate || null,
-    sex: patientData.sex || null,
+  await db.insert(patients).values({
+    patientId: encPatientId,
+    patientName: encryptField(patientData.patientName)!,
+    birthDate: encryptField(patientData.birthDate || null),
+    sex: encryptField(patientData.sex || null),
+    nameSearch: nameSearchKey(patientData.patientName),
   });
 
   const newPatient = await db
     .select()
     .from(patients)
-    .where(eq(patients.patientId, patientData.patientId))
+    .where(eq(patients.patientId, encPatientId))
     .limit(1);
-  return newPatient[0];
+  return decryptRow(newPatient[0]);
 }
 
 // ============ DICOM IMPORT ============
@@ -468,7 +535,7 @@ export async function createInstance(data: {
 
 export async function createNotification(data: {
   userId: number;
-  type: "new_study" | "stat_urgent" | "report_finalized";
+  type: "new_study" | "stat_urgent" | "report_finalized" | "shared_study";
   title: string;
   message?: string;
   studyId?: number;
@@ -487,6 +554,29 @@ export async function getUserNotifications(userId: number) {
     .where(eq(notifications.userId, userId))
     .orderBy(desc(notifications.createdAt))
     .limit(50);
+}
+
+/**
+ * Liste les comptes cliniques (admin/radiologist/technician) hors l'appelant,
+ * pour le partage interne d'étude. PHI-safe : pas de hash de mot de passe.
+ */
+export async function listClinicalUsers(excludeUserId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      role: users.role,
+    })
+    .from(users)
+    .where(
+      and(
+        inArray(users.role, ["admin", "radiologist", "technician"]),
+        ne(users.id, excludeUserId)
+      )
+    );
 }
 
 export async function markNotificationRead(
@@ -632,4 +722,463 @@ export async function getReportAddenda(reportId: number) {
     .from(reportAddenda)
     .where(eq(reportAddenda.reportId, reportId))
     .orderBy(asc(reportAddenda.createdAt));
+}
+
+// --- Mode validation IA -----------------------------------------------------
+
+/** Snapshot du brouillon IA pour une étude (à la pré-analyse). Conserve le
+ *  verdict déjà saisi s'il existe (on ne ré-évalue pas en ré-analysant). */
+export async function snapshotAiEvaluation(data: {
+  studyId: number;
+  userId: number;
+  model?: string | null;
+  modality?: string | null;
+  aiAbnormal?: boolean | null;
+  aiConclusion?: string | null;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .insert(aiEvaluations)
+    .values({
+      studyId: data.studyId,
+      userId: data.userId,
+      model: data.model ?? null,
+      modality: data.modality ?? null,
+      aiAbnormal: data.aiAbnormal ?? null,
+      aiConclusion: data.aiConclusion ?? null,
+    })
+    .onDuplicateKeyUpdate({
+      set: {
+        userId: data.userId,
+        model: data.model ?? null,
+        modality: data.modality ?? null,
+        aiAbnormal: data.aiAbnormal ?? null,
+        aiConclusion: data.aiConclusion ?? null,
+      },
+    });
+}
+
+/** Verdict du médecin sur le brouillon IA d'une étude. */
+export async function recordAiVerdict(data: {
+  studyId: number;
+  verdict: "juste" | "partielle" | "fausse";
+  missedFinding: boolean;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(aiEvaluations)
+    .set({
+      verdict: data.verdict,
+      missedFinding: data.missedFinding,
+      evaluatedAt: sql`now()`,
+    })
+    .where(eq(aiEvaluations.studyId, data.studyId));
+}
+
+/** Verdict déjà saisi pour une étude (ou null). */
+export async function getAiEvaluation(studyId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(aiEvaluations)
+    .where(eq(aiEvaluations.studyId, studyId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/** Statistiques d'accord IA (sur les évaluations renseignées). */
+export async function getAiEvaluationStats() {
+  const db = await getDb();
+  if (!db) return { total: 0, juste: 0, partielle: 0, fausse: 0, missed: 0 };
+  const rows: { verdict: string | null; missed: boolean }[] = await db
+    .select({
+      verdict: aiEvaluations.verdict,
+      missed: aiEvaluations.missedFinding,
+    })
+    .from(aiEvaluations);
+  const evaluated = rows.filter(r => r.verdict != null);
+  const count = (v: string) => evaluated.filter(r => r.verdict === v).length;
+  return {
+    total: evaluated.length,
+    juste: count("juste"),
+    partielle: count("partielle"),
+    fausse: count("fausse"),
+    missed: evaluated.filter(r => r.missed).length,
+  };
+}
+
+// ============ AI EXHAUSTIVE JOBS (persistés, survivent au redémarrage) ============
+
+export interface AiJobState {
+  status: "running" | "done" | "error";
+  progress: { done: number; total: number };
+  result?: unknown;
+  error?: string;
+}
+
+export async function createAiJob(id: string, studyId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.insert(aiJobs).values({ id, studyId, status: "running" });
+  } catch (e) {
+    console.warn("[AiJob] create failed:", e);
+  }
+}
+
+export async function updateAiJobProgress(
+  id: string,
+  done: number,
+  total: number
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db
+      .update(aiJobs)
+      .set({ progressDone: done, progressTotal: total, updatedAt: new Date() })
+      .where(eq(aiJobs.id, id));
+  } catch {
+    /* best-effort */
+  }
+}
+
+export async function finishAiJob(id: string, result: unknown): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db
+      .update(aiJobs)
+      .set({ status: "done", result: result as any, updatedAt: new Date() })
+      .where(eq(aiJobs.id, id));
+  } catch (e) {
+    console.warn("[AiJob] finish failed:", e);
+  }
+}
+
+export async function failAiJob(id: string, error: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db
+      .update(aiJobs)
+      .set({
+        status: "error",
+        error: error.slice(0, 512),
+        updatedAt: new Date(),
+      })
+      .where(eq(aiJobs.id, id));
+  } catch {
+    /* best-effort */
+  }
+}
+
+export async function getAiJob(id: string): Promise<AiJobState | null> {
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    const rows = await db
+      .select()
+      .from(aiJobs)
+      .where(eq(aiJobs.id, id))
+      .limit(1);
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      status: r.status,
+      progress: { done: r.progressDone, total: r.progressTotal },
+      result: r.result ?? undefined,
+      error: r.error ?? undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Au boot : tout job resté « running » provient d'un crash/redémarrage (le
+ * calcul en mémoire est perdu) → on le marque « error » pour que le client
+ * affiche « interrompu, relancez » au lieu d'un avancement figé.
+ * Purge aussi les jobs de plus de 24 h (évite l'accumulation).
+ */
+export async function recoverStaleAiJobs(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  try {
+    await db
+      .update(aiJobs)
+      .set({
+        status: "error",
+        error: "Analyse interrompue par un redémarrage du serveur — relancez.",
+        updatedAt: new Date(),
+      })
+      .where(eq(aiJobs.status, "running"));
+    const cutoff = new Date(Date.now() - 24 * 3600_000);
+    await db.delete(aiJobs).where(lt(aiJobs.createdAt, cutoff));
+    return 1;
+  } catch (e) {
+    console.warn("[AiJob] recover failed:", e);
+    return 0;
+  }
+}
+
+// ============ AGENT CR AUTONOME ============
+
+/** Normalise un nom de référent pour servir de clé de correspondance e-mail. */
+export function normalizeReferringName(name?: string | null): string {
+  if (!name) return "";
+  return name
+    .replace(/\^/g, " ")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export async function getAgentSettings() {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(agentSettings)
+    .where(eq(agentSettings.id, 1))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function updateAgentSettings(patch: {
+  enabled?: boolean;
+  dailyCap?: number;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const current = await getAgentSettings();
+  const enabledAt =
+    patch.enabled && !current?.enabledAt
+      ? new Date()
+      : (current?.enabledAt ?? null);
+  await db
+    .update(agentSettings)
+    .set({
+      enabled: patch.enabled ?? current?.enabled ?? false,
+      dailyCap: patch.dailyCap ?? current?.dailyCap ?? 20,
+      enabledAt,
+      updatedAt: new Date(),
+    })
+    .where(eq(agentSettings.id, 1));
+}
+
+export async function setAgentLastRun(): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(agentSettings)
+    .set({ lastRunAt: new Date() })
+    .where(eq(agentSettings.id, 1));
+}
+
+/** Études SANS report, créées après `since`, limitées à `limit`. */
+export async function findStudyIdsNeedingReport(
+  since: Date,
+  limit: number
+): Promise<number[]> {
+  const db = await getDb();
+  if (!db || limit <= 0) return [];
+  const rows = await db
+    .select({ id: studies.id })
+    .from(studies)
+    .leftJoin(reports, eq(reports.studyId, studies.id))
+    .where(and(isNull(reports.id), gte(studies.createdAt, since)))
+    .orderBy(asc(studies.id))
+    .limit(limit);
+  return rows.map(r => r.id);
+}
+
+/** Nombre de reports IA créés depuis `since` (plafond/jour). */
+export async function countAiReportsSince(since: Date): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select({ n: sql<number>`COUNT(*)` })
+    .from(reports)
+    .where(and(eq(reports.aiGenerated, true), gte(reports.createdAt, since)));
+  return Number(rows[0]?.n ?? 0);
+}
+
+export async function resolveReferringEmail(
+  name?: string | null
+): Promise<string | null> {
+  const key = normalizeReferringName(name);
+  if (!key) return null;
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(referringContacts)
+    .where(eq(referringContacts.name, key))
+    .limit(1);
+  return rows[0]?.email ?? null;
+}
+
+export async function upsertReferringEmail(
+  name: string,
+  email: string
+): Promise<void> {
+  const key = normalizeReferringName(name);
+  if (!key) return;
+  const db = await getDb();
+  if (!db) return;
+  const existing = await db
+    .select()
+    .from(referringContacts)
+    .where(eq(referringContacts.name, key))
+    .limit(1);
+  if (existing[0]) {
+    await db
+      .update(referringContacts)
+      .set({ email, updatedAt: new Date() })
+      .where(eq(referringContacts.id, existing[0].id));
+  } else {
+    await db.insert(referringContacts).values({ name: key, email });
+  }
+}
+
+/** Carnet des médecins référents (nom normalisé → e-mail). Lecture. */
+export async function listReferringContacts(): Promise<
+  { id: number; name: string; email: string; updatedAt: Date }[]
+> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: referringContacts.id,
+      name: referringContacts.name,
+      email: referringContacts.email,
+      updatedAt: referringContacts.updatedAt,
+    })
+    .from(referringContacts)
+    .orderBy(asc(referringContacts.name));
+}
+
+export async function deleteReferringContact(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(referringContacts).where(eq(referringContacts.id, id));
+}
+
+/** Nombre de brouillons IA en attente de signature (file à signer). */
+export async function countPendingSignatureReports(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select({ n: sql<number>`COUNT(*)` })
+    .from(reports)
+    .where(and(eq(reports.aiGenerated, true), eq(reports.status, "draft")));
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** Recalcule nameSearch pour tous les patients (idempotent). */
+export async function backfillPatientNameSearch(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db.select().from(patients);
+  let updated = 0;
+  for (const p of rows) {
+    const name = decryptField(p.patientName);
+    const key = nameSearchKey(name);
+    if (key && key !== p.nameSearch) {
+      await db
+        .update(patients)
+        .set({ nameSearch: key })
+        .where(eq(patients.id, p.id));
+      updated++;
+    }
+  }
+  return updated;
+}
+
+/** Recherche patients par nom (blind index exact, mono-cabinet). Lecture seule. */
+export async function searchPatientsByName(query: string): Promise<
+  {
+    patientId: number;
+    patientName: string;
+    studyId: number | null;
+    reportStatus: string | null;
+  }[]
+> {
+  const key = nameSearchKey(query);
+  if (!key) return [];
+  const db = await getDb();
+  if (!db) return [];
+  const pts = await db
+    .select()
+    .from(patients)
+    .where(eq(patients.nameSearch, key))
+    .limit(10);
+  const out: {
+    patientId: number;
+    patientName: string;
+    studyId: number | null;
+    reportStatus: string | null;
+  }[] = [];
+  for (const p of pts) {
+    const st = await db
+      .select({ id: studies.id })
+      .from(studies)
+      .where(eq(studies.patientId, p.id))
+      .orderBy(desc(studies.createdAt))
+      .limit(1);
+    const studyId = st[0]?.id ?? null;
+    let reportStatus: string | null = null;
+    if (studyId) {
+      const r = await db
+        .select({ status: reports.status })
+        .from(reports)
+        .where(eq(reports.studyId, studyId))
+        .limit(1);
+      reportStatus = r[0]?.status ?? null;
+    }
+    out.push({
+      patientId: p.id,
+      patientName: decryptField(p.patientName) ?? "",
+      studyId,
+      reportStatus,
+    });
+  }
+  return out;
+}
+
+/** File à signer : brouillons IA non signés + infos étude (mono-cabinet). */
+export async function listPendingSignatureReports(): Promise<
+  {
+    reportId: number;
+    studyId: number;
+    studyDescription: string | null;
+    modality: string | null;
+    studyDate: string | null;
+    referringPhysician: string | null;
+    createdAt: Date;
+  }[]
+> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      reportId: reports.id,
+      studyId: reports.studyId,
+      studyDescription: studies.studyDescription,
+      modality: studies.modality,
+      studyDate: studies.studyDate,
+      referringPhysician: studies.referringPhysician,
+      createdAt: reports.createdAt,
+    })
+    .from(reports)
+    .innerJoin(studies, eq(studies.id, reports.studyId))
+    .where(and(eq(reports.aiGenerated, true), eq(reports.status, "draft")))
+    .orderBy(desc(reports.createdAt));
+  return rows;
 }

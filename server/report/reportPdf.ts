@@ -35,6 +35,21 @@ export interface ReportPdfInput {
 
 const MARGIN = 14;
 
+// jsPDF Helvetica ne couvre que ISO-8859-1 (0x00–0xFF). Les caractères Unicode
+// produits par l'IA (guillemets typographiques, tirets longs, ellipses…) déclenchent
+// un fallback vers Courier (rendu monospace) et un calcul de largeur incorrect
+// (overflow du texte). On les remplace par leurs équivalents ASCII avant rendu.
+function sanitizePdfText(text: string): string {
+  return text
+    .replace(/[“”„‟«»]/g, '"') // guillemets doubles
+    .replace(/[‘’‚‛‹›]/g, "'") // guillemets simples
+    .replace(/[–—―]/g, "-") // tirets longs
+    .replace(/…/g, "...") // ellipse
+    .replace(/•/g, "-") // puce
+    .replace(/ /g, " ") // espace insécable
+    .replace(/[^\x00-\xFF]/g, "?"); // tout autre Unicode > 0xFF
+}
+
 export function buildReportPdf(input: ReportPdfInput): Buffer {
   const doc = new jsPDF();
   const W = doc.internal.pageSize.getWidth();
@@ -90,7 +105,10 @@ export function buildReportPdf(input: ReportPdfInput): Buffer {
     y += 6;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(10);
-    const lines = doc.splitTextToSize(body || "—", W - 2 * MARGIN);
+    const lines = doc.splitTextToSize(
+      sanitizePdfText(body || "—"),
+      W - 2 * MARGIN
+    );
     for (const l of lines) {
       if (y > 285) {
         doc.addPage();
@@ -175,7 +193,10 @@ export function buildReportPdf(input: ReportPdfInput): Buffer {
       doc.text(`Addendum — ${ad.author}, ${ad.date}`, MARGIN, y);
       y += 5;
       doc.setFont("helvetica", "normal");
-      const lines = doc.splitTextToSize(ad.text, W - 2 * MARGIN);
+      const lines = doc.splitTextToSize(
+        sanitizePdfText(ad.text),
+        W - 2 * MARGIN
+      );
       doc.text(lines, MARGIN, y);
       y += lines.length * 5;
     }

@@ -192,6 +192,30 @@ export async function sendStudyReportImpl(
     ipAddress: ctx.req?.ip ?? null,
   });
 
+  // Lien de consultation en ligne — RÉSERVÉ au personnel MediView authentifié
+  // (7 j, usage unique). Les destinataires externes s'appuient sur le PDF joint.
+  // Non-bloquant si échec.
+  let otpBlock = "";
+  try {
+    const { createShareToken } = await import("./reportShareToken");
+    const reportRow = await getReportByStudy(study.id);
+    if (reportRow) {
+      const token = await createShareToken(reportRow.id, study.id, input.to);
+      const base = process.env.APP_BASE_URL ?? "https://mediview.ch";
+      const url = `${base}/r/${token}`;
+      otpBlock =
+        `<p style="margin:16px 0">` +
+        `<a href="${url}" style="display:inline-block;background:#4f46e5;color:#fff;` +
+        `padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600">` +
+        `Ouvrir l'imagerie dans MediView →</a></p>` +
+        `<p style="color:#999;font-size:11px">Lien valable 7 jours · usage unique · ` +
+        `réservé aux professionnels disposant d'un accès MediView (connexion requise). ` +
+        `Le compte rendu complet est joint en PDF.</p>`;
+    }
+  } catch {
+    /* best-effort */
+  }
+
   const result = await sendEmail({
     to: input.to,
     // Sujet NON nominatif (le PDF joint reste nominatif). Cf. I-email.
@@ -203,6 +227,7 @@ export async function sendStudyReportImpl(
       (input.includeVideo ? ` et le ciné de la série (MP4)` : ``) +
       `.</p>` +
       (safeMsg ? `<p>${safeMsg}</p>` : "") +
+      otpBlock +
       `<p style="color:#888;font-size:12px">Document médical confidentiel — destiné au seul destinataire.</p>` +
       `</div>`,
     attachments,

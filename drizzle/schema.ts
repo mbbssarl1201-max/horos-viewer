@@ -41,15 +41,21 @@ export const patients = mysqlTable(
   "patients",
   {
     id: int("id").autoincrement().primaryKey(),
-    patientId: varchar("patientId", { length: 128 }).notNull(),
-    patientName: varchar("patientName", { length: 256 }).notNull(),
-    birthDate: varchar("birthDate", { length: 10 }),
-    sex: varchar("sex", { length: 2 }),
+    // Longueurs élargies : ces champs sont chiffrés au repos (nLPD) et le
+    // chiffré (base64 de IV+tag+ciphertext) est plus long que le clair.
+    patientId: varchar("patientId", { length: 512 }).notNull(),
+    patientName: varchar("patientName", { length: 1024 }).notNull(),
+    birthDate: varchar("birthDate", { length: 128 }),
+    sex: varchar("sex", { length: 64 }),
+    // Blind index : empreinte DÉTERMINISTE du nom normalisé → recherche par nom
+    // sans déchiffrer toute la base (le nom reste chiffré dans patientName).
+    nameSearch: varchar("nameSearch", { length: 255 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   t => ({
     patientIdIdx: index("patients_patientId_idx").on(t.patientId),
+    nameSearchIdx: index("patients_nameSearch_idx").on(t.nameSearch),
   })
 );
 
@@ -189,6 +195,7 @@ export const notifications = mysqlTable(
       "new_study",
       "stat_urgent",
       "report_finalized",
+      "shared_study",
     ]).notNull(),
     title: varchar("title", { length: 256 }).notNull(),
     message: text("message"),
@@ -320,3 +327,165 @@ export type Report = typeof reports.$inferSelect;
 export type InsertReport = typeof reports.$inferInsert;
 export type ReportAddendum = typeof reportAddenda.$inferSelect;
 export type InsertReportAddendum = typeof reportAddenda.$inferInsert;
+
+// Base de connaissances RAG d'Hermès (NON-PHI). `embedding` = JSON.stringify(number[]).
+export const knowledgeChunks = mysqlTable("knowledge_chunks", {
+  id: int("id").autoincrement().primaryKey(),
+  source: varchar("source", { length: 512 }).notNull(),
+  heading: varchar("heading", { length: 512 }),
+  content: text("content").notNull(),
+  embedding: text("embedding").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+// Mode validation IA : snapshot du brouillon de pré-analyse par étude + verdict
+// du médecin (la lecture humaine = vérité). Permet de mesurer, sur les vrais
+// examens, le taux d'accord de l'IA vision. Non-PHI sensible (pas de pixels).
+export const aiEvaluations = mysqlTable("ai_evaluations", {
+  id: int("id").autoincrement().primaryKey(),
+  studyId: int("studyId").notNull().unique(),
+  userId: int("userId").notNull(),
+  model: varchar("model", { length: 128 }),
+  modality: varchar("modality", { length: 16 }),
+  aiAbnormal: boolean("aiAbnormal"),
+  aiConclusion: text("aiConclusion"),
+  // Verdict du médecin sur le brouillon IA (null tant que non évalué).
+  verdict: mysqlEnum("verdict", ["juste", "partielle", "fausse"]),
+  // L'IA a-t-elle MANQUÉ une anomalie réelle ? (sécurité clinique)
+  missedFinding: boolean("missedFinding").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  evaluatedAt: timestamp("evaluatedAt"),
+});
+export type AiEvaluation = typeof aiEvaluations.$inferSelect;
+export type InsertAiEvaluation = typeof aiEvaluations.$inferInsert;
+
+/**
+ * Jobs d'analyse EXHAUSTIVE (tâche de fond, longue).
+ * Persistés en base pour SURVIVRE à un redémarrage : au boot, tout job resté
+ * « running » est marqué « error » (interrompu) → le client voit « relancez »
+ * au lieu d'un « 0/N » figé ou d'un « Job inconnu ». (Pas de reprise auto.)
+ */
+export const aiJobs = mysqlTable(
+  "ai_jobs",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    studyId: int("studyId").notNull(),
+    status: mysqlEnum("status", ["running", "done", "error"])
+      .notNull()
+      .default("running"),
+    progressDone: int("progressDone").notNull().default(0),
+    progressTotal: int("progressTotal").notNull().default(0),
+    result: json("result"),
+    error: varchar("error", { length: 512 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => ({ studyIdx: index("ai_jobs_study_idx").on(t.studyId) })
+);
+export type AiJob = typeof aiJobs.$inferSelect;
+export type InsertAiJob = typeof aiJobs.$inferInsert;
+
+/** Correspondance nom de médecin référent → e-mail (mono-cabinet). */
+export const referringContacts = mysqlTable(
+  "referring_contacts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    name: varchar("name", { length: 256 }).notNull(),
+    email: varchar("email", { length: 256 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  t => ({ nameIdx: index("referring_contacts_name_idx").on(t.name) })
+);
+export type ReferringContact = typeof referringContacts.$inferSelect;
+
+/** Réglages de l'agent CR autonome. Ligne UNIQUE (id=1). */
+export const agentSettings = mysqlTable("agent_settings", {
+  id: int("id").primaryKey(),
+  enabled: boolean("enabled").notNull().default(false),
+  enabledAt: timestamp("enabledAt"),
+  dailyCap: int("dailyCap").notNull().default(20),
+  lastRunAt: timestamp("lastRunAt"),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+export type AgentSettings = typeof agentSettings.$inferSelect;
+
+/** État + réglages par agent Hermès (registre des fiches = code). */
+export const agentState = mysqlTable("agent_state", {
+  agentKey: varchar("agentKey", { length: 64 }).primaryKey(),
+  enabled: boolean("enabled").notNull().default(false),
+  targetsJson: text("targetsJson"),
+  lastRunAt: timestamp("lastRunAt"),
+  lastError: varchar("lastError", { length: 512 }),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+export type AgentState = typeof agentState.$inferSelect;
+
+/** Journal d'activité par agent (santé + audit). */
+export const agentActivity = mysqlTable(
+  "agent_activity",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    agentKey: varchar("agentKey", { length: 64 }).notNull(),
+    action: varchar("action", { length: 128 }).notNull(),
+    studyId: int("studyId"),
+    status: mysqlEnum("status", ["ok", "error", "skipped"]).notNull(),
+    detail: varchar("detail", { length: 512 }),
+    durationMs: int("durationMs"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => ({ agentIdx: index("agent_activity_agent_idx").on(t.agentKey) })
+);
+export type AgentActivity = typeof agentActivity.$inferSelect;
+
+/** Mémoire d'agent : notes courtes d'amélioration. */
+export const agentNotes = mysqlTable("agent_notes", {
+  id: int("id").autoincrement().primaryKey(),
+  agentKey: varchar("agentKey", { length: 64 }).notNull(),
+  note: text("note").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type AgentNote = typeof agentNotes.$inferSelect;
+
+/** Suggestions d'auto-amélioration (proposées → validées par le gérant). */
+export const agentSuggestions = mysqlTable("agent_suggestions", {
+  id: int("id").autoincrement().primaryKey(),
+  agentKey: varchar("agentKey", { length: 64 }).notNull(),
+  kpiKey: varchar("kpiKey", { length: 64 }).notNull(),
+  gap: int("gap"),
+  suggestion: text("suggestion").notNull(),
+  status: mysqlEnum("status", ["open", "approved", "dismissed"])
+    .notNull()
+    .default("open"),
+  kind: mysqlEnum("kind", ["improvement", "rag_fiche"])
+    .notNull()
+    .default("improvement"),
+  modality: varchar("modality", { length: 16 }),
+  proposedHeading: varchar("proposedHeading", { length: 512 }),
+  proposedContent: text("proposedContent"),
+  sampleCount: int("sampleCount"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type AgentSuggestion = typeof agentSuggestions.$inferSelect;
+
+/** Snapshot du brouillon IA à la génération (pour mesurer signé-sans-correction). */
+export const reportAiSnapshots = mysqlTable("report_ai_snapshots", {
+  id: int("id").autoincrement().primaryKey(),
+  studyId: int("studyId").notNull().unique(),
+  sectionsJson: text("sectionsJson").notNull(),
+  model: varchar("model", { length: 128 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type ReportAiSnapshot = typeof reportAiSnapshots.$inferSelect;
+
+export const reportShareTokens = mysqlTable("report_share_tokens", {
+  id: int("id").autoincrement().primaryKey(),
+  token: varchar("token", { length: 64 }).notNull().unique(),
+  reportId: int("reportId").notNull(),
+  studyId: int("studyId").notNull(),
+  recipientEmail: varchar("recipientEmail", { length: 255 }).notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  usedAt: timestamp("usedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type ReportShareToken = typeof reportShareTokens.$inferSelect;

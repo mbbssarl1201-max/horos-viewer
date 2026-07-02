@@ -24,6 +24,12 @@ import ExportPanel from "@/components/ExportPanel";
 import AnonymizeDialog from "@/components/AnonymizeDialog";
 import QueryPACS from "@/components/QueryPACS";
 import WorklistDialog from "@/components/WorklistDialog";
+import ShareStudyDialog from "@/components/ShareStudyDialog";
+import { PendingSignatureList } from "@/components/PendingSignatureList";
+import { HermesFinder } from "@/components/HermesFinder";
+import { AgentCrSettings } from "@/components/AgentCrSettings";
+import { AgentsDashboard } from "@/components/AgentsDashboard";
+import { ReferentDirectory } from "@/components/ReferentDirectory";
 import { useLocation } from "wouter";
 import {
   Database,
@@ -57,9 +63,12 @@ import {
   Plus,
   ChevronDown,
   ClipboardList,
+  LayoutDashboard,
 } from "lucide-react";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import CockpitMediView from "@/pages/CockpitMediView";
 import { matchAllFields } from "@/lib/studySearch";
+import { matchesTodayModality } from "@/lib/quickAlbums";
 import { toast } from "sonner";
 
 // All DICOM modalities as seen in Horos
@@ -116,6 +125,21 @@ function recordOpenedId(id: number): number[] {
 }
 
 // Parse une date d'étude (DICOM YYYYMMDD ou ISO) ou un timestamp → ms, ou null.
+function formatStudyDate(v: unknown): string {
+  if (v == null) return "-";
+  const s = String(v).trim();
+  // Format DICOM YYYYMMDD
+  if (/^\d{8}$/.test(s)) {
+    return `${s.slice(6, 8)}.${s.slice(4, 6)}.${s.slice(0, 4)}`;
+  }
+  // ISO ou autre format reconnaissable
+  const t = Date.parse(s);
+  if (Number.isFinite(t)) {
+    return new Date(t).toLocaleDateString("fr-CH");
+  }
+  return s || "-";
+}
+
 function parseStudyMs(v: unknown): number | null {
   if (v == null) return null;
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
@@ -153,6 +177,15 @@ function albumMatches(study: any, key: string, openedIds: number[]): boolean {
     case "opened":
       return openedIds.includes(study?.id);
     default:
+      // Albums « Today <modalité> » façon Horos : clé « today:CT », « today:MR »…
+      if (key.startsWith("today:")) {
+        return matchesTodayModality(
+          key.slice("today:".length),
+          study,
+          parseStudyMs(study?.studyDate),
+          now
+        );
+      }
       return true;
   }
 }
@@ -178,6 +211,7 @@ export default function Home() {
   const [showAnonymizeDialog, setShowAnonymizeDialog] = useState(false);
   const [showQueryPACS, setShowQueryPACS] = useState(false);
   const [showWorklist, setShowWorklist] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [selectedStudyId, setSelectedStudyId] = useState<number | null>(null);
   const [showMetaData, setShowMetaData] = useState(false);
   // Recherche multi-champs (Search ⌘F) — filtrage client de la liste d'études.
@@ -220,6 +254,7 @@ export default function Home() {
   const [showAddServer, setShowAddServer] = useState(false);
   const [showSendDialog, setShowSendDialog] = useState(false);
   const [sendTargetAet, setSendTargetAet] = useState<string>("");
+  const [cockpitOpen, setCockpitOpen] = useState(false);
 
   // Clinical roles (admin/radiologist) may change RIS workflow state.
   const canEditWorkflow =
@@ -266,6 +301,34 @@ export default function Home() {
           : `Échec de l'envoi : ${err.message}`
       ),
   });
+
+  // Écouter les commandes Eva pour contrôler l'app
+  useEffect(() => {
+    const onAlbum = (e: Event) => {
+      const albumKey = (e as CustomEvent<string>).detail;
+      if (!albumKey) return;
+      // Gère "today:CT" → modality CT + timeFilter today
+      const [prefix, modality] = albumKey.split(":");
+      if (prefix === "today" && modality) {
+        setSelectedAlbum("database");
+        setSelectedModality(modality);
+        setTimeFilter("today");
+      } else {
+        setSelectedAlbum(albumKey);
+        setSelectedModality(null);
+        setTimeFilter("none");
+      }
+    };
+    const onSearch = (e: Event) => {
+      setSearchQuery((e as CustomEvent<string>).detail ?? "");
+    };
+    window.addEventListener("eva:selectAlbum", onAlbum);
+    window.addEventListener("eva:search", onSearch);
+    return () => {
+      window.removeEventListener("eva:selectAlbum", onAlbum);
+      window.removeEventListener("eva:search", onSearch);
+    };
+  }, []);
 
   const allStudies = studiesData ?? [];
   // Filtrage par smart album (côté client) PUIS recherche multi-champs façon
@@ -353,6 +416,13 @@ export default function Home() {
                 label: "Generate Report (PDF)",
                 onClick: () => {
                   if (selectedStudyId) setShowExportDialog(true);
+                  else toast("Select a study first");
+                },
+              },
+              {
+                label: "Partager…",
+                onClick: () => {
+                  if (selectedStudyId) setShareOpen(true);
                   else toast("Select a study first");
                 },
               },
@@ -449,6 +519,10 @@ export default function Home() {
               else toast("Select a study first");
             }}
           />
+          <MenuBarItem
+            label="Cockpit"
+            onClick={() => setCockpitOpen(o => !o)}
+          />
           {/* Plugins Menu */}
           <MenuDropdown
             label="Plugins"
@@ -482,6 +556,12 @@ export default function Home() {
       {/* Top Toolbar - Horos style with all buttons */}
       <div className="h-16 border-b border-border bg-gradient-to-b from-[#2a2a3e] to-[#1e1e30] flex items-center px-2 gap-0.5 shrink-0">
         <ToolbarButton
+          icon={LayoutDashboard}
+          label="Cockpit"
+          onClick={() => setCockpitOpen(o => !o)}
+        />
+        <ToolbarSep />
+        <ToolbarButton
           icon={Cloud}
           label="Cloud Dashboard"
           onClick={() => toast("Cloud Dashboard coming soon")}
@@ -494,7 +574,10 @@ export default function Home() {
         <ToolbarButton
           icon={Send}
           label="Cloud Sharing"
-          onClick={() => toast("Cloud Sharing coming soon")}
+          onClick={() => {
+            if (selectedStudyId) setShareOpen(true);
+            else toast("Sélectionnez une étude");
+          }}
         />
         <ToolbarSep />
         <ToolbarButton
@@ -660,10 +743,17 @@ export default function Home() {
       </div>
 
       {/* Main Content */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left Sidebar */}
-        <div className="w-52 border-r border-border bg-sidebar flex flex-col shrink-0">
-          <ScrollArea className="flex-1">
+      <div className="flex flex-1 overflow-hidden min-w-0">
+        {cockpitOpen && (
+          <div className="w-64 lg:w-72 shrink-0 border-r border-slate-800 overflow-hidden">
+            <CockpitMediView embedded />
+          </div>
+        )}
+        {/* Albums sidebar — masquée sur petit écran quand Eva est ouverte */}
+        <div
+          className={`border-r border-border bg-sidebar flex flex-col shrink-0 ${cockpitOpen ? "hidden md:flex w-44 lg:w-52" : "w-52"}`}
+        >
+          <div className="flex-1 overflow-y-auto min-h-0">
             {/* Albums */}
             <div className="p-3">
               <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
@@ -696,37 +786,57 @@ export default function Home() {
 
             <Separator />
 
+            {/* File à signer — brouillons IA en attente de signature */}
+            <div className="p-3">
+              <PendingSignatureList onOpen={openStudy} />
+            </div>
+
+            <Separator />
+
+            {/* Recherche patient Hermès */}
+            <div className="p-3">
+              <HermesFinder onOpen={openStudy} />
+            </div>
+
+            <Separator />
+
             {/* Today's Studies by modality */}
             <div className="p-3">
               <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
                 Today's Studies
               </h3>
               <div className="space-y-0.5">
-                {ALL_MODALITIES.slice(0, 10).map(mod => (
-                  <button
-                    key={mod.key}
-                    onClick={() =>
-                      setSelectedModality(
-                        selectedModality === mod.key ? null : mod.key
-                      )
-                    }
-                    className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
-                      selectedModality === mod.key
-                        ? "bg-primary/20 text-primary"
-                        : "text-sidebar-foreground hover:bg-sidebar-accent"
-                    }`}
-                  >
-                    <span className="w-6 font-mono text-[10px] shrink-0">
-                      {mod.key}
-                    </span>
-                    <span className="truncate text-[10px]">
-                      {mod.description}
-                    </span>
-                    <span className="ml-auto text-[10px] text-muted-foreground">
-                      0
-                    </span>
-                  </button>
-                ))}
+                {ALL_MODALITIES.slice(0, 10).map(mod => {
+                  const albumKey = `today:${mod.key}`;
+                  const count = allStudies.filter((s: any) =>
+                    albumMatches(s, albumKey, openedIds)
+                  ).length;
+                  return (
+                    <button
+                      key={mod.key}
+                      onClick={() =>
+                        setSelectedAlbum(
+                          selectedAlbum === albumKey ? "database" : albumKey
+                        )
+                      }
+                      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
+                        selectedAlbum === albumKey
+                          ? "bg-primary/20 text-primary"
+                          : "text-sidebar-foreground hover:bg-sidebar-accent"
+                      }`}
+                    >
+                      <span className="w-6 font-mono text-[10px] shrink-0">
+                        {mod.key}
+                      </span>
+                      <span className="truncate text-[10px]">
+                        {mod.description}
+                      </span>
+                      <span className="ml-auto text-[10px] text-muted-foreground">
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -769,21 +879,66 @@ export default function Home() {
                 ))}
               </div>
             </div>
-          </ScrollArea>
+
+            <Separator />
+
+            {/* Réglages agent CR autonome */}
+            <div className="p-3">
+              <AgentCrSettings />
+            </div>
+
+            <Separator />
+
+            {/* Dashboard agents Hermès */}
+            <div className="p-3">
+              <AgentsDashboard />
+            </div>
+
+            <Separator />
+
+            {/* Carnet des référents */}
+            <div className="p-3">
+              <ReferentDirectory />
+            </div>
+          </div>
 
           {/* Activity */}
           <div className="p-3 border-t border-border">
             <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1">
               Activity
             </h3>
-            <p className="text-[10px] text-muted-foreground">
-              No active transfers
-            </p>
+            {(() => {
+              const recent = openedIds
+                .map(id => allStudies.find((s: any) => s.id === id))
+                .filter(Boolean)
+                .slice(0, 6);
+              if (recent.length === 0)
+                return (
+                  <p className="text-[10px] text-muted-foreground">
+                    Aucune activité récente
+                  </p>
+                );
+              return (
+                <div className="space-y-0.5">
+                  {recent.map((s: any) => (
+                    <button
+                      key={s.id}
+                      onClick={() => navigate(`/viewer/${s.id}`)}
+                      className="w-full text-left text-[10px] text-muted-foreground hover:text-foreground truncate"
+                      title={`${s.patientName || "?"} — ${s.modality || ""} ${s.studyDescription || ""}`}
+                    >
+                      • {s.patientName || "Sans nom"}{" "}
+                      <span className="opacity-60">{s.modality || ""}</span>
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         </div>
 
         {/* Main Study List */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0">
           {/* Recherche multi-champs (Search ⌘F de Horos) */}
           <div className="h-9 border-b border-border bg-card flex items-center gap-2 px-2 shrink-0">
             <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
@@ -832,8 +987,8 @@ export default function Home() {
             <div className="w-20 px-1 cursor-pointer hover:text-foreground">
               ID
             </div>
-            <div className="flex-1 px-1 cursor-pointer hover:text-foreground">
-              Comments
+            <div className="w-24 px-1 cursor-pointer hover:text-foreground">
+              Date exam.
             </div>
             <div className="w-16 px-1 cursor-pointer hover:text-foreground">
               History
@@ -841,7 +996,7 @@ export default function Home() {
           </div>
 
           {/* Study Rows */}
-          <ScrollArea className="flex-1">
+          <ScrollArea className="flex-1 min-h-0">
             {studiesLoading ? (
               <div className="flex items-center justify-center h-48">
                 <div className="text-sm text-muted-foreground">
@@ -987,8 +1142,8 @@ export default function Home() {
                     <div className="w-20 px-1 text-muted-foreground truncate text-[9px]">
                       {study.studyInstanceUid?.slice(-8) || "-"}
                     </div>
-                    <div className="flex-1 px-1 text-muted-foreground truncate">
-                      {"-"}
+                    <div className="w-24 px-1 text-muted-foreground tabular-nums text-[10px]">
+                      {formatStudyDate(study.studyDate)}
                     </div>
                     <div className="w-16 px-1 text-muted-foreground text-[9px]">
                       {study.numberOfSeries
@@ -1045,6 +1200,12 @@ export default function Home() {
       <QueryPACS open={showQueryPACS} onOpenChange={setShowQueryPACS} />
 
       <WorklistDialog open={showWorklist} onOpenChange={setShowWorklist} />
+
+      <ShareStudyDialog
+        studyId={selectedStudyId}
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+      />
 
       {/* Add PACS Server Dialog */}
       <Dialog open={showAddServer} onOpenChange={setShowAddServer}>
@@ -1230,7 +1391,11 @@ function MenuDropdown({
         {label}
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-0.5 w-48 bg-popover border border-border rounded-md shadow-lg py-1 z-50">
+        // Pas de marge (mt-*) entre le bouton et la liste : une marge créerait une
+        // zone morte que la souris traverse en descendant → onMouseLeave fermerait
+        // le menu avant qu'on l'atteigne. La liste est accolée au bouton (top-full),
+        // donc le survol reste continu du bouton vers les items.
+        <div className="absolute top-full left-0 w-48 bg-popover border border-border rounded-md shadow-lg py-1 z-50">
           {items.map(item => (
             <button
               key={item.label}

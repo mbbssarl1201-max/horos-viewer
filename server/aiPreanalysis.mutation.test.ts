@@ -5,12 +5,14 @@ const mocks = {
   listSeriesByStudy: vi.fn(),
   countRecentAccess: vi.fn(),
   recordAccess: vi.fn(),
+  snapshotAiEvaluation: vi.fn(),
 };
 vi.mock("./db", () => ({
   getStudyById: (...a: any) => mocks.getStudyById(...a),
   listSeriesByStudy: (...a: any) => mocks.listSeriesByStudy(...a),
   countRecentAccess: (...a: any) => mocks.countRecentAccess(...a),
   recordAccess: (...a: any) => mocks.recordAccess(...a),
+  snapshotAiEvaluation: (...a: any) => mocks.snapshotAiEvaluation(...a),
 }));
 
 import * as ai from "./report/aiPreanalysis";
@@ -69,10 +71,12 @@ describe("runAiPreanalysis", () => {
       resultats: "R",
       conclusion: "C",
       model: "qwen2.5-vl:3b",
-      // pas de seriesId → pas d'échantillonnage ni de coupe-clé rendue
-      keyImage: null,
+      // sans seriesId, l'image clé est prise depuis keyImages (coupe du milieu)
+      keyImage: { pngBase64: onePxPng, sliceIndex: 0 },
       // pas de priorStudyId → pas de comparaison d'antériorité
       comparedPriorDate: null,
+      // pas de doubleRead → pas de 2e avis
+      secondOpinion: null,
     });
     expect(mocks.recordAccess).toHaveBeenCalledWith(
       expect.objectContaining({ action: "study.ai.preanalysis", studyId: 1 })

@@ -52,8 +52,8 @@ function ensureElement(): HTMLDivElement {
  */
 export function renderThumbnail(
   imageId: string,
-  windowWidth: number,
-  windowCenter: number
+  _windowWidth?: number,
+  _windowCenter?: number
 ): Promise<string | null> {
   if (cache.has(imageId)) return Promise.resolve(cache.get(imageId)!);
   const existing = inflight.get(imageId);
@@ -61,7 +61,7 @@ export function renderThumbnail(
 
   const task = queue
     .catch(() => undefined) // un échec précédent ne doit pas bloquer la file
-    .then(() => renderOne(imageId, windowWidth, windowCenter))
+    .then(() => renderOne(imageId))
     .then(dataUrl => {
       cache.set(imageId, dataUrl);
       inflight.delete(imageId);
@@ -80,8 +80,8 @@ export function renderThumbnail(
 
 async function renderOne(
   imageId: string,
-  windowWidth: number,
-  windowCenter: number
+  _windowWidth?: number,
+  _windowCenter?: number
 ): Promise<string | null> {
   await initCornerstone();
   const cornerstone = await import("@cornerstonejs/core");
@@ -119,12 +119,9 @@ async function renderOne(
 
   await viewport.setStack([imageId], 0);
   renderingEngine.resize(true, true);
-  viewport.setProperties({
-    voiRange: {
-      lower: windowCenter - windowWidth / 2,
-      upper: windowCenter + windowWidth / 2,
-    },
-  });
+  // Laisser Cornerstone appliquer le W/L DICOM natif de l'image (tags
+  // 0028,1050/0028,1051). Forcer un preset fixe (ex. 400/40 CT abdomen)
+  // rend tous les thumbnails MRI/DR/US blancs ou noirs.
   viewport.render();
 
   await rendered;

@@ -7,6 +7,8 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { registerDicomwebProxy } from "../dicomwebProxy";
+import { registerCockpitRoutes, attacherVncProxy } from "../cockpit.routes";
+import { attacherProxyVoixVertex } from "../voix/vertexLiveProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -81,9 +83,22 @@ async function startServer() {
     skip: req => !req.originalUrl.includes("auth.login"),
     message: { error: "Too many login attempts, please try again later." },
   });
+  // Limiteur dédié au point PUBLIC non authentifié `/r/:token` (rédemption d'un
+  // lien de partage de CR) : il touche la DB avant tout contrôle d'accès, donc on
+  // borne les tentatives par IP (défense en profondeur ; le token 256 bits rend
+  // déjà le brute-force inatteignable).
+  const RL_SHARE_MAX = parseInt(process.env.RATE_LIMIT_SHARE_MAX ?? "30");
+  const shareLimiter = rateLimit({
+    windowMs: RL_WINDOW_MS,
+    limit: RL_SHARE_MAX,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    message: "Trop de requêtes, réessayez plus tard.",
+  });
   app.use("/api", apiLimiter);
   app.use("/api/export", exportLimiter);
   app.use("/api/trpc", loginLimiter);
+  app.use("/r", shareLimiter);
 
   // CSRF mitigation for the PHI export GET routes: a cross-site context (e.g. a
   // malicious page triggering a navigation/download) is rejected. Same-origin
@@ -148,6 +163,9 @@ async function startServer() {
   registerStorageProxy(app);
   registerDicomwebProxy(app);
   registerOAuthRoutes(app);
+  registerCockpitRoutes(app);
+  attacherVncProxy(server);
+  attacherProxyVoixVertex(server);
 
   // Authenticated CSV export of the audit trail (access_logs) — admin only.
   // Mirrors the audit.export tRPC procedure but streams a downloadable CSV.
@@ -196,6 +214,251 @@ async function startServer() {
       logger.error("audit.export_csv_failed", { error: String(err) });
       if (!res.headersSent) {
         res.status(500).json({ error: "Audit export failed" });
+      }
+    }
+  });
+  // Chat Hermès en streaming (tokens token-par-token, modèle LOCAL). SSE.
+  // Auth = medicalProcedure (clinique). Anti-IDOR + rate-limit dans prepareHermesChat.
+  app.post("/api/hermes/chat/stream", async (req, res) => {
+    // CSRF (audit H2) : route PHI state-changing, appelée uniquement same-origin
+    // par la SPA. Un contexte cross-site est rejeté (même garde que /api/trpc).
+    if (req.headers["sec-fetch-site"] === "cross-site") {
+      res.status(403).json({ error: "Cross-site request blocked" });
+      return;
+    }
+    const { sdk } = await import("./sdk");
+    const { hasMedicalAccess } = await import("../rbac");
+    let user;
+    try {
+      user = await sdk.authenticateRequest(req as any);
+    } catch {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (!hasMedicalAccess(user)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    // Validation minimale de l'entrée
+    const body = req.body ?? {};
+    const studyId = Number(body.studyId);
+    const messages = Array.isArray(body.messages) ? body.messages : null;
+    if (!Number.isInteger(studyId) || !messages || messages.length === 0) {
+      res.status(400).json({ error: "Bad request" });
+      return;
+    }
+
+    const { prepareHermesChat } = await import("../report/hermesChat");
+    const { streamOllamaChat } = await import("../knowledge/stream");
+
+    let prep;
+    try {
+      prep = await prepareHermesChat(
+        { studyId, messages },
+        { user: { id: user.id } }
+      );
+    } catch (err: any) {
+      const code =
+        err?.code === "TOO_MANY_REQUESTS"
+          ? 429
+          : err?.code === "NOT_FOUND"
+            ? 404
+            : 500;
+      res.status(code).json({ error: err?.message ?? "Erreur" });
+      return;
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    const send = (obj: unknown) =>
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+    const abortCtrl = new AbortController();
+    req.on("close", () => abortCtrl.abort());
+
+    try {
+      // Vertex AI (Gemini) si disponible, sinon Ollama local
+      const hasVertex =
+        !!process.env.VERTEX_PROJECT &&
+        !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      if (prep.useClaude || hasVertex) {
+        const { GoogleGenAI } = await import("@google/genai");
+        const ai = new GoogleGenAI({
+          vertexai: true,
+          project: process.env.VERTEX_PROJECT ?? "optigps",
+          location: process.env.VERTEX_LOCATION ?? "europe-west1",
+        });
+        const sysMsg =
+          prep.messages.find((m: any) => m.role === "system")?.content ?? "";
+        const contents = prep.messages
+          .filter((m: any) => m.role !== "system")
+          .map((m: any) => ({
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [{ text: m.content }],
+          }));
+        const gStream = await ai.models.generateContentStream({
+          model: process.env.GEMINI_TEXT_MODEL ?? "gemini-2.5-flash",
+          contents,
+          config: {
+            systemInstruction: sysMsg,
+            maxOutputTokens: 1200,
+            temperature: 0.3,
+          },
+        });
+        for await (const chunk of gStream) {
+          if (abortCtrl.signal.aborted) break;
+          const txt = ((chunk as any).candidates?.[0]?.content?.parts ?? [])
+            .map((p: any) => p.text ?? "")
+            .join("");
+          if (txt) send({ t: txt });
+        }
+      } else {
+        await streamOllamaChat(
+          prep.messages,
+          delta => send({ t: delta }),
+          abortCtrl.signal
+        );
+      }
+      const { recordAccess } = await import("../db");
+      await recordAccess({
+        userId: user.id,
+        action: "ai.hermes.chat",
+        studyId: prep.study.id,
+        detail: prep.model,
+        ipAddress: req.ip ?? null,
+      });
+      send({ done: true, sources: prep.sources, model: prep.model });
+      res.end();
+    } catch (err: any) {
+      logger.error("hermes.stream_failed", { error: String(err) });
+      if (!res.headersSent) {
+        res.status(500).json({ error: "stream failed" });
+      } else {
+        send({ error: "stream interrompu" });
+        res.end();
+      }
+    }
+  });
+  // Rédaction assistée du CR en streaming (modèle LOCAL). SSE. Auth = éditeur de
+  // CR (admin|radiologist), comme adminProcedure. RAG + anti-invention côté serveur.
+  app.post("/api/hermes/report-assist/stream", async (req, res) => {
+    if (req.headers["sec-fetch-site"] === "cross-site") {
+      res.status(403).json({ error: "Cross-site request blocked" });
+      return;
+    }
+    const { sdk } = await import("./sdk");
+    let user;
+    try {
+      user = await sdk.authenticateRequest(req as any);
+    } catch {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (user.role !== "admin" && user.role !== "radiologist") {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    const { ASSIST_ACTIONS } = await import("../report/reportAssist");
+    const body = req.body ?? {};
+    const studyId = Number(body.studyId);
+    const action = body.action;
+    // Borne anti-DoS : une section de CR raisonnable tient largement en 20k car.
+    const currentText =
+      typeof body.currentText === "string"
+        ? body.currentText.slice(0, 20_000)
+        : "";
+    if (!Number.isInteger(studyId) || !ASSIST_ACTIONS.includes(action)) {
+      res.status(400).json({ error: "Bad request" });
+      return;
+    }
+
+    const { prepareReportAssist } = await import("../report/reportAssist");
+    const { streamOllamaChat } = await import("../knowledge/stream");
+    let prep;
+    try {
+      prep = await prepareReportAssist(
+        { studyId, action, currentText },
+        { user: { id: user.id } }
+      );
+    } catch (err: any) {
+      const code =
+        err?.code === "TOO_MANY_REQUESTS"
+          ? 429
+          : err?.code === "NOT_FOUND"
+            ? 404
+            : 500;
+      res.status(code).json({ error: err?.message ?? "Erreur" });
+      return;
+    }
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    const send = (obj: unknown) =>
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    const abortCtrl = new AbortController();
+    req.on("close", () => abortCtrl.abort());
+
+    try {
+      const hasVertex =
+        !!process.env.VERTEX_PROJECT &&
+        !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      if (prep.useClaude || hasVertex) {
+        const { GoogleGenAI } = await import("@google/genai");
+        const ai = new GoogleGenAI({
+          vertexai: true,
+          project: process.env.VERTEX_PROJECT ?? "optigps",
+          location: process.env.VERTEX_LOCATION ?? "europe-west1",
+        });
+        const sysMsg =
+          prep.messages.find((m: any) => m.role === "system")?.content ?? "";
+        const contents = prep.messages
+          .filter((m: any) => m.role !== "system")
+          .map((m: any) => ({
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [{ text: m.content }],
+          }));
+        const gStream = await ai.models.generateContentStream({
+          model: process.env.GEMINI_TEXT_MODEL ?? "gemini-2.5-flash",
+          contents,
+          config: {
+            systemInstruction: sysMsg,
+            maxOutputTokens: 1200,
+            temperature: 0.3,
+          },
+        });
+        for await (const chunk of gStream) {
+          if (abortCtrl.signal.aborted) break;
+          const txt = ((chunk as any).candidates?.[0]?.content?.parts ?? [])
+            .map((p: any) => p.text ?? "")
+            .join("");
+          if (txt) send({ t: txt });
+        }
+      } else {
+        await streamOllamaChat(
+          prep.messages,
+          delta => send({ t: delta }),
+          abortCtrl.signal
+        );
+      }
+      const { recordAccess } = await import("../db");
+      await recordAccess({
+        userId: user.id,
+        action: "ai.hermes.assist",
+        studyId: prep.study.id,
+        detail: `${action}:${prep.model}`,
+        ipAddress: req.ip ?? null,
+      });
+      send({ done: true, model: prep.model });
+      res.end();
+    } catch (err: any) {
+      logger.error("hermes.assist_stream_failed", { error: String(err) });
+      if (!res.headersSent) res.status(500).json({ error: "stream failed" });
+      else {
+        send({ error: "stream interrompu" });
+        res.end();
       }
     }
   });
@@ -398,6 +661,65 @@ async function startServer() {
     }
   });
 
+  // Lien OTP : accès public sécurisé à un CR signé (7j, usage unique, référent).
+  // Redirige vers le viewer après validation du token. Pas de PHI dans l'URL.
+  app.get("/r/:token", async (req, res) => {
+    try {
+      const { peekShareToken, consumeShareToken } = await import(
+        "../report/reportShareToken"
+      );
+      const token = req.params.token as string;
+      // 1. Validation LECTURE SEULE (peek) : un GET ne consomme jamais le token,
+      //    sinon les scanners de liens email brûlent l'usage unique avant le clic
+      //    humain (F2). Le peek survit aussi au détour par le login ci-dessous.
+      const payload = await peekShareToken(token);
+      if (!payload) {
+        res.status(410).send("Lien expiré ou déjà utilisé.");
+        return;
+      }
+      // 2. Accès RÉSERVÉ au personnel médical authentifié (conforme « authz
+      //    dossier=médecin » ; surface PHI minimale). Les destinataires externes
+      //    sans compte MediView reçoivent le compte rendu via le PDF joint à
+      //    l'email — pas d'accès viewer en clair sans authentification (F1).
+      const { sdk } = await import("./sdk");
+      let user;
+      try {
+        user = await sdk.authenticateRequest(req as never);
+      } catch {
+        // Non authentifié → login. Le token n'ayant pas été consommé, le
+        // destinataire re-clique le lien une fois connecté.
+        res.redirect("/login");
+        return;
+      }
+      const { hasMedicalAccess } = await import("../rbac");
+      if (!hasMedicalAccess(user)) {
+        res.status(403).send("Accès réservé au personnel médical.");
+        return;
+      }
+      // 3. Accès accordé à un clinicien authentifié → consommation ATOMIQUE
+      //    (usage unique, F4) + journalisation (audit nLPD), puis deep-link.
+      const consumed = await consumeShareToken(token);
+      if (!consumed) {
+        res.status(410).send("Lien expiré ou déjà utilisé.");
+        return;
+      }
+      try {
+        const { recordAccess } = await import("../db");
+        await recordAccess({
+          userId: user.id,
+          action: "report.share.open",
+          studyId: consumed.studyId,
+          ipAddress: req.ip ?? null,
+        });
+      } catch {
+        /* audit best-effort */
+      }
+      res.redirect(`/viewer/${consumed.studyId}`);
+    } catch {
+      res.status(500).send("Erreur serveur.");
+    }
+  });
+
   // tRPC API
   app.use(
     "/api/trpc",
@@ -423,6 +745,16 @@ async function startServer() {
   // Observability opt-in: enables Sentry only if SENTRY_DSN is set AND
   // @sentry/node is installed (no-op otherwise). Never throws.
   await initSentry();
+
+  // Récupération : les analyses exhaustives en cours au moment d'un précédent
+  // arrêt sont marquées « interrompues » (leur calcul en mémoire est perdu),
+  // pour que le client affiche « relancez » au lieu d'un avancement figé.
+  void import("../db").then(m => m.recoverStaleAiJobs()).catch(() => {});
+
+  // Agent CR autonome : génère les brouillons des nouvelles études (si activé).
+  void import("../report/autoReportAgent")
+    .then(m => m.startAutoReportAgent())
+    .catch(() => {});
 
   server.listen(port, () => {
     logger.info("server.started", { port, env: process.env.NODE_ENV });

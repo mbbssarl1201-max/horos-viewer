@@ -735,3 +735,57 @@ describe("buildSystemPrompt (prompt adapté à la modalité)", () => {
     expect(selectDiagnosticSeries(allTech)).toHaveLength(2);
   });
 });
+
+describe("parseurs — étiquettes décorées markdown (gras/titres)", () => {
+  // Les prompts demandent du gras (« conclusion EN GRAS », « **Classification :
+  // BI-RADS 1** ») : les modèles décorent alors souvent l'étiquette elle-même.
+  // Sans tolérance, la Conclusion serait perdue ou les lignes méta fuiraient.
+  it("parseSections : étiquettes en gras (**Conclusion :**)", async () => {
+    const { parseSections } = await import("./aiPreanalysis");
+    const out = parseSections(
+      "**Technique :**\nCT cérébral sans injection.\n" +
+        "**Résultats :**\nPas d'hémorragie.\n" +
+        "**Conclusion :**\n**Examen normal.**"
+    );
+    expect(out.technique).toContain("CT cérébral");
+    expect(out.resultats).toContain("hémorragie");
+    expect(out.conclusion).toContain("Examen normal");
+  });
+
+  it("parseSections : étiquettes en titres markdown (## Conclusion)", async () => {
+    const { parseSections } = await import("./aiPreanalysis");
+    const out = parseSections(
+      "## Technique\nIRM lombaire.\n## Résultats\nDiscopathie L4-L5.\n## Conclusion\nDiscopathie étagée."
+    );
+    expect(out.conclusion).toContain("Discopathie étagée");
+    expect(out.resultats).toContain("L4-L5");
+  });
+
+  it("parseSections : lignes méta EN GRAS coupées de la Conclusion", async () => {
+    const { parseSections } = await import("./aiPreanalysis");
+    const out = parseSections(
+      "Résultats:\nRAS.\nConclusion:\nExamen normal.\n**Anomalie : non**\n**Coupe-clé : aucune**"
+    );
+    expect(out.conclusion).toBe("Examen normal.");
+    expect(out.conclusion).not.toMatch(/Anomalie|Coupe/);
+  });
+
+  it("parseKeySlice : « **Anomalie :** oui » et « **Coupe-clé : 47** »", async () => {
+    const { parseKeySlice } = await import("./aiPreanalysis");
+    const out = parseKeySlice("**Anomalie :** oui\n**Coupe-clé : coupe n° 47**");
+    expect(out.abnormal).toBe(true);
+    expect(out.keySliceNumber).toBe(47);
+  });
+
+  it("parseKeySlice : gras + négation (« **Anomalie : non** »)", async () => {
+    const { parseKeySlice } = await import("./aiPreanalysis");
+    expect(parseKeySlice("**Anomalie : non**").abnormal).toBe(false);
+  });
+
+  it("parseEvolution : « **Évolution : progression** » sans résidu **", async () => {
+    const { parseEvolution } = await import("./aiPreanalysis");
+    const out = parseEvolution("Conclusion.\n**Évolution : progression**");
+    expect(out.evolution).toBe("progression");
+    expect(out.cleaned).not.toContain("**");
+  });
+});

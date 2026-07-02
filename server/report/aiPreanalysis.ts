@@ -2,6 +2,8 @@ import { TRPCError } from "@trpc/server";
 import { PNG } from "pngjs";
 import { ENV } from "../_core/env";
 import { anthropicMessagesFetch } from "./anthropicClient";
+import { isFableModel } from "./anthropicModel";
+import { pickCrProvider } from "./crProvider";
 import {
   getStudyById,
   listSeriesByStudy,
@@ -463,11 +465,19 @@ export async function generatePreanalysis(
   // Garde nLPD (audit H4) : pas d'envoi de pixels (PHI potentiellement brûlé)
   // vers Claude (cloud US) sans consentement documenté (DPA). Sinon → repli
   // Ollama local (PHI-safe), pour ne JAMAIS exfiltrer par défaut.
-  const useClaude = claudeConfigured && ENV.cloudAiPhiConsent;
-  // Infomaniak (CH, nLPD natif) : priorité sur Claude dès que la clé est
-  // présente. Pas de flag DPA supplémentaire requis (hébergement suisse).
-  const useInfomaniakCR =
+  const claudeUsable = claudeConfigured && ENV.cloudAiPhiConsent;
+  // Infomaniak (CH, nLPD natif) : prioritaire par défaut (« auto »). CR_PROVIDER
+  // permet de router le CR vers Claude (ex. Fable 5) sans retirer la clé
+  // Infomaniak, qui reste utilisée par les autres chemins vision.
+  const infomaniakUsable =
     !!ENV.infomaniakVisionKey && !!ENV.infomaniakVisionUrl;
+  const crBackend = pickCrProvider({
+    crProvider: ENV.crProvider,
+    claudeUsable,
+    infomaniakUsable,
+  });
+  const useClaude = crBackend === "claude";
+  const useInfomaniakCR = crBackend === "infomaniak";
   if (claudeConfigured && !ENV.cloudAiPhiConsent) {
     console.warn(
       "[aiPreanalysis] AI_BACKEND=claude ignoré : MEDIVIEW_CLOUD_AI_PHI_CONSENT non activé (nLPD/DPA) → repli sur Ollama local."
@@ -1050,7 +1060,9 @@ async function generateViaClaude(
       system,
       messages: [{ role: "user", content }],
     },
-    { timeout: 240_000 }
+    // Fable 5 : thinking toujours actif → tours nettement plus longs (mesuré
+    // 107 s pour 8 coupes ; l'analyse pleine résolution peut dépasser 240 s).
+    { timeout: isFableModel(ENV.anthropicModel) ? 600_000 : 240_000 }
   );
   const text = (resp.content as any[])
     .filter(b => b.type === "text")

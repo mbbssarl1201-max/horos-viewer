@@ -78,6 +78,69 @@
       "when": 1781901017947,
       "tag": "0010_rare_nehzno",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1781901028947,
+      "tag": "0011_encrypt_patient_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1781901029947,
+      "tag": "0012_ai_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1781901030947,
+      "tag": "0013_agent_cr",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1781901031947,
+      "tag": "0014_patient_name_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "5",
+      "when": 1781901032947,
+      "tag": "0015_agents_socle",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1781901033947,
+      "tag": "0016_agent_learning",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1781901034947,
+      "tag": "0017_agent_activity_duration",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1781901035947,
+      "tag": "0018_report_share_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1781901036947,
+      "tag": "0019_rename_storage_url",
+      "breakpoints": true
     }
   ]
 }

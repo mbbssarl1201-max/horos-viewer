@@ -58,6 +58,19 @@ export function serveStatic(app: Express) {
     );
   }
 
+  // Les assets sous /assets portent un hash de contenu dans leur nom
+  // (index-DAGjOk1d.js) : ils sont IMMUABLES par construction → cache navigateur
+  // long (1 an, immutable). Sans cela, express.static (maxAge 0) force une
+  // revalidation de chaque chunk à chaque visite. index.html, lui, reste servi
+  // par le static générique ci-dessous (ETag/304) : c'est l'entrée mutable qui
+  // référence les nouveaux hashes après un déploiement.
+  app.use(
+    "/assets",
+    express.static(path.join(distPath, "assets"), {
+      maxAge: "1y",
+      immutable: true,
+    })
+  );
   app.use(express.static(distPath));
 
   // Garde « chunk périmé » : un asset hashé manquant (chunk d'un ancien

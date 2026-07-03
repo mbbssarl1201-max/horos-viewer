@@ -91,6 +91,7 @@ import {
 import ReportPanel, { type ReportKeyImage } from "@/components/ReportPanel";
 import HermesChatPanel from "@/components/HermesChatPanel";
 import EvaViewerPanel from "@/components/EvaViewerPanel";
+import NoVncScreen from "@/components/NoVncScreen";
 import CurvedMprPanel from "@/components/CurvedMprPanel";
 import RegulatoryNotice from "@/components/RegulatoryNotice";
 import SeriesThumbnail from "@/components/SeriesThumbnail";
@@ -448,6 +449,8 @@ export default function Viewer() {
   const [reportOpen, setReportOpen] = useState(false);
   const [hermesOpen, setHermesOpen] = useState(false);
   const [evaOpen, setEvaOpen] = useState(false);
+  // Vue « navigateur piloté » (noVNC) : opt-in, jamais par défaut.
+  const [evaLive, setEvaLive] = useState(false);
   const [evaPanelWidth, setEvaPanelWidth] = useState(320);
   const [reportKeyImages, setReportKeyImages] = useState<ReportKeyImage[]>([]);
 
@@ -1681,8 +1684,10 @@ export default function Viewer() {
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
       <RegulatoryNotice />
-      {/* Top Toolbar — scroll horizontal au lieu de wrap : hauteur fixe = 1 rangée */}
-      <div className="h-12 border-b border-border bg-card flex items-center px-2 gap-1 shrink-0 relative z-[1] overflow-x-auto scrollbar-none">
+      {/* Top Toolbar — scroll horizontal au lieu de wrap : hauteur fixe = 1 rangée.
+          `toolbar-scroll` affiche une fine barre de défilement : sans elle, les
+          boutons coupés au bord droit passent pour un bug de responsive. */}
+      <div className="h-12 border-b border-border bg-card flex items-center px-2 gap-1 shrink-0 relative z-[1] overflow-x-auto toolbar-scroll">
         <Button
           variant="ghost"
           size="sm"
@@ -1705,7 +1710,7 @@ export default function Viewer() {
           onClick={openReport}
         >
           <FileText className="w-4 h-4" />
-          <span className="hidden sm:inline text-[9px] font-semibold">
+          <span className="hidden sm:inline text-[9px] font-semibold whitespace-nowrap">
             Compte rendu IA
           </span>
         </button>
@@ -3121,29 +3126,32 @@ export default function Viewer() {
 
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
-        {/* ── Écran scindé Eva : panneau chat gauche + noVNC Selenium droite ── */}
-        {evaOpen ? (
-          <>
-            <EvaViewerPanel
-              onClose={() => setEvaOpen(false)}
-              studyDescription={study?.studyDescription}
-              modality={study?.modality}
-              studyId={studyId}
-            />
-            {/* Navigateur Selenium live — plein écran droite */}
-            <div className="relative flex-1 bg-black">
-              <iframe
-                src="/api/cockpit/viewer"
-                className="absolute inset-0 h-full w-full border-0"
-                title="Eva Selenium live"
-                sandbox="allow-same-origin allow-scripts allow-forms"
-              />
-            </div>
-          </>
+        {/* ── Eva : panneau chat à gauche, l'ÉTUDE RESTE AFFICHÉE à droite.
+            La vue « navigateur piloté » (noVNC Selenium) ne remplace le
+            viewport que sur bascule explicite (evaLive) — sinon le médecin
+            perd son examen des yeux dès qu'il ouvre Eva. ── */}
+        {evaOpen && (
+          <EvaViewerPanel
+            onClose={() => {
+              setEvaOpen(false);
+              setEvaLive(false);
+            }}
+            studyDescription={study?.studyDescription}
+            modality={study?.modality}
+            studyId={studyId}
+            live={evaLive}
+            onLiveChange={setEvaLive}
+          />
+        )}
+        {evaOpen && evaLive ? (
+          <NoVncScreen className="flex-1" />
         ) : (
           <>
-            {/* Left Panel - Series Thumbnails (masqué sur très petit écran) */}
-            <div className="hidden sm:flex w-48 border-r border-border bg-sidebar flex-col shrink-0">
+            {/* Left Panel - Series Thumbnails (masqué sur très petit écran,
+                et quand Eva est ouverte pour laisser la place au viewport) */}
+            <div
+              className={`${evaOpen ? "hidden" : "hidden sm:flex"} w-48 border-r border-border bg-sidebar flex-col shrink-0`}
+            >
               <div className="p-2 border-b border-border">
                 <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
                   Series ({seriesList?.length || 0})

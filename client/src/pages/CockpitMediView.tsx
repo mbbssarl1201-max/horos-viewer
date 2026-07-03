@@ -17,8 +17,8 @@ import {
   GripVertical,
 } from "lucide-react";
 import EvaVoiceMV from "@/components/EvaVoiceMV";
+import NoVncScreen from "@/components/NoVncScreen";
 
-const VIEWER_URL = "/api/cockpit/viewer";
 const MIN_PANEL = 240;
 const MAX_PANEL = 480;
 
@@ -141,7 +141,8 @@ export default function CockpitMediView({
   const dragStart = useRef(0);
   const widthStart = useRef(0);
 
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // Remontage du composant noVNC sur « recharger » (clé incrémentée).
+  const [vncKey, setVncKey] = useState(0);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -203,9 +204,7 @@ export default function CockpitMediView({
   );
 
   const recharger = () => {
-    if (iframeRef.current) {
-      iframeRef.current.src = VIEWER_URL + "?t=" + Date.now();
-    }
+    setVncKey(k => k + 1);
   };
 
   const soumettre = (e?: React.FormEvent) => {
@@ -640,16 +639,8 @@ export default function CockpitMediView({
               </a>
             </div>
 
-            {/* Viewer noVNC */}
-            <div className="relative flex-1">
-              <iframe
-                ref={iframeRef}
-                src={VIEWER_URL}
-                title="MediView (Selenium live)"
-                className="h-full w-full border-0"
-                allow="clipboard-read; clipboard-write"
-              />
-            </div>
+            {/* Viewer noVNC (RFB bundlé, connexion directe au proxy WS) */}
+            <NoVncScreen key={vncKey} className="flex-1" />
           </main>
         </>
       )}

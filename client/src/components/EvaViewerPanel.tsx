@@ -24,6 +24,9 @@ interface Props {
   studyDescription?: string | null;
   modality?: string | null;
   studyId?: number | null;
+  /** Vue « navigateur piloté » (noVNC) affichée à la place de l'étude. */
+  live?: boolean;
+  onLiveChange?: (live: boolean) => void;
 }
 
 const SUGGESTIONS_BY_MODALITY: Record<string, string[]> = {
@@ -158,6 +161,8 @@ export default function EvaViewerPanel({
   studyDescription,
   modality,
   studyId,
+  live,
+  onLiveChange,
 }: Props) {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
@@ -222,6 +227,8 @@ export default function EvaViewerPanel({
   );
 
   const handleAction = async (action: (typeof SELENIUM_ACTIONS)[0]) => {
+    // Une action Selenium ne se voit que sur l'écran piloté : on y bascule.
+    onLiveChange?.(true);
     setActionStatus(`→ ${action.label}…`);
     try {
       await triggerSeleniumAction("cliquer", { selector: action.selector });
@@ -309,6 +316,24 @@ export default function EvaViewerPanel({
             </button>
           ))}
         </div>
+        {onLiveChange && (
+          <button
+            onClick={() => onLiveChange(!live)}
+            className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition ${
+              live
+                ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
+                : "border-slate-700/60 bg-slate-800/60 text-slate-400 hover:border-emerald-500/40 hover:text-slate-200"
+            }`}
+            title={
+              live
+                ? "Réafficher l'étude DICOM locale"
+                : "Afficher le navigateur que pilote Eva (l'étude reste ouverte)"
+            }
+          >
+            <MousePointerClick className="h-3 w-3" />
+            {live ? "Revenir à l'étude" : "Voir l'écran piloté"}
+          </button>
+        )}
       </div>
 
       {/* ─── CHAT ──────────────────────────────────────────────────────── */}

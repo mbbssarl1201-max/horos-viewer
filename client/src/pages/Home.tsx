@@ -24,6 +24,7 @@ import ExportPanel from "@/components/ExportPanel";
 import AnonymizeDialog from "@/components/AnonymizeDialog";
 import QueryPACS from "@/components/QueryPACS";
 import WorklistDialog from "@/components/WorklistDialog";
+import { sortStudies, nextSort, type SortKey } from "@/lib/homeSort";
 import ShareStudyDialog from "@/components/ShareStudyDialog";
 import { PendingSignatureList } from "@/components/PendingSignatureList";
 import { HermesFinder } from "@/components/HermesFinder";
@@ -62,10 +63,19 @@ import {
   Server,
   Plus,
   ChevronDown,
+  ChevronUp,
+  ChevronsUpDown,
   ClipboardList,
   LayoutDashboard,
 } from "lucide-react";
-import { useState, useCallback, useEffect, lazy, Suspense } from "react";
+import {
+  useState,
+  useCallback,
+  useEffect,
+  useMemo,
+  lazy,
+  Suspense,
+} from "react";
 import { matchAllFields } from "@/lib/studySearch";
 
 // Lazy : le panneau Eva/Cockpit n'est chargé qu'à l'ouverture (cockpitOpen) —
@@ -96,6 +106,49 @@ const ALL_MODALITIES = [
   { key: "VL", label: "VL", description: "Video Light" },
   { key: "SR", label: "SR", description: "Structured Report" },
 ];
+
+// En-tête de colonne triable (Story 5.1) : bouton + indicateur de sens.
+function SortHeader({
+  label,
+  col,
+  className,
+  sortKey,
+  sortDir,
+  onSort,
+}: {
+  label: string;
+  col: SortKey;
+  className?: string;
+  sortKey: SortKey | null;
+  sortDir: "asc" | "desc";
+  onSort: (key: SortKey) => void;
+}) {
+  const active = sortKey === col;
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(col)}
+      aria-sort={
+        active ? (sortDir === "asc" ? "ascending" : "descending") : "none"
+      }
+      title={`Trier par ${label}`}
+      className={`${className ?? ""} px-1 flex items-center gap-0.5 text-left hover:text-foreground transition-colors ${
+        active ? "text-foreground" : ""
+      }`}
+    >
+      <span className="truncate">{label}</span>
+      {active ? (
+        sortDir === "asc" ? (
+          <ChevronUp className="w-2.5 h-2.5 shrink-0" />
+        ) : (
+          <ChevronDown className="w-2.5 h-2.5 shrink-0" />
+        )
+      ) : (
+        <ChevronsUpDown className="w-2.5 h-2.5 shrink-0 opacity-30" />
+      )}
+    </button>
+  );
+}
 
 // Smart Albums like Horos
 const SMART_ALBUMS = [
@@ -206,6 +259,8 @@ const TIME_FILTERS = [
 export default function Home() {
   const { user, loading, isAuthenticated } = useAuth();
   const [, navigate] = useLocation();
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [selectedAlbum, setSelectedAlbum] = useState("database");
   const [selectedModality, setSelectedModality] = useState<string | null>(null);
   const [timeFilter, setTimeFilter] = useState("none");
@@ -339,9 +394,22 @@ export default function Home() {
   const albumStudies = allStudies.filter((s: any) =>
     albumMatches(s, selectedAlbum, openedIds)
   );
-  const studies = searchQuery.trim()
+  const filteredStudies = searchQuery.trim()
     ? albumStudies.filter((s: any) => matchAllFields(s, searchQuery))
     : albumStudies;
+
+  // Tri des colonnes (Story 5.1). sortKey null = ordre naturel du backend
+  // (date décroissante). Clic sur un en-tête : asc → desc → naturel.
+  const studies = useMemo(
+    () => sortStudies(filteredStudies as any[], sortKey, sortDir),
+    [filteredStudies, sortKey, sortDir]
+  );
+
+  const toggleSort = (key: SortKey) => {
+    const n = nextSort({ key: sortKey, dir: sortDir }, key);
+    setSortKey(n.key);
+    setSortDir(n.dir);
+  };
 
   // Ouvre une étude dans le viewer en l'enregistrant comme « récemment ouverte »
   // (alimente le smart album « Just Opened »).
@@ -969,41 +1037,69 @@ export default function Home() {
               </button>
             )}
           </div>
-          {/* Column Headers - Horos style with all columns */}
+          {/* Column Headers - Horos style with all columns. Les colonnes
+              triables (Story 5.1) sont des boutons ; flèche = sens actif. */}
           <div className="h-8 border-b border-border bg-card/50 flex items-center px-2 text-[10px] font-medium text-muted-foreground shrink-0 select-none">
-            <div className="w-36 px-1 flex items-center gap-1 cursor-pointer hover:text-foreground">
-              Patient name <ChevronDown className="w-2.5 h-2.5" />
-            </div>
-            <div className="w-16 px-1 cursor-pointer hover:text-foreground">
-              Report
-            </div>
-            <div className="w-10 px-1 cursor-pointer hover:text-foreground">
-              Lock
-            </div>
-            <div className="w-24 px-1 cursor-pointer hover:text-foreground">
-              Patient ID
-            </div>
-            <div className="w-12 px-1 cursor-pointer hover:text-foreground">
-              Age
-            </div>
-            <div className="w-28 px-1 cursor-pointer hover:text-foreground">
-              Accession Number
-            </div>
-            <div className="w-40 px-1 cursor-pointer hover:text-foreground">
-              Study Description
-            </div>
-            <div className="w-14 px-1 cursor-pointer hover:text-foreground">
-              Modality
-            </div>
-            <div className="w-20 px-1 cursor-pointer hover:text-foreground">
-              ID
-            </div>
-            <div className="w-24 px-1 cursor-pointer hover:text-foreground">
-              Date exam.
-            </div>
-            <div className="w-16 px-1 cursor-pointer hover:text-foreground">
-              History
-            </div>
+            <SortHeader
+              label="Patient name"
+              col="patientName"
+              className="w-36"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={toggleSort}
+            />
+            <div className="w-16 px-1">Report</div>
+            <div className="w-10 px-1">Lock</div>
+            <SortHeader
+              label="Patient ID"
+              col="patientDicomId"
+              className="w-24"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={toggleSort}
+            />
+            <div className="w-12 px-1">Age</div>
+            <SortHeader
+              label="Accession Number"
+              col="accessionNumber"
+              className="w-28"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={toggleSort}
+            />
+            <SortHeader
+              label="Study Description"
+              col="studyDescription"
+              className="w-40"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={toggleSort}
+            />
+            <SortHeader
+              label="Modality"
+              col="modality"
+              className="w-14"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={toggleSort}
+            />
+            <SortHeader
+              label="ID"
+              col="id"
+              className="w-20"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={toggleSort}
+            />
+            <SortHeader
+              label="Date exam."
+              col="studyDate"
+              className="w-24"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={toggleSort}
+            />
+            <div className="w-16 px-1">History</div>
           </div>
 
           {/* Study Rows */}

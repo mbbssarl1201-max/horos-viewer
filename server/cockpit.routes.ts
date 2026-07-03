@@ -631,25 +631,69 @@ PHI INTERDIT : jamais de nom/prénom/DDN patient.`;
         return;
       }
 
-      // Injecte les études récentes dans le contexte (sans PHI : pas de patientName)
+      // Injecte la BASE RÉELLE dans le contexte (même source que l'interface).
+      // Historique du bug (QA 2026-07-03) : fenêtre « last_week » tronquée à
+      // 10 lignes → Eva ne « voyait » que 2 études sur 178 et ignorait les
+      // Patient IDs affichés dans le tableau. Sans PHI nominatif : ID patient
+      // DICOM oui (pseudonyme, affiché dans l'UI), jamais nom/prénom/DDN.
       let studiesCtx = "";
       try {
         const { listStudies } = await import("./db");
-        const rows = await listStudies({ timeFilter: "last_week" });
+        const rows = await listStudies();
         if (rows.length > 0) {
+          const parModalite = new Map<string, number>();
+          for (const s of rows) {
+            const m = s.modality ?? "?";
+            parModalite.set(m, (parModalite.get(m) ?? 0) + 1);
+          }
+          const stats = Array.from(parModalite.entries())
+            .sort((a, b) => b[1] - a[1])
+            .map(([m, n]) => `${m}: ${n}`)
+            .join(", ");
+          const MAX_LIGNES = 150;
           const lines = rows
-            .slice(0, 10)
+            .slice(0, MAX_LIGNES)
             .map(
               s =>
-                `  - ID ${s.id} : ${s.studyDescription ?? s.modality ?? "?"} (${s.modality ?? "?"}), ${s.studyDate ?? "?"}, ${s.numberOfSeries ?? 0} série(s) → /viewer/${s.id}`
+                `  - ID ${s.id} | patient ${s.patientDicomId ?? "?"} | ${s.studyDescription ?? s.modality ?? "?"} (${s.modality ?? "?"}), ${s.studyDate ?? "?"}, ${s.numberOfSeries ?? 0} série(s)`
             );
           studiesCtx =
-            "\n\nÉtudes disponibles cette semaine (sans données patient) :\n" +
+            `\n\nBASE D'ÉTUDES — même source que l'interface ; c'est TA référence pour tout décompte ou recherche :\n` +
+            `Total : ${rows.length} étude(s). Par modalité : ${stats}.\n` +
+            `Études (les ${Math.min(MAX_LIGNES, rows.length)} plus récentes ; « patient » = Patient ID du tableau, sans nom) :\n` +
             lines.join("\n") +
-            "\nPour ouvrir une étude : NAV:/viewer/<id>.";
+            (rows.length > MAX_LIGNES
+              ? `\n(… ${rows.length - MAX_LIGNES} études plus anciennes non listées — utiliser CMD:search:<termes>.)`
+              : "") +
+            `\nPour ouvrir : NAV:/viewer/<ID>. Si on te donne un Patient ID (ex. 10482), retrouve la ligne correspondante ci-dessus.`;
         }
       } catch {
         /* contexte études non critique */
+      }
+
+      // Étude ACTIVE dans le viewer (Epic 2) : si le client transmet studyId,
+      // toute question ou action rapide sans ID explicite s'y rapporte.
+      try {
+        const studyIdRaw = (body as { studyId?: unknown }).studyId;
+        const studyId =
+          typeof studyIdRaw === "number" && Number.isInteger(studyIdRaw)
+            ? studyIdRaw
+            : null;
+        if (studyId != null) {
+          const { getStudyById } = await import("./db");
+          const s = await getStudyById(studyId);
+          if (s) {
+            studiesCtx +=
+              `\n\nÉTUDE ACTIVE (ouverte dans le viewer du médecin) : ID ${s.id}, ` +
+              `${s.studyDescription ?? s.modality ?? "?"} (${s.modality ?? "?"}), ${s.studyDate ?? "?"}, ` +
+              `${s.numberOfSeries ?? 0} série(s) / ${s.numberOfInstances ?? 0} image(s).\n` +
+              `Toute demande sans ID explicite (« cet examen », « pré-analyse », « prépare le compte rendu », ` +
+              `« points d'attention ») se rapporte à CETTE étude — ne redemande jamais l'ID. ` +
+              `CR : CMD:generer-cr:${s.id}.`;
+          }
+        }
+      } catch {
+        /* contexte étude active non critique */
       }
 
       const messages = [

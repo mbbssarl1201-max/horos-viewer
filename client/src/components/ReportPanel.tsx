@@ -803,6 +803,31 @@ export default function ReportPanel({
               ? "Analyse…"
               : "Suggérer codes (CIM-10 + TARDOC)"}
           </button>
+          {/* Indice quand le bouton est inactif : sinon le clic « ne fait rien ». */}
+          {!(sections.resultats || sections.conclusion).trim() &&
+            !suggestCodes.isPending && (
+              <p className="text-[10px] text-muted-foreground">
+                Renseignez d'abord les Résultats ou la Conclusion du compte
+                rendu pour obtenir des suggestions de codes.
+              </p>
+            )}
+          {/* Échec réseau/serveur : message actionnable (Epic 7). */}
+          {suggestCodes.isError && (
+            <p className="text-[11px] rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-red-400">
+              Suggestion de codes indisponible (service d'IA local injoignable).
+              Réessayez ; si le problème persiste, codez manuellement dans
+              MediAdmin.
+            </p>
+          )}
+          {/* Succès mais aucun code : ne pas laisser l'utilisateur sans retour. */}
+          {suggestCodes.isSuccess &&
+            suggestCodes.data.codes.length === 0 &&
+            suggestCodes.data.tardoc.length === 0 && (
+              <p className="text-[11px] rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-500">
+                Aucun code n'a pu être proposé pour ce compte rendu. Vérifiez
+                que le service d'IA local est actif, ou codez dans MediAdmin.
+              </p>
+            )}
           {suggestCodes.data && suggestCodes.data.codes.length > 0 && (
             <div className="text-[11px] rounded border border-teal-500/30 p-2 space-y-0.5">
               <p className="text-[10px] text-muted-foreground">
@@ -1053,8 +1078,16 @@ export default function ReportPanel({
               on garde ici la progression et le bilan du balayage. */}
           {exhaustiveStatus.data?.status === "running" && (
             <span className="text-[11px] text-blue-400">
-              Balayage… {exhaustiveStatus.data.progress?.done ?? 0}/
+              {(exhaustiveStatus.data as { phase?: string }).phase ??
+                "Balayage…"}{" "}
+              {exhaustiveStatus.data.progress?.done ?? 0}/
               {exhaustiveStatus.data.progress?.total ?? "?"} coupes
+              {(exhaustiveStatus.data.progress?.done ?? 0) === 0 && (
+                <span className="text-muted-foreground">
+                  {" "}
+                  — le rendu initial peut prendre 1–2 min sur une longue série
+                </span>
+              )}
             </span>
           )}
           {exhaustiveStatus.data?.status === "done" &&

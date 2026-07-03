@@ -26,7 +26,7 @@ export default function WorklistDialog({
   open,
   onOpenChange,
 }: WorklistDialogProps) {
-  const [aet, setAet] = useState("");
+  const [aet, setAet] = useState("WORKLIST");
   const [patientName, setPatientName] = useState("");
   const [unavailable, setUnavailable] = useState(false);
   const [entries, setEntries] = useState<
@@ -42,6 +42,14 @@ export default function WorklistDialog({
   >([]);
 
   const worklist = trpc.orthanc.worklist.useMutation();
+
+  // Story 5.2 / Epic 7 : la worklist passe par Orthanc. Si aucun serveur PACS
+  // n'est configuré, on l'annonce d'emblée (comme « Query PACS ») au lieu de
+  // laisser un formulaire muet — c'était la cause du « rien ne se passe ».
+  const { data: pacsServers } = trpc.pacsServers.list.useQuery(undefined, {
+    enabled: open,
+  });
+  const noPacs = (pacsServers ?? []).length === 0;
 
   const handleSearch = async () => {
     if (!aet.trim()) return;
@@ -77,6 +85,18 @@ export default function WorklistDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {noPacs && (
+          <div className="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-600">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              Aucun serveur Orthanc/PACS n'est connecté. La worklist interroge
+              une Modality Worklist via Orthanc : configurez d'abord un serveur
+              dans <span className="font-medium">« Query »</span> (onglet PACS
+              Servers), puis revenez ici.
+            </span>
+          </div>
+        )}
+
         <div className="flex items-end gap-2">
           <div className="flex-1">
             <Label htmlFor="wl-aet" className="text-xs">
@@ -103,7 +123,7 @@ export default function WorklistDialog({
           </div>
           <Button
             onClick={handleSearch}
-            disabled={!aet.trim() || worklist.isPending}
+            disabled={!aet.trim() || worklist.isPending || noPacs}
           >
             {worklist.isPending ? (
               <Loader2 className="w-4 h-4 animate-spin" />

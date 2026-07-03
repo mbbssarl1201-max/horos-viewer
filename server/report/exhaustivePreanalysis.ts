@@ -49,6 +49,9 @@ interface Job {
   id: string;
   status: "running" | "done" | "error";
   progress: { done: number; total: number };
+  // Étape courante (Story 4.1) : sans elle, l'UI affiche « 0/N » pendant le
+  // long rendu initial des coupes et l'utilisateur croit que c'est figé.
+  phase?: string;
   result?: ExhaustiveResult;
   error?: string;
   startedAt: number;
@@ -161,7 +164,14 @@ async function runExhaustive(
     number,
     { label?: string; nums: Set<number>; total: number }
   >();
+  let siNum = 0;
   for (const s of series) {
+    siNum += 1;
+    const siLabel =
+      series.length > 1 ? ` (série ${siNum}/${series.length})` : "";
+    // Le rendu de TOUTES les coupes précède la boucle de dépistage : phase
+    // explicite pour que « 0/N » ne passe pas pour un blocage.
+    job.phase = `Rendu des coupes${siLabel}…`;
     let all;
     try {
       all = await sampleSeriesPngs(s.id, {
@@ -177,6 +187,7 @@ async function runExhaustive(
     screenedTotal += all.images.length;
     const flagged = new Set<number>();
     for (let b = 0; b < all.images.length; b += BATCH) {
+      job.phase = `Dépistage${siLabel}…`;
       const batch = all.images.slice(b, b + BATCH);
       (await screenBatch(batch, modality)).forEach(n => flagged.add(n));
       job.progress.done += batch.length;
@@ -191,6 +202,7 @@ async function runExhaustive(
 
   // Phase 2 : coupes suspectes de TOUTES les séries (réparties, total ≤ 30) ;
   // représentatives si une série n'a rien de suspect. Pleine résolution.
+  job.phase = "Rédaction du rapport…";
   const CAP = 30;
   const entries = Array.from(flaggedBy.entries());
   const perSeriesCap = Math.max(
@@ -361,6 +373,7 @@ export async function getExhaustiveJob(jobId: string) {
     return {
       status: j.status,
       progress: j.progress,
+      phase: j.phase,
       result: j.result,
       error: j.error,
     };

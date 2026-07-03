@@ -25,6 +25,15 @@ export default function NoVncScreen({ className }: { className?: string }) {
   useEffect(() => {
     let rfb: RfbLike | null = null;
     let disposed = false;
+    let connected = false;
+    // Story 3.2 : sans feedback d'échec, l'utilisateur croit que « ça charge »
+    // indéfiniment. Si la connexion n'aboutit pas en 15 s, message explicite.
+    const timeout = setTimeout(() => {
+      if (!disposed && !connected)
+        setStatus(
+          "Le navigateur piloté ne répond pas (délai dépassé). Vérifiez que le service Selenium est démarré, puis refermez et rouvrez la vue."
+        );
+    }, 15_000);
     void (async () => {
       try {
         // Import dynamique : RFB ne pèse sur aucun chunk tant que la vue
@@ -40,16 +49,22 @@ export default function NoVncScreen({ className }: { className?: string }) {
         r.scaleViewport = true;
         r.background = "#0b1220";
         r.addEventListener("connect", () => {
+          connected = true;
+          clearTimeout(timeout);
           if (!disposed) setStatus(null);
         });
         r.addEventListener("disconnect", () => {
+          clearTimeout(timeout);
           if (!disposed)
             setStatus(
-              "Déconnecté du navigateur piloté — refermez puis rouvrez la vue pour retenter."
+              connected
+                ? "Déconnecté du navigateur piloté — refermez puis rouvrez la vue pour retenter."
+                : "Impossible de se connecter au navigateur piloté (service indisponible). Refermez et rouvrez la vue pour retenter."
             );
         });
         rfb = r;
       } catch (e) {
+        clearTimeout(timeout);
         if (!disposed)
           setStatus(
             "Écran piloté indisponible : " +
@@ -59,6 +74,7 @@ export default function NoVncScreen({ className }: { className?: string }) {
     })();
     return () => {
       disposed = true;
+      clearTimeout(timeout);
       try {
         rfb?.disconnect();
       } catch {

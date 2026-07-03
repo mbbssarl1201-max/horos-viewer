@@ -96,12 +96,15 @@ async function triggerSeleniumAction(
 async function streamChat(
   messages: ChatMsg[],
   onToken: (t: string) => void,
-  onDone: () => void
+  onDone: () => void,
+  studyId?: number | null
 ): Promise<void> {
   const resp = await fetch("/api/cockpit/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages }),
+    // studyId = étude ouverte dans le viewer : le serveur injecte son contexte
+    // pour que « cet examen » et les actions rapides s'y rapportent d'office.
+    body: JSON.stringify({ messages, studyId: studyId ?? undefined }),
   });
   if (!resp.ok || !resp.body) throw new Error("Erreur chat");
   const reader = resp.body.getReader();
@@ -207,7 +210,8 @@ export default function EvaViewerPanel({
               return updated;
             });
           },
-          () => setLoading(false)
+          () => setLoading(false),
+          studyId
         );
       } catch {
         setMessages(prev => {
@@ -223,7 +227,7 @@ export default function EvaViewerPanel({
         setLoading(false);
       }
     },
-    [messages, loading]
+    [messages, loading, studyId]
   );
 
   const handleAction = async (action: (typeof SELENIUM_ACTIONS)[0]) => {

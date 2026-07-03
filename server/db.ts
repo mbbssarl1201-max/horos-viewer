@@ -136,6 +136,20 @@ export async function getUserById(id: number) {
   return rows[0] || undefined;
 }
 
+/** Premier compte admin — destinataire des notifications quand l'import
+ *  DICOM est authentifié par jeton de service (pas de session utilisateur). */
+export async function getFirstAdminUserId(): Promise<number | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.role, "admin"))
+    .orderBy(users.id)
+    .limit(1);
+  return rows[0]?.id;
+}
+
 export async function countUsers(): Promise<number> {
   const db = await getDb();
   if (!db) return 0;

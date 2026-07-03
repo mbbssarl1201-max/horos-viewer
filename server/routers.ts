@@ -186,6 +186,25 @@ const medicalProcedure = protectedProcedure.use(({ ctx, next }) => {
   return next({ ctx });
 });
 
+// Import DICOM : session clinique OU jeton de service longue durée présenté
+// par la passerelle du cabinet (Authorization: Bearer <DICOM_IMPORT_TOKEN>).
+// Portée STRICTEMENT limitée à dicom.import (écriture d'imagerie, zéro lecture
+// PHI). Né de la panne du 2026-07-03 : la passerelle dépendait d'un cookie de
+// session de 7 jours sans reconnexion → imports morts à l'expiration.
+const importProcedure = publicProcedure.use(async ({ ctx, next }) => {
+  if (ctx.user && hasMedicalAccess(ctx.user)) {
+    return next({ ctx });
+  }
+  const { isValidImportToken } = await import("./importToken");
+  if (isValidImportToken(ctx.req.headers.authorization)) {
+    return next({ ctx });
+  }
+  throw new TRPCError({
+    code: "UNAUTHORIZED",
+    message: "Session clinique ou jeton d'import requis",
+  });
+});
+
 // Reporting-level actions (admin or radiologist): status, priority, anonymize.
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin" && ctx.user.role !== "radiologist") {
@@ -864,7 +883,7 @@ export const appRouter = router({
 
   // DICOM Import router
   dicom: router({
-    import: medicalProcedure
+    import: importProcedure
       .input(
         z.object({
           patientId: z.string(),
@@ -961,14 +980,19 @@ export const appRouter = router({
         await updateSeriesCount(seriesRecord.id);
         await updateStudyCounts(study.id);
 
-        // 7. Create notification for new study
-        await createNotification({
-          userId: ctx.user.id,
-          type: "new_study",
-          title: `New ${input.modality || "DICOM"} study received`,
-          message: `Patient: ${input.patientName}, Study: ${input.studyDescription || "N/A"}`,
-          studyId: study.id,
-        });
+        // 7. Create notification for new study. Auth par jeton de service
+        // (passerelle cabinet) : pas de session → notifier le premier admin.
+        const notifyUserId =
+          ctx.user?.id ?? (await (await import("./db")).getFirstAdminUserId());
+        if (notifyUserId != null) {
+          await createNotification({
+            userId: notifyUserId,
+            type: "new_study",
+            title: `New ${input.modality || "DICOM"} study received`,
+            message: `Patient: ${input.patientName}, Study: ${input.studyDescription || "N/A"}`,
+            studyId: study.id,
+          });
+        }
 
         return {
           success: true,

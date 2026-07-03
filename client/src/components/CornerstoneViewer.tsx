@@ -1932,6 +1932,65 @@ const CornerstoneViewer = forwardRef<
         : "default";
   }, [activeTool, isInitialized]);
 
+  // Purge des annotations RÉSIDUELLES au changement de pile (étude/série).
+  // Cornerstone stocke les annotations dans un état GLOBAL indexé par
+  // FrameOfReferenceUID, jamais vidé au changement d'étude : une mesure
+  // transitoire (ex. « 10 mm » tracée puis non enregistrée) y restait et se
+  // redessinait sur la pile suivante (artefact QA 2026-07-03). On retire donc,
+  // pour le FrameOfReference de CE viewport, toute annotation qui n'est PAS
+  // dans l'ensemble sauvegardé — sans toucher les autres viewports (grille
+  // 2×2) ni les annotations persistées, ré-hydratées juste après.
+  useEffect(() => {
+    if (!isInitialized || imageUrls.length === 0) return;
+    let disposed = false;
+    (async () => {
+      try {
+        const cornerstoneTools = await import("@cornerstonejs/tools");
+        if (disposed) return;
+        const { annotation: annotationModule } = cornerstoneTools;
+        const viewport = renderingEngineRef.current?.getViewport?.(
+          viewportIdRef.current
+        ) as { getFrameOfReferenceUID?: () => string | undefined } | undefined;
+        const forUid = viewport?.getFrameOfReferenceUID?.();
+        if (!forUid) return;
+        const savedUids = new Set(
+          (savedAnnotations ?? [])
+            .map(r => (r?.data as { annotationUID?: string })?.annotationUID)
+            .filter((u): u is string => !!u)
+        );
+        const all = annotationModule.state.getAllAnnotations?.() ?? [];
+        for (const ann of all as Array<{
+          annotationUID?: string;
+          metadata?: { FrameOfReferenceUID?: string };
+        }>) {
+          const uid = ann?.annotationUID;
+          if (!uid) continue;
+          if (ann?.metadata?.FrameOfReferenceUID !== forUid) continue;
+          if (savedUids.has(uid)) continue;
+          try {
+            annotationModule.state.removeAnnotation?.(uid);
+            hydratedUidsRef.current.delete(uid);
+          } catch {
+            /* déjà retirée */
+          }
+        }
+        try {
+          cornerstoneTools.utilities.triggerAnnotationRenderForViewportIds?.([
+            viewportIdRef.current,
+          ]);
+        } catch {
+          /* pas prêt : le prochain rendu s'en chargera */
+        }
+      } catch {
+        /* nettoyage best-effort */
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isInitialized, imageUrls]);
+
   // Re-hydration: re-draw previously-saved annotations once the viewport is
   // ready. Runs when the saved set or the loaded stack changes. addAnnotation
   // fires ANNOTATION_ADDED (NOT ANNOTATION_COMPLETED), so this never loops back

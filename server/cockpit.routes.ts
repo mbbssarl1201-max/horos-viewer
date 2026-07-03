@@ -12,9 +12,9 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server, IncomingMessage } from "http";
 import type { Duplex } from "stream";
-import { createCipheriv } from "crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { sdk } from "./_core/sdk";
+import { vncDESResponse } from "./vncDes";
 
 function pageAutorisee(page: string): boolean {
   if (!page || !page.startsWith("/")) return false;
@@ -29,31 +29,9 @@ function pageAutorisee(page: string): boolean {
 // silencieux et « Connexion au navigateur en direct… » éternel).
 
 // ── Helpers RFB ──────────────────────────────────────────────────────────────
-
-// VNC DES challenge-response : DES-ECB avec clé dont les bits de chaque octet
-// sont inversés (contrairement au DES standard). RFC-VNC §6.2.2.
-function vncDESResponse(password: string, challenge: Buffer): Buffer {
-  const raw = Buffer.from(password.substring(0, 8).padEnd(8, "\0"), "latin1");
-  const key = Buffer.alloc(8);
-  for (let i = 0; i < 8; i++) {
-    let b = raw[i] ?? 0;
-    let r = 0;
-    for (let j = 0; j < 8; j++) {
-      r = (r << 1) | (b & 1);
-      b >>>= 1;
-    }
-    key[i] = r;
-  }
-  const enc = (block: Buffer): Buffer => {
-    const c = createCipheriv("des-ecb", key, null);
-    c.setAutoPadding(false);
-    return Buffer.concat([c.update(block), c.final()]);
-  };
-  return Buffer.concat([
-    enc(challenge.subarray(0, 8)),
-    enc(challenge.subarray(8)),
-  ]);
-}
+// vncDESResponse vient de ./vncDes (DES pur JS) : OpenSSL 3 a relégué DES au
+// legacy provider et createCipheriv("des-ecb", …) lève ERR_OSSL_EVP_UNSUPPORTED
+// — l'auth RFB upstream échouait donc systématiquement (502).
 
 interface UpstreamAuthResult {
   serverInit: Buffer;

@@ -44,6 +44,9 @@ importers:
       '@kitware/vtk.js':
         specifier: 34.15.1
         version: 34.15.1(@babel/preset-env@7.29.7(@babel/core@7.28.4))(autoprefixer@10.4.21(postcss@8.5.6))(webpack@5.107.2(esbuild@0.25.10)(lightningcss@1.30.1)(postcss@8.5.6))(wslink@2.5.0)
+      '@novnc/novnc':
+        specifier: 1.7.0
+        version: 1.7.0
       '@radix-ui/react-accordion':
         specifier: ^1.2.12
         version: 1.2.12(@types/react-dom@19.2.1(@types/react@19.2.1))(@types/react@19.2.1)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
@@ -1596,6 +1599,9 @@ packages:
 
   '@nodable/entities@2.2.0':
     resolution: {integrity: sha512-9uGyhaQavEUMC8AIddIjau4NsnsXhou+j5sBAGojCM1oxmQpVKTWR/9JxABD6UAv12vpIms55fPZKFQEhG6uBg==}
+
+  '@novnc/novnc@1.7.0':
+    resolution: {integrity: sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA==}
 
   '@oozcitak/dom@1.15.10':
     resolution: {integrity: sha512-0JT29/LaxVgRcGKvHmSrUTEvZ8BXvZhGl2LASRUgHqDTC1M5g1pLmVv56IYNyt3bG2CUjDkc67wnyZC14pbQrQ==}
@@ -6490,6 +6496,8 @@ snapshots:
   '@msgpack/msgpack@2.8.0': {}
 
   '@nodable/entities@2.2.0': {}
+
+  '@novnc/novnc@1.7.0': {}
 
   '@oozcitak/dom@1.15.10':
     dependencies:

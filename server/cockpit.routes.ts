@@ -1,9 +1,9 @@
 // server/cockpit.routes.ts
 //
 // Routes API du COCKPIT Eva-Selenium (MediView) :
-//   GET  /api/cockpit/viewer   → page HTML noVNC (même-origine, auth requise)
 //   POST /api/cockpit/naviguer → proxy vers eva-capture-mediview
 //   WS   /api/cockpit/vnc-ws  → proxy WS vers le conteneur VNC interne
+//        (consommé par le composant client NoVncScreen — RFB bundlé)
 //
 // Sécurité : pages restreintes à un jeu fermé (anti open-redirect) ;
 // Le proxy complète lui-même l'auth RFB VNC avec le serveur upstream et présente
@@ -23,49 +23,10 @@ function pageAutorisee(page: string): boolean {
   return /^\/[a-zA-Z0-9/_-]*$/.test(clean);
 }
 
-// Le HTML noVNC se connecte au proxy WS du même serveur (/api/cockpit/vnc-ws).
-// Le proxy gère lui-même l'auth RFB, donc le navigateur reçoit un tunnel No-Auth —
-// aucun secret VNC n'est transmis au client.
-function buildViewerHtml(): string {
-  return `<!doctype html>
-<html lang="fr">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:#0b1220;overflow:hidden;width:100vw;height:100vh}
-#screen{width:100%;height:100%}
-#msg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-  color:#7ee0c8;font-family:system-ui,sans-serif;font-size:14px;text-align:center;
-  pointer-events:none;transition:opacity .3s}
-</style>
-</head>
-<body>
-<div id="screen"></div>
-<div id="msg">Connexion au navigateur en direct…</div>
-<script type="module">
-import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@1.5.0/core/rfb.js';
-const msg = document.getElementById('msg');
-try {
-  const wsUrl = location.origin.replace(/^http/, 'ws') + '/api/cockpit/vnc-ws';
-  const rfb = new RFB(document.getElementById('screen'), wsUrl);
-  rfb.viewOnly = true;
-  rfb.scaleViewport = true;
-  rfb.background = '#0b1220';
-  rfb.addEventListener('connect', () => {
-    if (msg) { msg.style.opacity = '0'; setTimeout(() => { msg.style.display = 'none'; }, 300); }
-  });
-  rfb.addEventListener('disconnect', () => {
-    if (msg) { msg.textContent = 'Déconnecté. Rechargez pour reconnecter.'; msg.style.display = 'block'; msg.style.opacity = '1'; }
-  });
-} catch (e) {
-  if (msg) msg.textContent = 'Erreur noVNC : ' + (e instanceof Error ? e.message : String(e));
-}
-</script>
-</body>
-</html>`;
-}
+// Le client noVNC (RFB) est désormais BUNDLÉ côté client (NoVncScreen.tsx) et
+// se connecte directement à /api/cockpit/vnc-ws : plus de page HTML servie ni
+// de CDN externe (l'ancien import jsdelivr pointait sur un chemin mort → 404
+// silencieux et « Connexion au navigateur en direct… » éternel).
 
 // ── Helpers RFB ──────────────────────────────────────────────────────────────
 
@@ -500,25 +461,8 @@ async function requireAuth(
 }
 
 export function registerCockpitRoutes(app: Express): void {
-  const rawLiveUrl = (process.env.EVA_LIVE_URL ?? "").replace(/\/$/, "");
-  const vncPassword = process.env.EVA_VNC_PASSWORD ?? "";
   const captureUrl = (process.env.EVA_CAPTURE_URL ?? "").replace(/\/$/, "");
   const captureSecret = process.env.EVA_CAPTURE_SECRET ?? "";
-
-  app.get(
-    "/api/cockpit/viewer",
-    requireAuth,
-    (_req: Request, res: Response): void => {
-      if (!rawLiveUrl || !vncPassword) {
-        res.status(503).send("Service navigateur live non configuré.");
-        return;
-      }
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.setHeader("X-Frame-Options", "SAMEORIGIN");
-      res.setHeader("Cache-Control", "no-store");
-      res.send(buildViewerHtml()); // le proxy gère l'auth VNC, pas le client
-    }
-  );
 
   app.post(
     "/api/cockpit/naviguer",

@@ -74,6 +74,24 @@
   display: none;
 }
 
+/* Toolbar du viewer : barre de défilement FINE mais visible — l'affordance
+   qu'il existe d'autres outils hors champ (sinon les boutons coupés au bord
+   droit ressemblent à un bug de responsive). */
+.toolbar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(0.35 0.02 220) transparent;
+}
+.toolbar-scroll::-webkit-scrollbar {
+  height: 4px;
+}
+.toolbar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.toolbar-scroll::-webkit-scrollbar-thumb {
+  background: oklch(0.35 0.02 220);
+  border-radius: 2px;
+}
+
 /* Custom scrollbar for dark theme */
 ::-webkit-scrollbar {
   width: 8px;

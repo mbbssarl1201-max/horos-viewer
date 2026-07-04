@@ -367,11 +367,12 @@ function applyActiveTool(
       toolGroup.setActiveStrategy(cst.BrushTool.toolName, brushStrategy);
     } catch {}
   }
-  try {
-    toolGroup.setToolActive(cst.StackScrollTool.toolName, {
-      bindings: [{ mouseButton: cst.Enums.MouseBindings.Wheel }],
-    });
-  } catch {}
+  // NOTE : on NE lie PAS la molette à StackScrollTool. Le défilement molette
+  // est géré par le handler React onWheel (→ setCurrentSlice, source de vérité
+  // du compteur/slider/capture). Si Cornerstone captait aussi la molette, il
+  // scrollait le viewport SANS mettre à jour currentSlice → le rendu suivant
+  // resettait la coupe et la molette « ne faisait rien » (bug QA C-1).
+  // StackScrollTool reste disponible en outil primaire (glisser pour défiler).
   // Outil sur le bouton DROIT (W/L par défaut, façon Horos), uniquement si
   // différent de l'outil primaire (sinon déjà lié ci-dessus avec les 2 boutons).
   if (secName && secName !== csName) {
@@ -2070,12 +2071,23 @@ const CornerstoneViewer = forwardRef<
         const viewport = renderingEngineRef.current.getViewport(
           viewportIdRef.current
         );
-        if (viewport) {
-          viewport.setImageIdIndex(currentSlice);
-          viewport.render();
-        }
-      } catch (err) {
-        // Viewport may not be ready yet
+        if (!viewport) return;
+        // BORNE OBLIGATOIRE : setImageIdIndex lève « ImageIdIndex N invalid,
+        // the stack only has K elements » si l'index dépasse la pile CHARGÉE —
+        // ce qui arrive à chaque transition de série (le compteur `currentSlice`
+        // du parent et la pile du viewport se mettent à jour sur des cycles
+        // différents) ou sur une série courte (Scano 2 images). L'exception
+        // laissait le viewport dans un état cassé (zoom 1 %/écran noir) et
+        // inondait la console (68 erreurs en QA). On clampe à la taille réelle.
+        const stackLen =
+          (viewport.getImageIds?.() as string[] | undefined)?.length ?? 0;
+        if (stackLen === 0) return;
+        const idx = Math.max(0, Math.min(currentSlice, stackLen - 1));
+        if (viewport.getCurrentImageIdIndex?.() === idx) return;
+        viewport.setImageIdIndex(idx);
+        viewport.render();
+      } catch {
+        // Viewport pas encore prêt : le prochain rendu s'en chargera.
       }
     };
 
@@ -2132,7 +2144,13 @@ const CornerstoneViewer = forwardRef<
   // Handle scroll for slice navigation
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
-      e.preventDefault();
+      // Pas de preventDefault : React attache la molette en listener PASSIF →
+      // preventDefault y est refusé et pollue la console (« Unable to
+      // preventDefault… »). Inutile ici : le conteneur du viewer est
+      // overflow-hidden, la page ne défile pas.
+      // stopPropagation : le parent (Viewer) a AUSSI un onWheel sur le
+      // conteneur ; sans ça, le même cran comptait double (2 coupes/tick).
+      e.stopPropagation();
       if (e.deltaY > 0) {
         onSliceChange(Math.min(imageUrls.length - 1, currentSlice + 1));
       } else {

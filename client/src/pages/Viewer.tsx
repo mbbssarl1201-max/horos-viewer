@@ -292,7 +292,14 @@ function saveHotkeys(m: HotkeyMap) {
 export default function Viewer() {
   const params = useParams<{ studyId?: string }>();
   const [, navigate] = useLocation();
-  const { user } = useAuth();
+  // Route protégée (affiche du PHI) : rediriger vers /login si la session est
+  // absente/expirée (ex. après logout dans un autre onglet). Les données sont
+  // déjà bloquées côté serveur (401) — c'est une propreté UX + défense en
+  // profondeur, pas la barrière d'accès (qui reste serveur).
+  const { user } = useAuth({
+    redirectOnUnauthenticated: true,
+    redirectPath: "/login",
+  });
   const studyId = params.studyId ? parseInt(params.studyId) : undefined;
 
   const [activeTool, setActiveTool] = useState("wwwl");

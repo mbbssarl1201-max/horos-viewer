@@ -38,6 +38,21 @@ export function useAuth(options?: UseAuthOptions) {
     } finally {
       utils.auth.me.setData(undefined, null);
       await utils.auth.me.invalidate();
+      // Hygiène : purger les traces d'identité côté client. La session réelle
+      // est un cookie httpOnly déjà invalidé serveur ; ces clés localStorage
+      // (dont l'artefact Manus « manus-runtime-user-info ») ne sont pas des
+      // jetons d'accès, mais ne doivent pas survivre à une déconnexion.
+      if (typeof window !== "undefined") {
+        try {
+          for (const k of Object.keys(window.localStorage)) {
+            if (/manus|user-info|auth|session|token/i.test(k)) {
+              window.localStorage.removeItem(k);
+            }
+          }
+        } catch {
+          /* localStorage indisponible : sans conséquence */
+        }
+      }
     }
   }, [logoutMutation, utils]);
 

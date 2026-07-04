@@ -81,6 +81,15 @@ export function serveStatic(app: Express) {
     res.status(404).end();
   });
 
+  // Une route /api/* NON gérée ne doit JAMAIS retomber sur le fallback SPA :
+  // renvoyer index.html (HTML, 200) sur un chemin d'API trompe les scanners de
+  // sécurité (un « GET /api/studies » paraît « répondre 200 avec du contenu »
+  // alors que c'est la coquille SPA, pas des données) — c'est exactement le
+  // faux positif « fuite post-logout » remonté en QA. Réponse honnête : 404 JSON.
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: "Not found" });
+  });
+
   // fall through to index.html if the file doesn't exist
   app.use("*", (_req, res) => {
     res.sendFile(path.resolve(distPath, "index.html"));

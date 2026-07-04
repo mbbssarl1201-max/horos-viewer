@@ -1142,7 +1142,9 @@ export default function Viewer() {
   // Handle scroll on viewport for slice navigation
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
-      e.preventDefault();
+      // Filet pour les modes où CornerstoneViewer ne couvre pas tout le
+      // conteneur. Pas de preventDefault (listener passif → warning console ;
+      // conteneur overflow-hidden → la page ne défile pas de toute façon).
       if (e.deltaY > 0) {
         setCurrentSlice(prev => Math.min(totalSlices - 1, prev + 1));
       } else {

@@ -48,6 +48,7 @@ import {
   FileText,
   LogIn,
   User,
+  LogOut,
   Activity,
   MonitorUp,
   Trash2,
@@ -257,7 +258,7 @@ const TIME_FILTERS = [
 ];
 
 export default function Home() {
-  const { user, loading, isAuthenticated } = useAuth();
+  const { user, loading, isAuthenticated, logout } = useAuth();
   const [, navigate] = useLocation();
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -621,6 +622,16 @@ export default function Home() {
             <User className="w-3 h-3" />
             <span className="text-[10px]">{user?.name || "User"}</span>
           </div>
+          <button
+            onClick={() => {
+              void logout().finally(() => navigate("/login"));
+            }}
+            title="Se déconnecter"
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+          >
+            <LogOut className="w-3 h-3" />
+            <span className="hidden sm:inline">Déconnexion</span>
+          </button>
         </div>
       </div>
 

@@ -182,6 +182,16 @@ export async function createLocalUser(input: {
   return getUserByOpenId(input.openId);
 }
 
+/** Replace a user's password hash (self-service change from the app). */
+export async function updateUserPassword(
+  openId: string,
+  passwordHash: string
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(users).set({ passwordHash }).where(eq(users.openId, openId));
+}
+
 /**
  * Increment a user's session version, invalidating every JWT issued before
  * now. Called on logout to make session revocation server-side and immediate.

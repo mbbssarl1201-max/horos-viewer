@@ -24,6 +24,7 @@ import ExportPanel from "@/components/ExportPanel";
 import AnonymizeDialog from "@/components/AnonymizeDialog";
 import QueryPACS from "@/components/QueryPACS";
 import WorklistDialog from "@/components/WorklistDialog";
+import ChangePasswordDialog from "@/components/ChangePasswordDialog";
 import { sortStudies, nextSort, type SortKey } from "@/lib/homeSort";
 import ShareStudyDialog from "@/components/ShareStudyDialog";
 import { PendingSignatureList } from "@/components/PendingSignatureList";
@@ -48,6 +49,7 @@ import {
   FileText,
   LogIn,
   User,
+  KeyRound,
   LogOut,
   Activity,
   MonitorUp,
@@ -314,6 +316,7 @@ export default function Home() {
   const [showSendDialog, setShowSendDialog] = useState(false);
   const [sendTargetAet, setSendTargetAet] = useState<string>("");
   const [cockpitOpen, setCockpitOpen] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   // Clinical roles (admin/radiologist) may change RIS workflow state.
   const canEditWorkflow =
@@ -622,6 +625,13 @@ export default function Home() {
             <User className="w-3 h-3" />
             <span className="text-[10px]">{user?.name || "User"}</span>
           </div>
+          <button
+            onClick={() => setShowChangePassword(true)}
+            title="Changer le mot de passe"
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+          >
+            <KeyRound className="w-3 h-3" />
+          </button>
           <button
             onClick={() => {
               void logout().finally(() => navigate("/login"));
@@ -1318,6 +1328,10 @@ export default function Home() {
       <QueryPACS open={showQueryPACS} onOpenChange={setShowQueryPACS} />
 
       <WorklistDialog open={showWorklist} onOpenChange={setShowWorklist} />
+      <ChangePasswordDialog
+        open={showChangePassword}
+        onOpenChange={setShowChangePassword}
+      />
 
       <ShareStudyDialog
         studyId={selectedStudyId}

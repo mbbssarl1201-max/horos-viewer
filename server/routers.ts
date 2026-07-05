@@ -432,6 +432,58 @@ export const appRouter = router({
         return { success: true, user: { id: user.id, email, role: user.role } };
       }),
 
+    changePassword: protectedProcedure
+      .input(
+        z.object({
+          currentPassword: z.string().min(1),
+          newPassword: z.string().min(12).max(128),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { getUserByOpenId, updateUserPassword, bumpSessionVersion } =
+          await import("./db");
+        const { hashPassword, verifyPassword } = await import("./localAuth");
+        const { sdk } = await import("./_core/sdk");
+
+        const user = await getUserByOpenId(ctx.user.openId);
+        // Message générique : pas d'oracle sur l'existence ou l'état du hash.
+        if (
+          !user ||
+          !user.passwordHash ||
+          !(await verifyPassword(input.currentPassword, user.passwordHash))
+        ) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "Mot de passe actuel incorrect",
+          });
+        }
+
+        if (input.newPassword === input.currentPassword) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Le nouveau mot de passe doit être différent de l'actuel",
+          });
+        }
+
+        await updateUserPassword(
+          user.openId,
+          await hashPassword(input.newPassword)
+        );
+        // Révoque toutes les sessions existantes (tous appareils)…
+        await bumpSessionVersion(user.openId);
+        // …puis ré-émet un cookie frais pour CET appareil : createSessionToken
+        // snapshotte la sessionVersion tout juste incrémentée.
+        const token = await sdk.createSessionToken(user.openId, {
+          name: user.name || "",
+        });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, token, {
+          ...cookieOptions,
+          maxAge: SEVEN_DAYS_MS,
+        });
+        return { success: true } as const;
+      }),
+
     logout: publicProcedure.mutation(async ({ ctx }) => {
       // Revoke all outstanding sessions for this user server-side, not just
       // clear the cookie on this device.

@@ -282,8 +282,12 @@ export function attacherVncProxy(server: Server): void {
   const vncPassword = process.env.EVA_VNC_PASSWORD ?? "";
   if (!rawLiveUrl || !vncPassword) return;
 
-  // novnc_proxy (Selenium) expose websockify à la racine, pas à /websockify
-  const internalWsUrl = rawLiveUrl.replace(/^https?:\/\//, "wss://") + "/";
+  // novnc_proxy (Selenium) expose websockify à la racine, pas à /websockify.
+  // http:// → ws:// (upstream interne sur medical-net, même hôte) ;
+  // https:// → wss:// (upstream distant derrière Traefik).
+  const internalWsUrl =
+    rawLiveUrl.replace(/^http:\/\//, "ws://").replace(/^https:\/\//, "wss://") +
+    "/";
 
   const wss = new WebSocketServer({ noServer: true });
 

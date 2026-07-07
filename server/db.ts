@@ -738,6 +738,113 @@ export async function getReportByStudy(studyId: number) {
   return rows[0] ?? null;
 }
 
+/**
+ * INTÉGRATION MEDICENTRAL — études + comptes-rendus d'un patient identifié par
+ * nom/prénom/date de naissance. L'appariement se fait via le blind index
+ * `nameSearch` (les DEUX ordres « nom prénom » / « prénom nom », le DICOM stocke
+ * « NOM^Prénom » → normalisé « nom prénom »). Désambiguïsation par date de
+ * naissance si fournie. Le contenu clinique (indication/conclusion) est déchiffré
+ * ici (MediView détient les clés). Consommé par /api/interne/imagerie-patient.
+ */
+export interface EtudeInterneMedicentral {
+  id: number;
+  studyDate: string | null;
+  modality: string | null;
+  studyDescription: string | null;
+  numberOfSeries: number | null;
+  numberOfInstances: number | null;
+  cr: null | {
+    reportId: number;
+    statut: string | null;
+    signe: boolean;
+    signedAt: string | null;
+    indication: string | null;
+    conclusion: string | null;
+    aPdf: boolean;
+  };
+}
+
+export async function imageriePatientPourMedicentral(input: {
+  nom: string;
+  prenom: string;
+  ddn?: string | null;
+}): Promise<{
+  trouve: boolean;
+  patientNom: string | null;
+  etudes: EtudeInterneMedicentral[];
+}> {
+  const vide = { trouve: false, patientNom: null, etudes: [] };
+  const db = await getDb();
+  if (!db) return vide;
+  const nom = (input.nom || "").trim();
+  const prenom = (input.prenom || "").trim();
+  const cles = Array.from(
+    new Set(
+      [
+        nameSearchKey(`${nom} ${prenom}`),
+        nameSearchKey(`${prenom} ${nom}`),
+      ].filter((k): k is string => !!k)
+    )
+  );
+  if (!cles.length) return vide;
+
+  const pts = await db
+    .select()
+    .from(patients)
+    .where(inArray(patients.nameSearch, cles))
+    .limit(20);
+  if (!pts.length) return vide;
+
+  // Désambiguïsation par date de naissance (compare sur les seuls chiffres).
+  const ddnDigits = (input.ddn || "").replace(/\D/g, "");
+  let retenus = pts;
+  if (ddnDigits.length >= 6) {
+    const parDdn = pts.filter(p => {
+      const b = (decryptField(p.birthDate) || "").replace(/\D/g, "");
+      return b && (b === ddnDigits || b.includes(ddnDigits));
+    });
+    if (parDdn.length) retenus = parDdn;
+  }
+  const ids = retenus.map(p => p.id);
+
+  const stds = await db
+    .select()
+    .from(studies)
+    .where(inArray(studies.patientId, ids))
+    .orderBy(desc(studies.studyDate));
+
+  const etudes: EtudeInterneMedicentral[] = [];
+  for (const s of stds) {
+    const r = (
+      await db.select().from(reports).where(eq(reports.studyId, s.id)).limit(1)
+    )[0];
+    etudes.push({
+      id: s.id,
+      studyDate: s.studyDate ?? null,
+      modality: s.modality ?? null,
+      studyDescription: s.studyDescription ?? null,
+      numberOfSeries: s.numberOfSeries ?? null,
+      numberOfInstances: s.numberOfInstances ?? null,
+      cr: r
+        ? {
+            reportId: r.id,
+            statut: r.status ?? null,
+            signe: !!r.signedAt,
+            signedAt: r.signedAt ? new Date(r.signedAt).toISOString() : null,
+            indication: decryptField(r.indication),
+            conclusion: decryptField(r.conclusion),
+            aPdf: !!r.pdfStorageKey || !!r.signedAt,
+          }
+        : null,
+    });
+  }
+  return {
+    trouve: true,
+    patientNom: decryptField(retenus[0].patientName),
+    etudes,
+  };
+}
+
 export async function getReportAddenda(reportId: number) {
   const db = await getDb();
   if (!db) return [];

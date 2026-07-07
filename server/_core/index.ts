@@ -3,6 +3,7 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import { createServer } from "http";
 import net from "net";
+import crypto from "node:crypto";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
@@ -717,6 +718,135 @@ async function startServer() {
       res.redirect(`/viewer/${consumed.studyId}`);
     } catch {
       res.status(500).send("Erreur serveur.");
+    }
+  });
+
+  // ── INTÉGRATION MEDICENTRAL (service-to-service, réseau interne medical-net) ──
+  // MediCentral appelle ces routes avec le token partagé MEDICENTRAL_SERVICE_TOKEN
+  // pour afficher les études + comptes-rendus d'un patient dans SON dossier. OFF
+  // tant que le token n'est pas configuré (aucune surface exposée). Pas de session
+  // MediView requise : l'authz patient est faite côté MediCentral (cabinet).
+  const serviceTokenOk = (req: express.Request): boolean => {
+    const attendu = (process.env.MEDICENTRAL_SERVICE_TOKEN || "").trim();
+    if (!attendu) return false; // désactivé si non configuré
+    const recu = String(req.header("x-service-token") || "");
+    if (recu.length !== attendu.length || !recu) return false;
+    try {
+      return crypto.timingSafeEqual(Buffer.from(recu), Buffer.from(attendu));
+    } catch {
+      return false;
+    }
+  };
+
+  app.post("/api/interne/imagerie-patient", async (req, res) => {
+    if (!serviceTokenOk(req)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    try {
+      const { nom, prenom, ddn } = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof nom !== "string" || typeof prenom !== "string") {
+        res.status(400).json({ error: "nom/prenom requis" });
+        return;
+      }
+      const { imageriePatientPourMedicentral } = await import("../db");
+      const r = await imageriePatientPourMedicentral({
+        nom,
+        prenom,
+        ddn: typeof ddn === "string" ? ddn : null,
+      });
+      res.json(r);
+    } catch (e: unknown) {
+      res.status(500).json({ error: (e as Error)?.message || "Erreur" });
+    }
+  });
+
+  app.get("/api/interne/cr-pdf/:studyId", async (req, res) => {
+    if (!serviceTokenOk(req)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    try {
+      const studyId = parseInt(req.params.studyId, 10);
+      if (!Number.isInteger(studyId)) {
+        res.status(400).json({ error: "studyId invalide" });
+        return;
+      }
+      const { getReportByStudy, getStudyById } = await import("../db");
+      const report = (await getReportByStudy(studyId)) as Record<
+        string,
+        unknown
+      > | null;
+      if (!report) {
+        res.status(404).json({ error: "Aucun compte-rendu" });
+        return;
+      }
+      const pdfKey = report.pdfStorageKey as string | null | undefined;
+      if (pdfKey) {
+        const { storageGetBuffer } = await import("../storage");
+        const buf = await storageGetBuffer(pdfKey);
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `inline; filename="CR_${studyId}.pdf"`
+        );
+        res.send(buf);
+        return;
+      }
+      // Pas de PDF signé stocké → génération à la volée depuis les sections.
+      const { decryptField } = await import("./crypto");
+      const study = await getStudyById(studyId);
+      const { jsPDF } = await import("jspdf");
+      const doc = new jsPDF();
+      const champ = (v: unknown) => decryptField(v as string) || "—";
+      let y = 20;
+      doc.setFontSize(16);
+      doc.setTextColor(0, 102, 204);
+      doc.text("Compte rendu radiologique", 20, y);
+      doc.setDrawColor(0, 102, 204);
+      doc.line(20, y + 4, 190, y + 4);
+      y += 16;
+      doc.setFontSize(10);
+      doc.setTextColor(0, 0, 0);
+      doc.text(`Patient : ${study?.patientName || "—"}`, 20, y);
+      y += 7;
+      doc.text(
+        `Étude : ${study?.modality || "—"} — ${study?.studyDate || "—"}`,
+        20,
+        y
+      );
+      y += 11;
+      const section = (titre: string, texte: string) => {
+        doc.setFontSize(11);
+        doc.setTextColor(0, 102, 204);
+        doc.text(titre, 20, y);
+        y += 6;
+        doc.setFontSize(10);
+        doc.setTextColor(0, 0, 0);
+        for (const ligne of doc.splitTextToSize(texte, 170)) {
+          if (y > 275) {
+            doc.addPage();
+            y = 20;
+          }
+          doc.text(ligne, 20, y);
+          y += 6;
+        }
+        y += 4;
+      };
+      section("Indication", champ(report.indication));
+      section("Technique", champ(report.technique));
+      section("Résultats", champ(report.resultats));
+      section("Conclusion", champ(report.conclusion));
+      const buf = Buffer.from(doc.output("arraybuffer"));
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="CR_${studyId}.pdf"`
+      );
+      res.send(buf);
+    } catch (e: unknown) {
+      if (!res.headersSent)
+        res.status(500).json({ error: (e as Error)?.message || "Erreur" });
     }
   });
 

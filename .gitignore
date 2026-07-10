@@ -1,0 +1,11 @@
+.env
+.env.*
+node_modules/
+__pycache__/
+.next/
+.cache/
+*.pem
+*.key
+id_rsa*
+*.log
+.DS_Store

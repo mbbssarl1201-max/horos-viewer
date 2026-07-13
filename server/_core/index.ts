@@ -42,6 +42,22 @@ async function startServer() {
   // real client IP (from X-Forwarded-For) rather than the proxy's.
   app.set("trust proxy", 1);
 
+  // En-têtes de sécurité globaux (app médicale PHI). On reste sur des en-têtes
+  // sûrs : PAS de Content-Security-Policy restrictive (casserait Cornerstone3D/
+  // vtk.js : workers, blob:, wasm). frame-ancestors 'none' + X-Frame-Options DENY
+  // = anti-clickjacking sur le viewer ; HSTS 2 ans ; nosniff ; referrer minimal.
+  app.use((_req, res, next) => {
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader(
+      "Strict-Transport-Security",
+      "max-age=63072000; includeSubDomains"
+    );
+    res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+    next();
+  });
+
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -728,14 +744,15 @@ async function startServer() {
   // MediView requise : l'authz patient est faite côté MediCentral (cabinet).
   const serviceTokenOk = (req: express.Request): boolean => {
     const attendu = (process.env.MEDICENTRAL_SERVICE_TOKEN || "").trim();
-    if (!attendu) return false; // désactivé si non configuré
+    // Désactivé si non configuré OU trop court : ces routes exposent du PHI sans
+    // session MediView, un jeton faible serait brute-forçable (cf. importToken.ts).
+    if (attendu.length < 32) return false;
     const recu = String(req.header("x-service-token") || "");
-    if (recu.length !== attendu.length || !recu) return false;
-    try {
-      return crypto.timingSafeEqual(Buffer.from(recu), Buffer.from(attendu));
-    } catch {
-      return false;
-    }
+    // Comparaison en temps constant sur des empreintes de longueur fixe : ne fuit
+    // pas la longueur du jeton attendu (pas d'early-return sur recu.length).
+    const a = crypto.createHash("sha256").update(attendu).digest();
+    const b = crypto.createHash("sha256").update(recu).digest();
+    return crypto.timingSafeEqual(a, b);
   };
 
   app.post("/api/interne/imagerie-patient", async (req, res) => {

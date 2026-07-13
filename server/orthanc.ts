@@ -24,6 +24,19 @@ function safeAeTitle(aet: string): string {
   return encodeURIComponent(aet);
 }
 
+/**
+ * Valide un UID DICOM avant de l'interpoler dans un chemin REST Orthanc.
+ * Défense en profondeur anti-SSRF / path-traversal : un UID forgé
+ * (`1.2.3/../../tools/execute-script`) ne doit jamais atteindre l'API admin
+ * d'Orthanc. Format DICOM PS3.5 : chiffres et points, max 64 caractères.
+ */
+function safeDicomUid(uid: string): string {
+  if (!/^[0-9]+(\.[0-9]+)*$/.test(uid) || uid.length > 64) {
+    throw new Error("Invalid DICOM UID");
+  }
+  return uid;
+}
+
 function getOrthancConfig(): OrthancConfig {
   return {
     url: ENV.orthancUrl,
@@ -116,7 +129,7 @@ export async function qidoSearchSeries(
   studyInstanceUID: string
 ): Promise<any[]> {
   const res = await orthancFetch(
-    `/dicom-web/studies/${studyInstanceUID}/series`,
+    `/dicom-web/studies/${safeDicomUid(studyInstanceUID)}/series`,
     {
       headers: { Accept: "application/dicom+json" },
     }
@@ -136,7 +149,7 @@ export async function wadoGetStudyMetadata(
   studyInstanceUID: string
 ): Promise<any[]> {
   const res = await orthancFetch(
-    `/dicom-web/studies/${studyInstanceUID}/metadata`,
+    `/dicom-web/studies/${safeDicomUid(studyInstanceUID)}/metadata`,
     {
       headers: { Accept: "application/dicom+json" },
     }
@@ -158,7 +171,7 @@ export async function wadoGetInstance(
   sopInstanceUID: string
 ): Promise<ArrayBuffer> {
   const res = await orthancFetch(
-    `/dicom-web/studies/${studyInstanceUID}/series/${seriesInstanceUID}/instances/${sopInstanceUID}`,
+    `/dicom-web/studies/${safeDicomUid(studyInstanceUID)}/series/${safeDicomUid(seriesInstanceUID)}/instances/${safeDicomUid(sopInstanceUID)}`,
     { headers: { Accept: "application/dicom" } }
   );
 
@@ -183,13 +196,16 @@ export async function stowStore(
     Buffer.from(`\r\n--${boundary}--`),
   ]);
 
-  const res = await orthancFetch(`/dicom-web/studies/${studyInstanceUID}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": `multipart/related; type="application/dicom"; boundary=${boundary}`,
-    },
-    body,
-  });
+  const res = await orthancFetch(
+    `/dicom-web/studies/${safeDicomUid(studyInstanceUID)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": `multipart/related; type="application/dicom"; boundary=${boundary}`,
+      },
+      body,
+    }
+  );
 
   if (!res.ok) {
     throw new Error(`STOW-RS store failed: ${res.status}`);

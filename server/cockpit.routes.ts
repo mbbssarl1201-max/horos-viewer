@@ -16,8 +16,18 @@ import { WebSocketServer, WebSocket } from "ws";
 import { sdk } from "./_core/sdk";
 import { vncDESResponse } from "./vncDes";
 
+// Garde de consentement PHI cloud, symétrique de ENV.cloudAiPhiConsent : les
+// appels Vertex (Gemini UE) ci-dessous transmettent du contexte clinique →
+// interdits sans consentement explicite (nLPD).
+function cloudAiPhiConsent(): boolean {
+  return (process.env.MEDIVIEW_CLOUD_AI_PHI_CONSENT ?? "false") === "true";
+}
+
 function pageAutorisee(page: string): boolean {
   if (!page || !page.startsWith("/")) return false;
+  // `//hôte` (ou `/\hôte`) est une URL protocol-relative → rejet : seul un chemin
+  // interne relatif est autorisé, jamais une cible d'un autre hôte.
+  if (page.startsWith("//") || page.startsWith("/\\")) return false;
   const clean = page.split("?")[0]!.split("#")[0]!;
   // Toutes les routes internes MediView sont autorisées (Selenium reste sur notre propre app)
   return /^\/[a-zA-Z0-9/_-]*$/.test(clean);
@@ -717,6 +727,15 @@ PHI INTERDIT : jamais de nom/prénom/DDN patient.`;
       const abortCtrl = new AbortController();
       req.on("close", () => abortCtrl.abort());
 
+      if (!cloudAiPhiConsent()) {
+        send({
+          error:
+            "IA cloud désactivée (consentement PHI non accordé). Contactez l'administrateur.",
+        });
+        res.end();
+        return;
+      }
+
       try {
         // Gemini via Vertex AI europe-west1 — même backend que la voix Eva (nLPD ✓)
         const { GoogleGenAI } = await import("@google/genai");
@@ -801,6 +820,9 @@ PHI INTERDIT : jamais de nom/prénom/DDN patient.`;
 
   // helper — génère un CR IA pour une étude (réutilisé par les deux endpoints)
   async function genererCrTexte(studyId: number): Promise<string> {
+    if (!cloudAiPhiConsent()) {
+      throw new Error("IA cloud désactivée (consentement PHI non accordé).");
+    }
     const { getStudyById, getReportByStudy } = await import("./db");
     const study = await getStudyById(studyId);
     if (!study) throw new Error("Étude introuvable");

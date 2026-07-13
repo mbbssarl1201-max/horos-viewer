@@ -171,3 +171,15 @@ if (
 ) {
   console.warn("[env] SMTP_INSECURE ignoré en production (TLS forcé)");
 }
+
+// Garde fail-fast : en production, une ENCRYPTION_KEY absente ferait stocker les
+// identités patient EN CLAIR sans le moindre signal (fail-open de crypto.ts). La
+// migration nLPD est terminée en prod (identités chiffrées) : refuser de démarrer
+// plutôt que régresser silencieusement en clair sur une variable d'env oubliée.
+if (ENV.isProduction && !ENV.encryptionKey) {
+  console.error(
+    "[env] FATAL : ENCRYPTION_KEY absente en production — refus de démarrer " +
+      "(les identités patient seraient stockées en clair, violation nLPD)."
+  );
+  process.exit(1);
+}

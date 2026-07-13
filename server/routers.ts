@@ -1313,11 +1313,11 @@ export const appRouter = router({
     queryStudies: medicalProcedure
       .input(
         z.object({
-          patientName: z.string().optional(),
-          patientId: z.string().optional(),
-          studyDate: z.string().optional(),
-          modality: z.string().optional(),
-          accessionNumber: z.string().optional(),
+          patientName: z.string().max(64).optional(),
+          patientId: z.string().max(64).optional(),
+          studyDate: z.string().max(64).optional(),
+          modality: z.string().max(16).optional(),
+          accessionNumber: z.string().max(64).optional(),
         })
       )
       .mutation(async ({ input }) => {

@@ -30,7 +30,14 @@ type CsvRow = Pick<
 /** Escape one CSV field per RFC 4180 (quote if it contains "," / '"' / newline). */
 function csvField(value: unknown): string {
   if (value === null || value === undefined) return "";
-  const s = value instanceof Date ? value.toISOString() : String(value);
+  let s = value instanceof Date ? value.toISOString() : String(value);
+  // Anti-injection de formule (CSV injection) : un champ commençant par = + - @
+  // ou une tabulation s'exécute comme formule dans Excel/LibreOffice. Ces valeurs
+  // proviennent d'en-têtes attaquables (ex. X-Forwarded-For journalisé) ; on les
+  // neutralise en les préfixant d'une apostrophe. Victime = l'admin qui exporte.
+  if (/^[=+\-@\t\r]/.test(s)) {
+    s = `'${s}`;
+  }
   if (/[",\n\r]/.test(s)) {
     return `"${s.replace(/"/g, '""')}"`;
   }

@@ -52,4 +52,22 @@ describe("buildAuditCsv (export CSV du journal d'accès)", () => {
     // Le champ detail est entouré de guillemets et les " sont doublés.
     expect(dataLine).toContain('"a,b ""c""\nd"');
   });
+
+  it("neutralise l'injection de formule CSV (=+-@ en tête, ex. X-Forwarded-For)", () => {
+    const csv = buildAuditCsv([
+      row({ ipAddress: '=HYPERLINK("http://evil","x")' }) as any,
+    ]);
+    const dataLine = csv.split("\n")[1]!;
+    // Préfixé d'une apostrophe ET entouré de guillemets (contient une virgule).
+    expect(dataLine).toContain("\"'=HYPERLINK");
+    expect(dataLine).not.toContain(",=HYPERLINK");
+  });
+
+  it("neutralise aussi + - @ et tabulation en tête", () => {
+    for (const payload of ["+1", "-2+3", "@cmd", "\tX"]) {
+      const csv = buildAuditCsv([row({ detail: payload }) as any]);
+      const field = csv.split("\n")[1]!.split(",")[4]!;
+      expect(field.startsWith("'") || field.startsWith("\"'")).toBe(true);
+    }
+  });
 });

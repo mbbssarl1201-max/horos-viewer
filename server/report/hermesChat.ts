@@ -273,7 +273,9 @@ export async function prepareHermesChat(
     12,
     knowledgeBlock
   );
-  const useVertex = vertexConfigured();
+  // Vertex (Gemini UE) reçoit le contexte clinique du CR → soumis à la MÊME garde
+  // de consentement PHI que Claude. Sans consentement, on retombe sur Ollama local.
+  const useVertex = vertexConfigured() && ENV.cloudAiPhiConsent;
   const useClaude =
     !useVertex &&
     ENV.aiBackend === "claude" &&

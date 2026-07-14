@@ -16,7 +16,7 @@ import { logger } from "../_core/logger";
 import { captureException } from "../_core/sentry";
 import { buildReportPdf } from "./reportPdf";
 import { ENV } from "../_core/env";
-import { isAllowedRecipient } from "../_core/emailAllowList";
+import { isAllowedPhiRecipientStrict } from "../_core/emailAllowList";
 
 const MAX_VIDEO_FRAMES = 400;
 const CINE_FPS = 12;
@@ -83,13 +83,22 @@ export async function sendStudyReportImpl(
   if (!study)
     throw new TRPCError({ code: "NOT_FOUND", message: "Étude introuvable" });
 
-  // Allow-list OPTIONNELLE de domaines destinataires (egress PHI). Si
-  // REPORT_EMAIL_ALLOWED_DOMAINS est vide, aucune restriction. Sinon, le
-  // domaine du destinataire doit être whitelisté. Cf. I-email.
-  if (!isAllowedRecipient(input.to, ENV.reportEmailAllowedDomains))
+  // Allow-list de domaines destinataires (egress PHI). Fail-closed (audit B-4) :
+  // en prod, une liste vide REFUSE tout envoi tant que REPORT_EMAIL_ALLOWED_DOMAINS
+  // n'est pas renseigné (au lieu du fail-open historique). Cf. I-email.
+  if (
+    !isAllowedPhiRecipientStrict(
+      input.to,
+      ENV.reportEmailAllowedDomains,
+      ENV.isProduction
+    )
+  )
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: "Destinataire non autorisé (domaine non whitelisté).",
+      message:
+        ENV.isProduction && ENV.reportEmailAllowedDomains.length === 0
+          ? "Envoi PHI désactivé : REPORT_EMAIL_ALLOWED_DOMAINS non configuré."
+          : "Destinataire non autorisé (domaine non whitelisté).",
     });
 
   const series = await listSeriesByStudy(input.studyId);

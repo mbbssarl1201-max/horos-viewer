@@ -446,6 +446,10 @@ async function requireAuth(
       res.status(403).json({ error: "Forbidden" });
       return;
     }
+    // L'utilisateur authentifié DOIT être attaché à req : les routes en aval
+    // (generer-cr, envoyer-rapport) exigent user.role. Sans ceci, req.user est
+    // undefined → 403 systématique (routes mortes). Cf. audit A-F5.
+    (req as any).user = user;
     next();
   } catch {
     res.status(401).json({ error: "Unauthorized" });
@@ -910,12 +914,28 @@ PHI INTERDIT : jamais de nom/prénom/DDN patient.`;
         return;
       }
       try {
-        const { isAllowedRecipient } = await import("./_core/emailAllowList");
+        const { isAllowedPhiRecipientStrict } = await import(
+          "./_core/emailAllowList"
+        );
         const { ENV } = await import("./_core/env");
-        if (!isAllowedRecipient(to, ENV.reportEmailAllowedDomains)) {
-          res
-            .status(403)
-            .json({ ok: false, error: "Destinataire non autorisé" });
+        // Chemin voix Eva (destinataire extrait de texte libre) → garde
+        // fail-closed : en prod, allow-list vide = refus. Empêche qu'une faute
+        // de frappe expédie un CR nominatif vers un domaine arbitraire tant que
+        // REPORT_EMAIL_ALLOWED_DOMAINS n'est pas renseigné. Cf. audit B-4.
+        if (
+          !isAllowedPhiRecipientStrict(
+            to,
+            ENV.reportEmailAllowedDomains,
+            ENV.isProduction
+          )
+        ) {
+          res.status(403).json({
+            ok: false,
+            error:
+              ENV.isProduction && ENV.reportEmailAllowedDomains.length === 0
+                ? "Envoi PHI désactivé : REPORT_EMAIL_ALLOWED_DOMAINS non configuré."
+                : "Destinataire non autorisé",
+          });
           return;
         }
         const { getStudyById } = await import("./db");

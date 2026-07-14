@@ -59,7 +59,7 @@ import {
   encryptField,
   encryptDeterministic,
 } from "./_core/crypto";
-import { isAllowedRecipient } from "./_core/emailAllowList";
+import { isAllowedPhiRecipientStrict } from "./_core/emailAllowList";
 import { shouldNotify, PRIORITY_TRIGGERS, STATUS_TRIGGERS } from "./risNotify";
 import { annotationDataSchema } from "./annotationSchema";
 import dcmjs from "dcmjs";
@@ -82,10 +82,21 @@ async function guardPhiNotify(
   recipientEmail: string,
   ctx: { user: { id: number }; req?: { ip?: string } }
 ): Promise<void> {
-  if (!isAllowedRecipient(recipientEmail, ENV.reportEmailAllowedDomains))
+  // Fail-closed (audit B-4) : en prod, une allow-list vide REFUSE tout envoi PHI
+  // (au lieu du fail-open historique) → renseigner REPORT_EMAIL_ALLOWED_DOMAINS.
+  if (
+    !isAllowedPhiRecipientStrict(
+      recipientEmail,
+      ENV.reportEmailAllowedDomains,
+      ENV.isProduction
+    )
+  )
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: "Destinataire non autorisé (domaine non whitelisté).",
+      message:
+        ENV.isProduction && ENV.reportEmailAllowedDomains.length === 0
+          ? "Envoi PHI désactivé : REPORT_EMAIL_ALLOWED_DOMAINS non configuré."
+          : "Destinataire non autorisé (domaine non whitelisté).",
     });
   await recordAccess({
     userId: ctx.user.id,

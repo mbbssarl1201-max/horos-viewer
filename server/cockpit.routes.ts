@@ -16,11 +16,62 @@ import { WebSocketServer, WebSocket } from "ws";
 import { sdk } from "./_core/sdk";
 import { vncDESResponse } from "./vncDes";
 
-// Garde de consentement PHI cloud, symétrique de ENV.cloudAiPhiConsent : les
-// appels Vertex (Gemini UE) ci-dessous transmettent du contexte clinique →
-// interdits sans consentement explicite (nLPD).
-function cloudAiPhiConsent(): boolean {
-  return (process.env.MEDIVIEW_CLOUD_AI_PHI_CONSENT ?? "false") === "true";
+// Cockpit Eva tourne 100 % en LOCAL (Ollama A100) — aucune dépendance GCP/Vertex
+// (audit B-2 : le chemin Vertex utilisait le projet GCP d'un autre client). PHI-safe
+// par construction : le contexte clinique ne quitte jamais le VPS médical.
+//
+// Streaming chat via Ollama local (/api/chat, NDJSON). onToken(delta) par
+// fragment ; retourne le texte complet. Respecte l'AbortSignal (déconnexion client).
+async function streamOllamaChat(
+  messages: { role: string; content: string }[],
+  onToken: (t: string) => void,
+  signal: AbortSignal
+): Promise<string> {
+  const url = (process.env.OLLAMA_URL ?? "http://ollama-hermes:11434").replace(
+    /\/$/,
+    ""
+  );
+  const model = process.env.OLLAMA_TEXT_MODEL ?? "qwen2.5:3b";
+  const resp = await fetch(`${url}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal,
+    body: JSON.stringify({
+      model,
+      stream: true,
+      keep_alive: -1,
+      options: { num_thread: 4, temperature: 0.2 },
+      messages,
+    }),
+  });
+  if (!resp.ok || !resp.body) {
+    throw new Error(`Ollama HTTP ${resp.status}`);
+  }
+  let full = "";
+  let buf = "";
+  const decoder = new TextDecoder();
+  // resp.body est un async-iterable de Uint8Array (undici).
+  for await (const chunk of resp.body as unknown as AsyncIterable<Uint8Array>) {
+    if (signal.aborted) break;
+    buf += decoder.decode(chunk, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      try {
+        const obj = JSON.parse(line) as { message?: { content?: string } };
+        const delta = obj?.message?.content ?? "";
+        if (delta) {
+          full += delta;
+          onToken(delta);
+        }
+      } catch {
+        /* ligne NDJSON partielle — ignorée */
+      }
+    }
+  }
+  return full;
 }
 
 function pageAutorisee(page: string): boolean {
@@ -731,57 +782,14 @@ PHI INTERDIT : jamais de nom/prénom/DDN patient.`;
       const abortCtrl = new AbortController();
       req.on("close", () => abortCtrl.abort());
 
-      if (!cloudAiPhiConsent()) {
-        send({
-          error:
-            "IA cloud désactivée (consentement PHI non accordé). Contactez l'administrateur.",
-        });
-        res.end();
-        return;
-      }
-
       try {
-        // Gemini via Vertex AI europe-west1 — même backend que la voix Eva (nLPD ✓)
-        const { GoogleGenAI } = await import("@google/genai");
-        const ai = new GoogleGenAI({
-          vertexai: true,
-          project: process.env.VERTEX_PROJECT ?? "optigps",
-          location: process.env.VERTEX_LOCATION ?? "europe-west1",
-        });
-        // gemini-2.5-flash = seul modèle de texte disponible dans europe-west1 sur ce projet
-        const textModel =
-          process.env.GEMINI_TEXT_MODEL ??
-          process.env.GEMINI_VERTEX_MODEL ??
-          "gemini-2.5-flash";
-        const sysMsg = messages.find(m => m.role === "system")?.content ?? "";
-        const contents = messages
-          .filter(m => m.role !== "system")
-          .map(m => ({
-            role: m.role === "assistant" ? "model" : "user",
-            parts: [{ text: m.content }],
-          }));
-        let full = "";
-        const stream = await ai.models.generateContentStream({
-          model: textModel,
-          contents,
-          config: {
-            systemInstruction: sysMsg,
-            maxOutputTokens: 1200,
-            temperature: 0.2,
-          },
-        });
-        for await (const chunk of stream) {
-          if (abortCtrl.signal.aborted) break;
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const c = chunk as any;
-          const txt = (c.candidates?.[0]?.content?.parts ?? [])
-            .map((p: any) => p.text ?? "")
-            .join("");
-          if (txt) {
-            send({ t: txt });
-            full += txt;
-          }
-        }
+        // Cockpit Eva 100 % LOCAL (Ollama A100) — plus aucun appel Vertex/GCP.
+        // Le contexte clinique ne quitte pas le VPS médical (nLPD ✓, cloisonnement ✓).
+        const full = await streamOllamaChat(
+          messages,
+          txt => send({ t: txt }),
+          abortCtrl.signal
+        );
         // Extraire toutes les commandes Eva de la réponse
         const navMatch = full.match(/NAV:(\/[^\s\n]*)/);
         const albumMatch = full.match(/CMD:album:([^\s\n]+)/);
@@ -824,38 +832,21 @@ PHI INTERDIT : jamais de nom/prénom/DDN patient.`;
 
   // helper — génère un CR IA pour une étude (réutilisé par les deux endpoints)
   async function genererCrTexte(studyId: number): Promise<string> {
-    if (!cloudAiPhiConsent()) {
-      throw new Error("IA cloud désactivée (consentement PHI non accordé).");
-    }
     const { getStudyById, getReportByStudy } = await import("./db");
     const study = await getStudyById(studyId);
     if (!study) throw new Error("Étude introuvable");
     const report = await getReportByStudy(studyId);
-    const { buildHermesContext } = await import("./report/hermesChat");
+    const { buildHermesContext, chatViaOllama } = await import(
+      "./report/hermesChat"
+    );
     const studyCtx = buildHermesContext(study as any, report as any);
-    const { GoogleGenAI } = await import("@google/genai");
-    const ai = new GoogleGenAI({
-      vertexai: true,
-      project: process.env.VERTEX_PROJECT ?? "optigps",
-      location: process.env.VERTEX_LOCATION ?? "europe-west1",
-    });
     const prompt =
       `Tu es Eva, radiologue IA senior. Génère un compte rendu radiologique structuré en français. ` +
       `Format : Indication, Technique, Résultats (par système), Conclusion, Recommandations. ` +
       `PHI INTERDIT : jamais de nom/prénom/DDN patient.\n\nContexte étude :\n${studyCtx}\n\n` +
       `Texte actuel du CR :\n${(report as any)?.content ?? "(aucun)"}`;
-    const stream = await ai.models.generateContentStream({
-      model: "gemini-2.5-flash",
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: { maxOutputTokens: 2000, temperature: 0.15 },
-    });
-    let crText = "";
-    for await (const chunk of stream) {
-      const c = chunk as any;
-      crText += (c.candidates?.[0]?.content?.parts ?? [])
-        .map((p: any) => p.text ?? "")
-        .join("");
-    }
+    // 100 % local (Ollama A100) — aucun appel Vertex/GCP (audit B-2).
+    const crText = await chatViaOllama([{ role: "user", content: prompt }]);
     return crText.trim();
   }
 

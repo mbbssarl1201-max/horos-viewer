@@ -1,6 +1,6 @@
 # Agent SUVA — traitement automatique des demandes d'imagerie assureur
 
-Date : 2026-08-13 · Statut : approuvé par le gérant (design validé en session)
+Date : 2026-08-13 · Statut : implémenté (feat/agent-suva) — déploiement en attente
 
 ## Problème
 

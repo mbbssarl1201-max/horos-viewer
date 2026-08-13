@@ -897,6 +897,12 @@ async function startServer() {
     .then(m => m.startAutoReportAgent())
     .catch(() => {});
 
+  // Agent assureur (SUVA) : poller IMAP + pipeline de traitement des
+  // demandes d'imagerie (no-op si INSURER_IMAP_HOST absent).
+  void import("../insurer/mailPoller")
+    .then(m => m.demarrerPollerAssureur())
+    .catch(() => {});
+
   server.listen(port, () => {
     logger.info("server.started", { port, env: process.env.NODE_ENV });
     console.log(`Server running on http://localhost:${port}/`);

@@ -497,3 +497,71 @@ export const reportShareTokens = mysqlTable(
   })
 );
 export type ReportShareToken = typeof reportShareTokens.$inferSelect;
+
+/**
+ * Demandes d'imagerie d'assureurs (SUVA…) reçues sur la boîte dédiée.
+ * Cycle : recue → extraite → identifiee → prete → envoyee | a_valider → envoyee | rejetee.
+ * `extraction` = JSON ExtractionDemande (identité + examens lus par le LLM).
+ */
+export const insurerRequests = mysqlTable(
+  "insurer_requests",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    messageId: varchar("messageId", { length: 255 }).notNull().unique(),
+    expediteur: varchar("expediteur", { length: 255 }).notNull(),
+    sujet: varchar("sujet", { length: 512 }),
+    recuLe: timestamp("recuLe").notNull(),
+    statut: mysqlEnum("statut", [
+      "recue",
+      "extraite",
+      "identifiee",
+      "prete",
+      "a_valider",
+      "envoyee",
+      "rejetee",
+      "erreur",
+    ])
+      .default("recue")
+      .notNull(),
+    // Corps + clés MinIO des pièces jointes (insurer/<id>/...)
+    corpsTexte: text("corpsTexte"),
+    attachmentKeys: json("attachmentKeys").$type<string[]>(),
+    extraction: json("extraction"),
+    patientId: int("patientId"),
+    studyIds: json("studyIds").$type<number[]>(),
+    adresseReponse: varchar("adresseReponse", { length: 255 }),
+    motifValidation: text("motifValidation"),
+    envoyeLe: timestamp("envoyeLe"),
+    // userId du valideur, ou null si envoi automatique
+    envoyePar: int("envoyePar"),
+    erreur: text("erreur"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  t => ({
+    statutIdx: index("insurer_requests_statut_idx").on(t.statut),
+    recuLeIdx: index("insurer_requests_recuLe_idx").on(t.recuLe),
+  })
+);
+export type InsurerRequest = typeof insurerRequests.$inferSelect;
+
+/** Jetons de téléchargement du colis DICOM (haché SHA-256, expirable, révocable). */
+export const insurerBundleTokens = mysqlTable(
+  "insurer_bundle_tokens",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    requestId: int("requestId").notNull(),
+    tokenHash: varchar("tokenHash", { length: 64 }).notNull().unique(),
+    bundleKey: varchar("bundleKey", { length: 512 }).notNull(),
+    expireLe: timestamp("expireLe").notNull(),
+    telechargements:
+      json("telechargements").$type<{ ts: string; ip: string }[]>(),
+    revoqueLe: timestamp("revoqueLe"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  t => ({
+    requestIdIdx: index("insurer_bundle_tokens_requestId_idx").on(t.requestId),
+    expireLeIdx: index("insurer_bundle_tokens_expireLe_idx").on(t.expireLe),
+  })
+);
+export type InsurerBundleToken = typeof insurerBundleTokens.$inferSelect;

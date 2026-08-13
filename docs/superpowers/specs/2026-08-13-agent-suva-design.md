@@ -57,9 +57,11 @@ exams: [{modalite, dateDemandee, description}], refSinistre,
 adresseReponse, confiance }`.
 - Texte du mail → LLM CH (Infomaniak texte, repli Ollama local) —
   jamais de fournisseur US.
-- Pièces jointes image/PDF (feuille SUVA scannée) → vision Infomaniak
-  gemma via le chemin `chatVision` existant. PDF converti en images page
-  par page côté serveur.
+- Pièces jointes image (feuille SUVA photographiée/scannée en JPEG/PNG) →
+  vision Infomaniak gemma. PDF : texte extrait côté serveur (`pdf-parse`) et
+  concaténé au corps ; un PDF image pur (scan sans couche texte) est stocké
+  mais non lu automatiquement ⇒ la demande passe en validation (jamais
+  d'envoi auto sur ce cas).
 - Score de confiance par champ ; tout champ sous le seuil ⇒ « à valider ».
 
 ### 3. Identification (`server/insurer/matchPatient.ts`, `matchStudies.ts`)

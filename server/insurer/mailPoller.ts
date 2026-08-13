@@ -321,7 +321,10 @@ export async function traiterBoite(): Promise<number> {
       port: ENV.insurerImapPort,
       // TLS pour l'IMAP public (993). Port 143 = Mailu interne sur le réseau
       // docker du VPS médical (jamais exposé) : en clair, comme mysql-medical.
+      // doSTARTTLS:false car le Dovecot interne de Mailu ANNONCE STARTTLS mais
+      // son upgrade échoue (le TLS est terminé par le front) — vécu le 13.08.2026.
       secure: ENV.insurerImapPort === 993,
+      doSTARTTLS: ENV.insurerImapPort === 993 ? undefined : false,
       auth: { user: ENV.insurerImapUser, pass: ENV.insurerImapPass },
       logger: false,
     });

@@ -340,10 +340,18 @@ export async function traiterBoite(): Promise<number> {
   try {
     const lock = await client.getMailboxLock(ENV.insurerImapMailbox);
     try {
+      // PHASE 1 — collecte : on épuise l'itérateur fetch SANS émettre d'autre
+      // commande IMAP. Appeler messageFlagsAdd pendant le fetch interbloque
+      // imapflow (la passe restait suspendue, connexion ouverte — vécu 13.08.2026).
+      const messages: { uid: number; source?: Buffer }[] = [];
       for await (const msg of client.fetch(
         { seen: false },
         { source: true, uid: true }
       )) {
+        messages.push({ uid: msg.uid, source: msg.source });
+      }
+      // PHASE 2 — traitement + marquage, une fois le fetch terminé.
+      for (const msg of messages) {
         try {
           if (!msg.source) {
             throw new Error("message IMAP sans corps (source manquant)");

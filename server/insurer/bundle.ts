@@ -12,6 +12,11 @@ import { buildStudyExportPdf } from "../report/reportPdf";
 import { insurerBundleTokens } from "../../drizzle/schema";
 
 const QUATORZE_JOURS_MS = 14 * 24 * 60 * 60 * 1000;
+// Plafond de rédemptions par jeton (multi-téléchargement INTENTIONNEL — l'assureur
+// peut retélécharger le colis pendant la fenêtre de validité, cf. décision du
+// gérant/I2) : au-delà, le jeton est traité comme épuisé (même issue générique
+// que expiré/révoqué), pour borner l'exposition d'un lien qui fuiterait.
+const PLAFOND_TELECHARGEMENTS = 10;
 
 /**
  * Zippe des buffers en mémoire (copie de `server/report/ctSegmentation.ts`,
@@ -106,8 +111,10 @@ export async function creerJeton(
 
 /**
  * Rachète un jeton en clair contre la clé MinIO du colis. Refuse (générique)
- * si le jeton est inconnu, expiré ou révoqué. Journalise le téléchargement
- * (horodatage + IP) en cas de succès — audit nLPD.
+ * si le jeton est inconnu, expiré, révoqué, OU déjà racheté
+ * `PLAFOND_TELECHARGEMENTS` fois (cf. audit I2 : le multi-téléchargement
+ * pendant la fenêtre de validité est intentionnel, mais borné). Journalise
+ * le téléchargement (horodatage + IP) en cas de succès — audit nLPD.
  */
 export async function racheterJeton(
   tokenClair: string,
@@ -128,6 +135,8 @@ export async function racheterJeton(
   if (row.expireLe.getTime() <= Date.now()) return { ok: false };
 
   const telechargements = [...(row.telechargements ?? [])];
+  if (telechargements.length >= PLAFOND_TELECHARGEMENTS) return { ok: false };
+
   telechargements.push({ ts: new Date().toISOString(), ip });
   await db
     .update(insurerBundleTokens)

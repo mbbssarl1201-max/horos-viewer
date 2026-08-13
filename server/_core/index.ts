@@ -702,15 +702,19 @@ async function startServer() {
 
   // Colis DICOM+CR d'une demande assureur : jeton en clair dans l'URL (256
   // bits, non énumérable), pas de session requise (le destinataire assureur
-  // n'a pas de compte MediView). 410 générique dans tous les cas d'échec
-  // (inconnu/expiré/révoqué) — pas d'oracle qui distingue les états.
+  // n'a pas de compte MediView). Multi-téléchargement INTENTIONNEL pendant la
+  // fenêtre de validité (14 j), plafonné à 10 rédemptions (cf. I2) — le
+  // message 410 générique ci-dessous couvre donc inconnu/expiré/révoqué/
+  // plafond atteint, sans distinguer ces cas (pas d'oracle) ; formulation
+  // dédiée (≠ `/r/:token`, lien usage unique) pour ne pas suggérer à tort
+  // qu'un seul téléchargement suffit à invalider le lien.
   app.get("/dl/:token", async (req, res) => {
     try {
       const { racheterJeton } = await import("../insurer/bundle");
       const token = req.params.token as string;
       const result = await racheterJeton(token, req.ip ?? "");
       if (!result.ok) {
-        res.status(410).send("Lien expiré ou déjà utilisé.");
+        res.status(410).send("Lien expiré ou révoqué.");
         return;
       }
       const { storageGetObject } = await import("../storage");

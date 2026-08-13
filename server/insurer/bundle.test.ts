@@ -157,4 +157,20 @@ describe("racheterJeton", () => {
     const r = await racheterJeton(tokenClair, "1.2.3.4");
     expect(r).toEqual({ ok: false });
   });
+
+  // Audit I2 : le multi-téléchargement pendant la fenêtre de validité est
+  // intentionnel (décision du gérant), mais borné à 10 rédemptions.
+  it("10 téléchargements réussissent, le 11e est refusé (plafond)", async () => {
+    const { tokenClair } = await creerJeton(1, "insurer/1/bundle.zip");
+    for (let i = 0; i < 10; i++) {
+      const r = await racheterJeton(tokenClair, `1.2.3.${i}`);
+      expect(r).toMatchObject({ ok: true });
+    }
+    const row = fauxTokens[0];
+    expect(row.telechargements).toHaveLength(10);
+
+    const onzieme = await racheterJeton(tokenClair, "1.2.3.11");
+    expect(onzieme).toEqual({ ok: false });
+    expect(row.telechargements).toHaveLength(10); // pas de 11e entrée journalisée
+  });
 });

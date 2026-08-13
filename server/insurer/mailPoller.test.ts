@@ -631,6 +631,87 @@ describe("traiterDemande", () => {
     const argExtraction = mocks.extraireDemande.mock.calls[0][0];
     expect(argExtraction.texte).not.toMatch(/\[\[MOTIF:/);
   });
+
+  // Audit C1 : `extraction.adresseReponse` est du texte libre lu par le LLM
+  // dans le corps du mail — un attaquant qui se fait passer pour l'assureur
+  // peut y écrire une liste pour se faire mettre en copie du colis DICOM+CR.
+  it("(e) adresseReponse extraite smugglée (virgule) ⇒ motif + a_valider, jamais auto même si tout le reste est parfait", async () => {
+    const row = seedRow({ adresseReponse: "reponse@suva.ch" });
+    mocks.extraireDemande.mockResolvedValue({
+      ...EXTRACTION_NOMINALE,
+      adresseReponse: "attacker@evil.com, dossier@suva.ch",
+    });
+    mocks.matchPatient.mockResolvedValue({
+      statut: "exact",
+      patientId: 5,
+      candidats: 1,
+    });
+    mocks.matchStudies.mockResolvedValue({
+      tousTrouves: true,
+      datesExactes: true,
+      parExamen: [
+        {
+          exam: EXTRACTION_NOMINALE.exams[0],
+          studyIds: [10],
+          dateExacte: true,
+        },
+      ],
+    });
+    // Piège volontaire, comme pour le PDF scanné/la PJ volumineuse :
+    // decideEnvoiAuto répond "auto" alors que l'adresse extraite smugglée
+    // doit quand même bloquer l'envoi automatique.
+    mocks.decideEnvoiAuto.mockReturnValue({ auto: true, motifs: [] });
+
+    await traiterDemande(row.id);
+
+    expect(mocks.envoyerReponse).not.toHaveBeenCalled();
+    expect(row.statut).toBe("a_valider");
+    expect(row.motifValidation).toContain(
+      "Adresse de réponse invalide ou multiple"
+    );
+    // Repli sur l'adresse déjà persistée à l'ingestion (Reply-To/From du
+    // mail) — jamais la chaîne smugglée telle quelle, jamais l'un des deux
+    // segments qu'elle contient.
+    expect(row.adresseReponse).toBe("reponse@suva.ch");
+    expect(mocks.decideEnvoiAuto).toHaveBeenCalledWith(
+      expect.objectContaining({ adresseReponse: "reponse@suva.ch" })
+    );
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("(f) adresseReponse extraite smugglée ET adresse persistée invalide ⇒ adresseReponse null, a_valider", async () => {
+    const row = seedRow({ adresseReponse: "pas-une-adresse" });
+    mocks.extraireDemande.mockResolvedValue({
+      ...EXTRACTION_NOMINALE,
+      adresseReponse: "attacker@evil.com, dossier@suva.ch",
+    });
+    mocks.matchPatient.mockResolvedValue({
+      statut: "exact",
+      patientId: 5,
+      candidats: 1,
+    });
+    mocks.matchStudies.mockResolvedValue({
+      tousTrouves: true,
+      datesExactes: true,
+      parExamen: [
+        {
+          exam: EXTRACTION_NOMINALE.exams[0],
+          studyIds: [10],
+          dateExacte: true,
+        },
+      ],
+    });
+    mocks.decideEnvoiAuto.mockReturnValue({ auto: true, motifs: [] });
+
+    await traiterDemande(row.id);
+
+    expect(mocks.envoyerReponse).not.toHaveBeenCalled();
+    expect(row.statut).toBe("a_valider");
+    expect(row.adresseReponse).toBeNull();
+    expect(mocks.decideEnvoiAuto).toHaveBeenCalledWith(
+      expect.objectContaining({ adresseReponse: null })
+    );
+  });
 });
 
 describe("demarrerPollerAssureur", () => {
@@ -645,6 +726,34 @@ describe("demarrerPollerAssureur", () => {
     } finally {
       (ENV as any).insurerImapHost = avant;
       spy.mockRestore();
+    }
+  });
+
+  // Audit I5 : un domaine d'auto-envoi non whitelisté à l'egress échouerait
+  // TOUJOURS silencieusement (visible seulement en base, `erreur`) — le
+  // gérant doit être averti dès le démarrage, pas après un envoi manqué.
+  it("avertit si un domaine INSURER_AUTO_SEND_DOMAINS est absent de REPORT_EMAIL_ALLOWED_DOMAINS, puis logue le démarrage (M6)", () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const avantAuto = ENV.insurerAutoSendDomains;
+    const avantAllowed = ENV.reportEmailAllowedDomains;
+    (ENV as any).insurerAutoSendDomains = ["suva.ch"];
+    (ENV as any).reportEmailAllowedDomains = ["gmail.com"];
+    try {
+      demarrerPollerAssureur();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("suva.ch"));
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("REPORT_EMAIL_ALLOWED_DOMAINS")
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("poller IMAP démarré")
+      );
+    } finally {
+      (ENV as any).insurerAutoSendDomains = avantAuto;
+      (ENV as any).reportEmailAllowedDomains = avantAllowed;
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
     }
   });
 });

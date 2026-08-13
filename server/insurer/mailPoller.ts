@@ -10,6 +10,7 @@ import { insurerRequests } from "../../drizzle/schema";
 import { extraireDemande } from "./extractRequest";
 import { matchPatient, matchStudies } from "./matchPatient";
 import { decideEnvoiAuto, envoyerReponse } from "./packageAndSend";
+import { normaliserAdresseUnique } from "./adresseUnique";
 import type { ExtractionDemande } from "./types";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -509,11 +510,34 @@ export async function traiterDemande(requestId: number): Promise<void> {
       .where(eq(insurerRequests.id, requestId));
 
     // Précédence : adresse extraite par le LLM (contenu du mail, non fiable)
-    // si présente, sinon l'adresse de réponse déjà persistée (Reply-To/From du
-    // mail lui-même, cf. `traiterMessage`). Elle ne sert QUE de cible d'envoi
-    // et d'entrée du contrôle de domaine dans `decideEnvoiAuto` — aucun autre
-    // usage (pas d'identification patient, pas de journalisation dédiée).
-    const adresseReponse = extraction.adresseReponse || row.adresseReponse;
+    // si présente et VALIDE (une seule adresse plausible), sinon l'adresse de
+    // réponse déjà persistée (Reply-To/From du mail lui-même, cf.
+    // `traiterMessage`, elle aussi normalisée par défense en profondeur).
+    // Elle ne sert QUE de cible d'envoi et d'entrée du contrôle de domaine
+    // dans `decideEnvoiAuto` — aucun autre usage (pas d'identification
+    // patient, pas de journalisation dédiée).
+    //
+    // Garde anti-smuggling (audit C1) : `extraction.adresseReponse` est du
+    // texte libre lu par le LLM dans le CORPS du mail — un attaquant qui se
+    // fait passer pour l'assureur peut y écrire une liste
+    // ("attacker@evil.com, dossier@suva.ch") pour se faire mettre en copie
+    // du colis DICOM+CR. Si l'adresse extraite existe mais échoue la
+    // normalisation (pas une adresse unique), elle n'est JAMAIS utilisée —
+    // motif posé pour forcer `a_valider` (jamais d'auto-envoi silencieux
+    // avec repli), et on retombe sur l'adresse déjà persistée à l'ingestion.
+    const motifsAdresse: string[] = [];
+    const adresseExtraiteNormalisee = normaliserAdresseUnique(
+      extraction.adresseReponse
+    );
+    let adresseReponse: string | null;
+    if (extraction.adresseReponse && !adresseExtraiteNormalisee) {
+      motifsAdresse.push("Adresse de réponse invalide ou multiple");
+      adresseReponse = normaliserAdresseUnique(row.adresseReponse);
+    } else {
+      adresseReponse =
+        adresseExtraiteNormalisee ??
+        normaliserAdresseUnique(row.adresseReponse);
+    }
 
     const decision = decideEnvoiAuto({
       expediteur: row.expediteur,
@@ -527,11 +551,13 @@ export async function traiterDemande(requestId: number): Promise<void> {
       },
     });
 
-    const motifs = [...decision.motifs, ...motifsPieces];
+    const motifs = [...decision.motifs, ...motifsPieces, ...motifsAdresse];
     // Garde dure : tout motif posé au stockage des PJ (PDF scanné, PJ trop
-    // volumineuse, image non exploitable…) bloque TOUJOURS l'envoi
-    // automatique, quel que soit le verdict de `decideEnvoiAuto`.
-    const auto = decision.auto && motifsPieces.length === 0;
+    // volumineuse, image non exploitable…) OU une adresse de réponse invalide
+    // (cf. `motifsAdresse` ci-dessus) bloque TOUJOURS l'envoi automatique,
+    // quel que soit le verdict de `decideEnvoiAuto`.
+    const auto =
+      decision.auto && motifsPieces.length === 0 && motifsAdresse.length === 0;
 
     await db
       .update(insurerRequests)
@@ -607,6 +633,30 @@ async function executerPasse(): Promise<void> {
 }
 
 /**
+ * Garde de cohérence au démarrage (audit I5) : si le poller est activé et
+ * qu'au moins un domaine d'`INSURER_AUTO_SEND_DOMAINS` (condition 4 de
+ * `decideEnvoiAuto`) est ABSENT de `REPORT_EMAIL_ALLOWED_DOMAINS` (garde
+ * d'egress finale `isAllowedPhiRecipientStrict`, cf. `envoyerReponse`),
+ * l'envoi automatique pour ce domaine échouera TOUJOURS à cette garde
+ * finale — sans qu'aucune erreur ne remonte ailleurs qu'en base
+ * (`insurerRequests.erreur`, invisible tant qu'on ne va pas la lire).
+ * Avertissement explicite plutôt qu'un diagnostic à l'aveugle en prod.
+ */
+function avertirIncoherenceDomaines(): void {
+  const manquants = ENV.insurerAutoSendDomains.filter(
+    d => !ENV.reportEmailAllowedDomains.includes(d)
+  );
+  if (manquants.length > 0) {
+    console.warn(
+      `[insurer] INSURER_AUTO_SEND_DOMAINS contient des domaines absents de ` +
+        `REPORT_EMAIL_ALLOWED_DOMAINS (${manquants.join(", ")}) : l'envoi ` +
+        `automatique pour ces domaines échouera TOUJOURS à la garde d'egress ` +
+        `— ajouter ces domaines à REPORT_EMAIL_ALLOWED_DOMAINS.`
+    );
+  }
+}
+
+/**
  * Démarre le worker périodique (2 min, verrou anti-réentrance). No-op + log
  * si `ENV.insurerImapHost` est vide (même pattern que `startAutoReportAgent`).
  * Jamais throw.
@@ -616,6 +666,7 @@ export function demarrerPollerAssureur(): void {
     console.log("[insurer] poller IMAP désactivé (INSURER_IMAP_HOST absent)");
     return;
   }
+  avertirIncoherenceDomaines();
   if (timer) return;
   timer = setInterval(() => {
     executerPasse().catch(err =>
@@ -623,4 +674,7 @@ export function demarrerPollerAssureur(): void {
     );
   }, INTERVALLE_MS);
   if (typeof timer.unref === "function") timer.unref();
+  console.log(
+    `[insurer] poller IMAP démarré (intervalle 2 min, boîte ${ENV.insurerImapMailbox})`
+  );
 }

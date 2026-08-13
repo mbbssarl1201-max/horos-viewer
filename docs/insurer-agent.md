@@ -27,9 +27,31 @@ réunies (sinon statut `a_valider` + notification au gérant + validation
    (`suva.ch`).
 
 Tout envoi (auto ou validé) passe par la garde d'egress
-`isAllowedPhiRecipientStrict` (fail-closed) : le destinataire doit être dans
+`isAllowedPhiRecipientStrict` (fail-closed) : le destinataire doit être une
+adresse UNIQUE (pas de liste séparée par virgule/point-virgule, pas de forme
+d'affichage `Nom <a@b.ch>` — cf. audit C1) et être dans
 `REPORT_EMAIL_ALLOWED_DOMAINS`, sans quoi l'envoi est bloqué même si les 4
-conditions ci-dessus sont remplies.
+conditions ci-dessus sont remplies. `INSURER_AUTO_SEND_DOMAINS` DOIT donc
+toujours être un sous-ensemble de `REPORT_EMAIL_ALLOWED_DOMAINS` — le poller
+avertit au démarrage (`console.warn`) si ce n'est pas le cas.
+
+`extraction.adresseReponse` (lue par le LLM dans le corps du mail entrant,
+donc non fiable) est normalisée dès l'ingestion (`normaliserAdresseUnique`,
+`server/insurer/adresseUnique.ts`) : si elle n'est pas une adresse unique
+plausible (smuggling, liste, forme d'affichage…), elle est rejetée — motif
+« Adresse de réponse invalide ou multiple » posé, repli sur l'adresse
+Reply-To/From du mail (elle-même normalisée), envoi automatique impossible.
+
+### Limites de confiance
+
+L'envoi automatique fait confiance au champ `From` du mail entrant — non
+authentifié à ce stade (pas de vérification DKIM/SPF/DMARC applicative).
+Les garde-fous actuels sont : les 4 conditions ci-dessus (dont l'expéditeur
+dans `INSURER_TRUSTED_SENDERS`) + le fait que la boîte IMAP soit dédiée à cet
+usage (surface d'attaque réduite au flux assureur). Durcissement futur
+envisagé : vérifier l'en-tête `Authentication-Results` posé par Mailu avant
+d'accepter la condition 1 (expéditeur de confiance), pour ne plus se fier au
+seul `From` déclaratif.
 
 ## 1. Créer la boîte mail dédiée (Mailu, VPS72)
 
@@ -130,22 +152,25 @@ Pings habituels :
 - `/api/export/pdf-report/1` et `/storage/x` sans session → 401
 - `/r/bogus` → 410
 
-`docker logs mediview-app` : **attention, il n'existe pas de ligne positive
-« poller démarré »** — le code (`demarrerPollerAssureur`) ne logge que le
-cas désactivé :
+`docker logs mediview-app` : chercher la ligne positive de démarrage
+(`grep "poller IMAP démarré"`) :
 
 ```
-[insurer] poller IMAP désactivé (INSURER_IMAP_HOST absent)
+[insurer] poller IMAP démarré (intervalle 2 min, boîte INBOX)
 ```
 
-La vérification correcte est donc l'**absence** de cette ligne dans les
-logs qui suivent le démarrage (elle apparaît une seule fois, au boot, si
-`INSURER_IMAP_HOST` est vide). Si elle apparaît malgré les variables
-posées : vérifier que le `.env` a bien été relu par le conteneur
-(`--force-recreate`, pas juste `restart`). Ensuite, laisser passer un cycle
-(~2 min) et vérifier l'absence d'erreurs `[insurer] passe boîte échouée` /
-`[insurer] passe échouée` dans les logs, ce qui confirme une connexion IMAP
-correcte.
+Si elle est absente : soit `INSURER_IMAP_HOST` est resté vide côté conteneur
+(vérifier que le `.env` a bien été relu — `--force-recreate`, pas juste
+`restart` — auquel cas on voit plutôt `[insurer] poller IMAP désactivé
+(INSURER_IMAP_HOST absent)`), soit le poller n'a pas encore atteint cette
+ligne de code (erreur avant, peu probable). Vérifier aussi l'absence d'un
+`console.warn` `INSURER_AUTO_SEND_DOMAINS contient des domaines absents de
+REPORT_EMAIL_ALLOWED_DOMAINS` juste avant (cf. section 2 — sinon l'envoi
+automatique échouera toujours pour ces domaines).
+
+Ensuite, laisser passer un cycle (~2 min) et vérifier l'absence d'erreurs
+`[insurer] passe boîte échouée` / `[insurer] passe échouée` dans les logs,
+ce qui confirme une connexion IMAP correcte.
 
 ## 6. Test end-to-end (patient fictif)
 
@@ -171,3 +196,21 @@ confirmation est demandée). Le jeton est marqué révoqué en base
 (`revoqueLe`) : toute tentative de téléchargement ultérieure renvoie 410,
 sans possibilité de le réactiver — en cas de besoin, renvoyer un nouveau
 colis depuis la même page (`resend`).
+
+### Sémantique réelle du lien `/dl/:token` (I2)
+
+Contrairement au lien `/r/:token` (compte-rendu, usage UNIQUE), le lien de
+téléchargement du colis assureur est **multi-téléchargement** pendant sa
+fenêtre de validité — décision assumée : l'assureur peut avoir besoin de
+retélécharger le colis (échec réseau, changement de poste…) sans repasser
+par le cabinet. Bornes :
+
+- **Expiration** : 14 jours après l'émission (`creerJeton`).
+- **Plafond** : 10 téléchargements maximum sur la durée de vie du jeton ;
+  au-delà, le lien renvoie 410 comme s'il était expiré.
+- **Révocable** à tout moment (bouton « Révoquer le lien » ci-dessus),
+  sans possibilité de réactivation.
+- Le message 410 du lien assureur (« Lien expiré ou révoqué. ») est
+  volontairement distinct de celui du lien CR `/r/:token` (« Lien expiré ou
+  déjà utilisé. ») pour ne pas laisser croire qu'un seul téléchargement
+  suffit à l'invalider.

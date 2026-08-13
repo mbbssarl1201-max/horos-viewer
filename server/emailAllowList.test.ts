@@ -58,4 +58,61 @@ describe("isAllowedPhiRecipientStrict (chemin faible confiance : voix Eva)", () 
       isAllowedPhiRecipientStrict("pas-une-adresse", ["hopital.ch"], true)
     ).toBe(false);
   });
+
+  // Audit C1 : `extraction.adresseReponse` (agent assureur) est du texte
+  // libre attaquant-influençable, transmis à `nodemailer` `to` qui accepte
+  // une liste séparée par virgules. Sans cette garde de forme, une chaîne
+  // comme "attacker@evil.com, dossier@suva.ch" passerait le contrôle de
+  // domaine (basé sur le DERNIER "@") ET partirait vers les deux adresses.
+  it("liste séparée par virgule (smuggling) → refuse, même si le dernier segment est whitelisté", () => {
+    expect(
+      isAllowedPhiRecipientStrict(
+        "attacker@evil.com, dossier@suva.ch",
+        ["suva.ch"],
+        true
+      )
+    ).toBe(false);
+  });
+
+  it("liste séparée par point-virgule → refuse", () => {
+    expect(
+      isAllowedPhiRecipientStrict(
+        "attacker@evil.com; dossier@suva.ch",
+        ["suva.ch"],
+        true
+      )
+    ).toBe(false);
+  });
+
+  it("liste séparée par espace → refuse", () => {
+    expect(
+      isAllowedPhiRecipientStrict(
+        "attacker@evil.com dossier@suva.ch",
+        ["suva.ch"],
+        true
+      )
+    ).toBe(false);
+  });
+
+  it('forme d\'affichage avec chevrons ("Nom <a@b.ch>") → refuse', () => {
+    expect(
+      isAllowedPhiRecipientStrict(
+        "Dossier SUVA <dossier@suva.ch>",
+        ["suva.ch"],
+        true
+      )
+    ).toBe(false);
+  });
+
+  it("double @ → refuse", () => {
+    expect(
+      isAllowedPhiRecipientStrict("a@evil.com@suva.ch", ["suva.ch"], true)
+    ).toBe(false);
+  });
+
+  it("adresse unique valide, domaine whitelisté → autorise toujours (pas de régression)", () => {
+    expect(
+      isAllowedPhiRecipientStrict("dossier@suva.ch", ["suva.ch"], true)
+    ).toBe(true);
+  });
 });

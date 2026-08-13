@@ -161,6 +161,27 @@ export const ENV = {
   googleCalendarId: process.env.GOOGLE_CALENDAR_ID ?? "primary",
   // Clé API NCBI optionnelle (lève la limite 3→10 req/s pour PubMed).
   ncbiApiKey: process.env.NCBI_API_KEY ?? "",
+  // --- Agent assureur (SUVA) ---
+  // Boîte IMAP dédiée. Si INSURER_IMAP_HOST est absent, le poller est un no-op
+  // (même pattern que gpuControl : la feature n'existe pas sans sa config).
+  insurerImapHost: process.env.INSURER_IMAP_HOST ?? "",
+  insurerImapPort: Number(process.env.INSURER_IMAP_PORT ?? "993"),
+  insurerImapUser: process.env.INSURER_IMAP_USER ?? "",
+  insurerImapPass: process.env.INSURER_IMAP_PASS ?? "",
+  insurerImapMailbox: process.env.INSURER_IMAP_MAILBOX ?? "INBOX",
+  // Expéditeurs de confiance (adresses complètes) : seuls leurs mails peuvent
+  // déclencher un envoi AUTOMATIQUE. Tout autre expéditeur ⇒ validation.
+  insurerTrustedSenders: (process.env.INSURER_TRUSTED_SENDERS ?? "")
+    .split(",")
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean),
+  // Domaines destinataires autorisés pour l'envoi AUTO (ex. suva.ch).
+  insurerAutoSendDomains: (process.env.INSURER_AUTO_SEND_DOMAINS ?? "")
+    .split(",")
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean),
+  // Adresse notifiée quand une demande passe en validation (vide = pas de notification).
+  insurerNotifyEmail: process.env.INSURER_NOTIFY_EMAIL ?? "",
 };
 
 // Garde fail-safe : signaler quand SMTP_INSECURE est posé en production mais

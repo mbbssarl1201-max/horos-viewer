@@ -70,6 +70,7 @@ import {
   ChevronsUpDown,
   ClipboardList,
   LayoutDashboard,
+  Inbox,
 } from "lucide-react";
 import {
   useState,
@@ -321,6 +322,12 @@ export default function Home() {
   // Clinical roles (admin/radiologist) may change RIS workflow state.
   const canEditWorkflow =
     user?.role === "admin" || user?.role === "radiologist";
+  // Rôles cliniques (server/rbac.ts MEDICAL_ROLES) : seuls eux accèdent aux
+  // demandes assureurs (insurer.* = medicalProcedure, PHI).
+  const canViewInsurerRequests =
+    user?.role === "admin" ||
+    user?.role === "radiologist" ||
+    user?.role === "technician";
 
   const { data: modalitiesList } = trpc.orthanc.modalities.useQuery(undefined, {
     enabled: isAuthenticated && showSendDialog,
@@ -598,6 +605,12 @@ export default function Home() {
             label="Cockpit"
             onClick={() => setCockpitOpen(o => !o)}
           />
+          {canViewInsurerRequests && (
+            <MenuBarItem
+              label="Demandes assureurs"
+              onClick={() => navigate("/demandes-assureurs")}
+            />
+          )}
           {/* Plugins Menu */}
           <MenuDropdown
             label="Plugins"
@@ -652,6 +665,13 @@ export default function Home() {
           label="Cockpit"
           onClick={() => setCockpitOpen(o => !o)}
         />
+        {canViewInsurerRequests && (
+          <ToolbarButton
+            icon={Inbox}
+            label="Assureurs"
+            onClick={() => navigate("/demandes-assureurs")}
+          />
+        )}
         <ToolbarSep />
         <ToolbarButton
           icon={Cloud}

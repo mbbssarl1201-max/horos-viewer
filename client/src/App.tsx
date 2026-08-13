@@ -18,6 +18,7 @@ const Viewer = lazy(() => import("./pages/Viewer"));
 const CockpitMediView = lazy(() => import("@/pages/CockpitMediView"));
 const KnowledgePage = lazy(() => import("@/pages/KnowledgePage"));
 const KnowledgeSearchPage = lazy(() => import("@/pages/KnowledgeSearchPage"));
+const InsurerRequests = lazy(() => import("@/pages/InsurerRequests"));
 
 // Fallback discret pendant le chargement d'un chunk de route (thème sombre).
 export function RouteLoader() {
@@ -39,6 +40,7 @@ function Router() {
         <Route path={"/admin/knowledge"} component={KnowledgePage} />
         <Route path={"/knowledge"} component={KnowledgeSearchPage} />
         <Route path={"/cockpit"}>{() => <CockpitMediView />}</Route>
+        <Route path={"/demandes-assureurs"} component={InsurerRequests} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>

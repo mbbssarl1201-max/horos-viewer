@@ -312,7 +312,131 @@ describe("traiterBoite — pièces jointes", () => {
     const row = fauxRequests[0];
     expect(row.attachmentKeys).toEqual(["insurer/1/doc-0.pdf"]);
     expect(row.corpsTexte).toContain(texteLong);
-    expect(row.corpsTexte).not.toContain("PDF_NON_LISIBLE");
+    expect(row.corpsTexte).not.toMatch(/\[\[MOTIF:/);
+  });
+});
+
+describe("traiterBoite — échecs transitoires / dead-letter", () => {
+  it("échec transitoire (1re tentative) ⇒ message NON marqué lu, aucune ligne créée", async () => {
+    mocks.fetch.mockImplementation(() =>
+      asyncIterable([{ uid: 30, source: Buffer.from("m") }])
+    );
+    mocks.simpleParser.mockRejectedValue(new Error("parse cassé"));
+
+    const count = await traiterBoite();
+
+    expect(count).toBe(0);
+    expect(fauxRequests.length).toBe(0);
+    expect(mocks.messageFlagsAdd).not.toHaveBeenCalled();
+  });
+
+  it("échec persistant (3 passes) ⇒ marqué lu + ligne dead-letter statut erreur, jamais avant", async () => {
+    mocks.fetch.mockImplementation(() =>
+      asyncIterable([{ uid: 31, source: Buffer.from("m") }])
+    );
+    mocks.simpleParser.mockRejectedValue(new Error("DB indisponible"));
+
+    await traiterBoite(); // tentative 1 : toujours en échec
+    expect(mocks.messageFlagsAdd).not.toHaveBeenCalled();
+    expect(fauxRequests.length).toBe(0);
+
+    await traiterBoite(); // tentative 2 : toujours en échec
+    expect(mocks.messageFlagsAdd).not.toHaveBeenCalled();
+    expect(fauxRequests.length).toBe(0);
+
+    const count = await traiterBoite(); // tentative 3 : abandon (dead-letter)
+
+    expect(count).toBe(1);
+    expect(mocks.messageFlagsAdd).toHaveBeenCalledTimes(1);
+    expect(mocks.messageFlagsAdd).toHaveBeenCalledWith(31, ["\\Seen"]);
+    expect(fauxRequests.length).toBe(1);
+    const row = fauxRequests[0];
+    expect(row.statut).toBe("erreur");
+    expect(row.messageId).toMatch(/^sans-traitement:uid-31:/);
+    expect(row.erreur).toContain("Abandonné après 3 tentatives");
+    expect(row.erreur).toContain("DB indisponible");
+  });
+});
+
+describe("traiterBoite — bornes de taille des pièces jointes", () => {
+  it("PJ >25 Mo ⇒ ignorée + motif, auto JAMAIS vrai même si decideEnvoiAuto dit oui", async () => {
+    mocks.fetch.mockReturnValue(
+      asyncIterable([{ uid: 40, source: Buffer.from("m") }])
+    );
+    const grosBuffer = Buffer.alloc(26 * 1024 * 1024);
+    mocks.simpleParser.mockResolvedValueOnce(
+      fauxParsedMail({
+        messageId: "<gros-pj@suva.ch>",
+        attachments: [
+          {
+            contentType: "image/jpeg",
+            filename: "gros-scan.jpg",
+            content: grosBuffer,
+          },
+        ],
+      })
+    );
+
+    await traiterBoite();
+    const row = fauxRequests[0];
+    expect(row.attachmentKeys).toEqual([]);
+    expect(mocks.storagePut).not.toHaveBeenCalled();
+    expect(row.corpsTexte).toContain("trop volumineuse");
+    expect(row.corpsTexte).toContain("gros-scan.jpg");
+
+    mocks.extraireDemande.mockResolvedValue(EXTRACTION_NOMINALE);
+    mocks.matchPatient.mockResolvedValue({
+      statut: "exact",
+      patientId: 5,
+      candidats: 1,
+    });
+    mocks.matchStudies.mockResolvedValue({
+      tousTrouves: true,
+      datesExactes: true,
+      parExamen: [
+        {
+          exam: EXTRACTION_NOMINALE.exams[0],
+          studyIds: [10],
+          dateExacte: true,
+        },
+      ],
+    });
+    // Piège volontaire, comme pour le PDF scanné : decideEnvoiAuto répond
+    // "auto" alors que la PJ trop volumineuse doit quand même bloquer l'envoi.
+    mocks.decideEnvoiAuto.mockReturnValue({ auto: true, motifs: [] });
+
+    await traiterDemande(row.id);
+
+    expect(mocks.envoyerReponse).not.toHaveBeenCalled();
+    expect(row.statut).toBe("a_valider");
+    expect(row.motifValidation).toContain("trop volumineuse");
+    expect(row.motifValidation).toContain("gros-scan.jpg");
+  });
+
+  it("image de type non mappé (heic) ⇒ archivée pour dossier + motif de validation", async () => {
+    mocks.fetch.mockReturnValue(
+      asyncIterable([{ uid: 41, source: Buffer.from("m") }])
+    );
+    mocks.simpleParser.mockResolvedValueOnce(
+      fauxParsedMail({
+        messageId: "<heic@suva.ch>",
+        attachments: [
+          {
+            contentType: "image/heic",
+            filename: "photo.heic",
+            content: Buffer.from("fake-heic-bytes"),
+          },
+        ],
+      })
+    );
+
+    await traiterBoite();
+
+    const row = fauxRequests[0];
+    expect(row.attachmentKeys).toEqual(["insurer/1/piece-0"]);
+    expect(row.corpsTexte).toContain(
+      "non exploitable automatiquement (image/heic)"
+    );
   });
 });
 
@@ -431,7 +555,7 @@ describe("traiterDemande", () => {
 
     await traiterBoite();
     const row = fauxRequests[0];
-    expect(row.corpsTexte).toMatch(/PDF_NON_LISIBLE/);
+    expect(row.corpsTexte).toContain(MOTIF_PDF_SCANNE);
 
     mocks.extraireDemande.mockResolvedValue(EXTRACTION_NOMINALE);
     mocks.matchPatient.mockResolvedValue({
@@ -463,7 +587,7 @@ describe("traiterDemande", () => {
 
     // Le marqueur interne ne doit jamais être transmis à l'extraction LLM.
     const argExtraction = mocks.extraireDemande.mock.calls[0][0];
-    expect(argExtraction.texte).not.toMatch(/PDF_NON_LISIBLE/);
+    expect(argExtraction.texte).not.toMatch(/\[\[MOTIF:/);
   });
 });
 

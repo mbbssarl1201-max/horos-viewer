@@ -3177,7 +3177,26 @@ export const appRouter = router({
           .from(insurerRequests)
           .where(eq(insurerRequests.id, input.id))
           .limit(1);
-        if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND" });
+        const request = rows[0];
+        if (!request) throw new TRPCError({ code: "NOT_FOUND" });
+        // Garde symétrique à `approve` : une demande déjà "envoyee" (PHI
+        // parti) ou déjà "rejetee" (idempotence) ne peut plus être rejetée —
+        // sinon la ligne mentirait sur le fait qu'un envoi a eu lieu (audit
+        // de divulgation PHI faussé). Cf. revue Task 8.
+        const STATUTS_REJETABLES = [
+          "recue",
+          "extraite",
+          "identifiee",
+          "a_valider",
+          "prete",
+          "erreur",
+        ];
+        if (!STATUTS_REJETABLES.includes(request.statut)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Statut '${request.statut}' non rejetable (déjà envoyée ou déjà rejetée).`,
+          });
+        }
         await db
           .update(insurerRequests)
           .set({ statut: "rejetee", motifValidation: `REJET: ${input.motif}` })

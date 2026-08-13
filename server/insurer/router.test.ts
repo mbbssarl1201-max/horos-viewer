@@ -228,6 +228,31 @@ describe("insurer.reject", () => {
       caller.insurer.reject({ id: 999, motif: "x" })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+
+  it("refuse (BAD_REQUEST) sur statut 'envoyee' — le PHI est déjà parti", async () => {
+    fauxRequests[0].statut = "envoyee";
+    const caller = appRouter.createCaller(medicalCtx());
+    await expect(
+      caller.insurer.reject({ id: 1, motif: "x" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(fauxRequests[0].statut).toBe("envoyee");
+  });
+
+  it("refuse (BAD_REQUEST) sur statut 'rejetee' — déjà rejetée (idempotence)", async () => {
+    fauxRequests[0].statut = "rejetee";
+    const caller = appRouter.createCaller(medicalCtx());
+    await expect(
+      caller.insurer.reject({ id: 1, motif: "x" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("nominal (statut a_valider) : toujours accepté", async () => {
+    fauxRequests[0].statut = "a_valider";
+    const caller = appRouter.createCaller(medicalCtx());
+    const res = await caller.insurer.reject({ id: 1, motif: "hors périmètre" });
+    expect(res).toEqual({ ok: true });
+    expect(fauxRequests[0].statut).toBe("rejetee");
+  });
 });
 
 describe("insurer.revokeToken", () => {

@@ -316,7 +316,9 @@ export async function traiterBoite(): Promise<number> {
     client = new ImapFlow({
       host: ENV.insurerImapHost,
       port: ENV.insurerImapPort,
-      secure: true,
+      // TLS pour l'IMAP public (993). Port 143 = Mailu interne sur le réseau
+      // docker du VPS médical (jamais exposé) : en clair, comme mysql-medical.
+      secure: ENV.insurerImapPort === 993,
       auth: { user: ENV.insurerImapUser, pass: ENV.insurerImapPass },
       logger: false,
     });

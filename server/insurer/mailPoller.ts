@@ -1,6 +1,9 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser, type ParsedMail } from "mailparser";
-import pdfParse from "pdf-parse";
+// Import du module interne : l'index.js de pdf-parse@1.1.1 contient un bloc
+// debug (`!module.parent`) qui, une fois bundlé par esbuild, tente de lire son
+// fichier de test au démarrage → crash ENOENT en prod (vécu le 13.08.2026).
+import pdfParse from "pdf-parse/lib/pdf-parse.js";
 import { eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { storagePut, storageGetBuffer } from "../storage";

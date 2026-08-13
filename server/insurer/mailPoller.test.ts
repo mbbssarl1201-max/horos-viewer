@@ -42,7 +42,7 @@ vi.mock("mailparser", () => ({
   simpleParser: (...a: any[]) => mocks.simpleParser(...a),
 }));
 
-vi.mock("pdf-parse", () => ({
+vi.mock("pdf-parse/lib/pdf-parse.js", () => ({
   default: (...a: any[]) => mocks.pdfParse(...a),
 }));
 

@@ -47,17 +47,44 @@ function marqueurMotif(motif: string): string {
   return `[[MOTIF:${motif}]]`;
 }
 
+// `nom`/`mime` viennent de l'en-tête d'une pièce jointe — contenu du mail,
+// donc non fiable (attaquant potentiel) : bornés pour ne pas laisser un
+// libellé de header démesuré gonfler `corpsTexte`/le mail de notification.
+const LONGUEUR_MAX_LIBELLE_PJ = 120;
+
+function tronquer(s: string): string {
+  return s.length > LONGUEUR_MAX_LIBELLE_PJ
+    ? `${s.slice(0, LONGUEUR_MAX_LIBELLE_PJ)}…`
+    : s;
+}
+
 function motifPjVolumineuse(nom: string, octets: number): string {
   const mo = (octets / (1024 * 1024)).toFixed(1);
-  return `Pièce jointe trop volumineuse ignorée (${nom}, ${mo} Mo)`;
+  return `Pièce jointe trop volumineuse ignorée (${tronquer(nom)}, ${mo} Mo)`;
 }
 
 function motifLimiteTotale(nom: string): string {
-  return `Pièce jointe ignorée, limite cumulée des pièces jointes atteinte (${nom})`;
+  return `Pièce jointe ignorée, limite cumulée des pièces jointes atteinte (${tronquer(nom)})`;
 }
 
 function motifImageNonExploitable(mime: string): string {
-  return `Pièce jointe image non exploitable automatiquement (${mime})`;
+  return `Pièce jointe image non exploitable automatiquement (${tronquer(mime)})`;
+}
+
+/**
+ * Échappe une valeur avant interpolation HTML (mail de notification au
+ * gérant) — mêmes règles que `esc()` de `server/email.ts` (copie locale,
+ * pas d'export partagé, cf. la même convention dans `packageAndSend.ts`).
+ * Les motifs peuvent porter du contenu dérivé du mail (nom de fichier de
+ * PJ, type MIME) : jamais interpolés bruts dans le HTML.
+ */
+function esc(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 const EXT_PAR_MIME: Record<string, string> = {
@@ -117,9 +144,7 @@ async function stockerPiecesJointes(
       continue;
     }
     if (totalOctets + content.length > MAX_TOTAL_PJ_OCTETS) {
-      console.warn(
-        `[insurer] PJ ignorée (cumul du message >100 Mo) : ${nom}`
-      );
+      console.warn(`[insurer] PJ ignorée (cumul du message >100 Mo) : ${nom}`);
       ajoutTexte += `\n\n${marqueurMotif(motifLimiteTotale(nom))}`;
       continue;
     }
@@ -205,9 +230,7 @@ async function traiterMessage(
 ): Promise<"creee" | "doublon"> {
   const messageId = parsed.messageId || null;
   if (!messageId) {
-    throw new Error(
-      "Message-ID absent : idempotence non garantissable"
-    );
+    throw new Error("Message-ID absent : idempotence non garantissable");
   }
 
   const existants = await db
@@ -532,7 +555,7 @@ export async function traiterDemande(requestId: number): Promise<void> {
           to: ENV.insurerNotifyEmail,
           subject: "[MediView] Demande assureur à valider",
           html: `<p>Une demande d'imagerie assureur nécessite une validation manuelle (demande #${requestId}).</p><ul>${motifs
-            .map(m => `<li>${m}</li>`)
+            .map(m => `<li>${esc(m)}</li>`)
             .join("")}</ul>`,
         });
       } catch (err) {

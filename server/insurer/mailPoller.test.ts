@@ -413,6 +413,48 @@ describe("traiterBoite — bornes de taille des pièces jointes", () => {
     expect(row.motifValidation).toContain("gros-scan.jpg");
   });
 
+  it("nom de PJ malveillant (<script>) + oversize ⇒ notification HTML échappée, jamais de balise brute", async () => {
+    mocks.fetch.mockReturnValue(
+      asyncIterable([{ uid: 42, source: Buffer.from("m") }])
+    );
+    const grosBuffer = Buffer.alloc(26 * 1024 * 1024);
+    const nomMalveillant = "<script>alert(1)</script>.jpg";
+    mocks.simpleParser.mockResolvedValueOnce(
+      fauxParsedMail({
+        messageId: "<xss-pj@suva.ch>",
+        attachments: [
+          {
+            contentType: "image/jpeg",
+            filename: nomMalveillant,
+            content: grosBuffer,
+          },
+        ],
+      })
+    );
+
+    await traiterBoite();
+    const row = fauxRequests[0];
+
+    mocks.extraireDemande.mockResolvedValue(EXTRACTION_NOMINALE);
+    mocks.matchPatient.mockResolvedValue({
+      statut: "ambigu",
+      patientId: null,
+      candidats: 2,
+    });
+    mocks.decideEnvoiAuto.mockReturnValue({
+      auto: false,
+      motifs: ["Identification du patient ambiguë"],
+    });
+
+    await traiterDemande(row.id);
+
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
+    const html = mocks.sendEmail.mock.calls[0][0].html as string;
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("</script>");
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+  });
+
   it("image de type non mappé (heic) ⇒ archivée pour dossier + motif de validation", async () => {
     mocks.fetch.mockReturnValue(
       asyncIterable([{ uid: 41, source: Buffer.from("m") }])

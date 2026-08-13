@@ -167,7 +167,13 @@ export async function matchStudies(
       : etudes;
 
     const dateVoulue = normaliserDate(exam.dateDemandee);
-    if (!dateVoulue) return { exam, studyIds: [], dateExacte: false };
+    if (!dateVoulue) {
+      // Date absente/illisible : on ne bloque pas la validation humaine — on
+      // renvoie les études de la modalité demandée (ou toutes si modalité
+      // absente aussi) avec dateExacte:false, ce qui empêche tout envoi
+      // automatique en aval (datesExactes global reste false).
+      return { exam, studyIds: parModalite.map(e => e.id), dateExacte: false };
+    }
 
     const exactes = parModalite.filter(e => e.studyDate === dateVoulue);
     if (exactes.length) {

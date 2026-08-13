@@ -6,6 +6,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // et `decryptField` est mocké identité (le chiffrement réel est testé dans
 // server/_core/crypto.test.ts). `nameSearchKey` reste la VRAIE implémentation
 // (fail-open sans ENCRYPTION_KEY en test) : `cle()` ci-dessous en est le miroir.
+//
+// `inArray`/`eq` de drizzle-orm sont mockés pour CAPTURER les valeurs passées
+// par l'implémentation (clés nameSearch, patientId) : le faux `where().limit()`
+// filtre ensuite RÉELLEMENT `fauxPatients`/`fauxStudies` sur ces valeurs — pas
+// un mock qui ignore la condition et renvoie tout. Ça garantit que si
+// l'implémentation oublie une des deux clés d'ordre nom/prénom, ou requête la
+// mauvaise colonne, un test le détecte.
 
 let fauxPatients: {
   id: number;
@@ -18,6 +25,9 @@ let fauxStudies: {
   studyDate: string | null;
   modality: string | null;
 }[] = [];
+
+let dernierInArray: { values: unknown[] } | null = null;
+let dernierEq: { value: unknown } | null = null;
 
 vi.mock("../db", async orig => {
   const actual = await orig<any>();
@@ -32,13 +42,38 @@ vi.mock("../_core/crypto", async orig => {
   return { ...actual, decryptField: (v: string | null) => v };
 });
 
+vi.mock("drizzle-orm", async orig => {
+  const actual = await orig<any>();
+  return {
+    ...actual,
+    inArray: (_column: any, values: unknown[]) => {
+      dernierInArray = { values };
+      return { __mock: "inArray" };
+    },
+    eq: (_column: any, value: unknown) => {
+      dernierEq = { value };
+      return { __mock: "eq" };
+    },
+  };
+});
+
 function fakeDb() {
   return {
     select: () => ({
       from: (table: any) => ({
         where: (_c: any) => ({
-          limit: (_n: any) =>
-            Promise.resolve(table === patients ? fauxPatients : fauxStudies),
+          limit: (_n: any) => {
+            if (table === patients) {
+              const cles = dernierInArray?.values ?? [];
+              return Promise.resolve(
+                fauxPatients.filter(p => cles.includes(p.nameSearch))
+              );
+            }
+            const pid = dernierEq?.value;
+            return Promise.resolve(
+              fauxStudies.filter(s => s.patientId === pid)
+            );
+          },
         }),
       }),
     }),
@@ -58,6 +93,8 @@ function cle(s: string): string {
 beforeEach(() => {
   fauxPatients = [];
   fauxStudies = [];
+  dernierInArray = null;
+  dernierEq = null;
 });
 
 describe("normaliserDate", () => {
@@ -95,9 +132,14 @@ describe("matchPatient", () => {
     expect(r).toMatchObject({ statut: "exact", patientId: 1 });
   });
 
-  it("ordre prénom nom (DICOM inversé) reconnu aussi", async () => {
+  it("ordre prénom nom (DICOM inversé) reconnu aussi — la ligne ne matche QUE la clé inversée", async () => {
+    // Preuve que les DEUX ordres sont interrogés : le faux drizzle filtre
+    // réellement sur les valeurs passées à `inArray` (cf. mock drizzle-orm en
+    // tête de fichier). Un patient "un peu partout" (nom seul) sert de bruit
+    // et ne doit jamais remonter.
     fauxPatients = [
       { id: 3, nameSearch: cle("marie dupont"), birthDate: "19850312" },
+      { id: 99, nameSearch: cle("dupont"), birthDate: "19850312" },
     ];
     const r = await matchPatient({
       nom: "Dupont",
@@ -105,7 +147,7 @@ describe("matchPatient", () => {
       ddn: "12.03.1985",
       tel: null,
     });
-    expect(r).toMatchObject({ statut: "exact", patientId: 3 });
+    expect(r).toMatchObject({ statut: "exact", patientId: 3, candidats: 1 });
   });
 
   it("homonymes départagés par la DDN", async () => {
@@ -149,7 +191,7 @@ describe("matchPatient", () => {
     expect(r.statut).toBe("ambigu");
   });
 
-  it("DDN fournie mais ne concordant avec aucun homonyme ⇒ pas exact", async () => {
+  it("DDN fournie mais ne concordant avec aucun homonyme ⇒ aucun (jamais exact)", async () => {
     fauxPatients = [
       { id: 1, nameSearch: cle("dupont marie"), birthDate: "19850312" },
     ];
@@ -159,14 +201,13 @@ describe("matchPatient", () => {
       ddn: "01.01.2000",
       tel: null,
     });
-    expect(r.statut).not.toBe("exact");
-    expect(r.patientId).toBeNull();
+    expect(r).toEqual({ statut: "aucun", patientId: null, candidats: 1 });
   });
 
-  it("aucune correspondance de nom ⇒ aucun", async () => {
-    // Le faux drizzle modélise la RÉPONSE de la requête `where(inArray(...))`,
-    // pas le contenu brut de la table : un homonyme absent ⇒ 0 ligne renvoyée.
-    fauxPatients = [];
+  it("aucune correspondance de nom ⇒ aucun (le faux drizzle filtre réellement, ne renvoie pas l'homonyme non demandé)", async () => {
+    fauxPatients = [
+      { id: 1, nameSearch: cle("martin paul"), birthDate: "19700101" },
+    ];
     const r = await matchPatient({
       nom: "Dupont",
       prenom: "Marie",
@@ -244,5 +285,23 @@ describe("matchStudies", () => {
     ];
     const r = await matchStudies(1, [exam({ modalite: null })]);
     expect(r.parExamen[0]).toMatchObject({ studyIds: [14], dateExacte: true });
+  });
+
+  it("fenêtre ±7 jours traverse un changement de mois (28.06 vs demandée 02.07)", async () => {
+    fauxStudies = [
+      { id: 22, patientId: 1, studyDate: "20260628", modality: "CT" }, // 4j avant le 02.07
+    ];
+    const r = await matchStudies(1, [exam({ dateDemandee: "02.07.2026" })]);
+    expect(r.parExamen[0]).toMatchObject({ studyIds: [22], dateExacte: false });
+  });
+
+  it("date demandée absente/invalide ⇒ candidats de la modalité renvoyés (dateExacte:false), pas une liste vide", async () => {
+    fauxStudies = [
+      { id: 20, patientId: 1, studyDate: "20260101", modality: "CT" },
+      { id: 21, patientId: 1, studyDate: "20260601", modality: "MR" },
+    ];
+    const r = await matchStudies(1, [exam({ dateDemandee: null })]);
+    expect(r.parExamen[0]).toMatchObject({ studyIds: [20], dateExacte: false });
+    expect(r.datesExactes).toBe(false);
   });
 });

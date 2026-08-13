@@ -29,6 +29,11 @@ let fauxRequests: {
 
 let dernierEq: { value: unknown } | null = null;
 
+// Simule une base indisponible pour les `update` (transition post-envoi, ou
+// écriture du motif d'erreur) — exercé par le test "db.update lève après
+// l'envoi" ci-dessous.
+let updateDoitEchouer = false;
+
 function fakeDb() {
   return {
     select: () => ({
@@ -44,6 +49,11 @@ function fakeDb() {
     update: (_table: any) => ({
       set: (v: any) => ({
         where: (_c: any) => {
+          if (updateDoitEchouer) {
+            return Promise.reject(
+              new Error("DB update indisponible (simulation)")
+            );
+          }
           const id = dernierEq?.value;
           const row = fauxRequests.find(r => r.id === id);
           if (row) Object.assign(row, v);
@@ -200,6 +210,7 @@ describe("envoyerReponse", () => {
   beforeEach(() => {
     fauxRequests = [fauxRequest()];
     dernierEq = null;
+    updateDoitEchouer = false;
     Object.values(mocks).forEach(m => m.mockReset());
     mocks.construireColis.mockResolvedValue({
       bundleKey: "insurer/1/bundle.zip",
@@ -223,7 +234,7 @@ describe("envoyerReponse", () => {
     mocks.recordAccess.mockResolvedValue(undefined);
   });
 
-  it("compose le mail avec le lien contenant le jeton en clair", async () => {
+  it("compose le mail avec le lien contenant le jeton en clair + récap examens", async () => {
     const r = await envoyerReponse(1, {});
     expect(r).toEqual({ success: true });
     expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
@@ -231,6 +242,9 @@ describe("envoyerReponse", () => {
     expect(opts.to).toBe("reponse@suva.ch");
     expect(opts.html).toContain("/dl/jeton-clair-abc123");
     expect(opts.html).toMatch(/14 jours/);
+    // Récap des examens (fixture extraction.exams[0].description) présent
+    // dans le corps du mail.
+    expect(opts.html).toContain("Scanner cheville");
   });
 
   it("garde egress : destinataire hors allow-list ⇒ pas d'envoi, statut erreur + motif", async () => {
@@ -273,5 +287,26 @@ describe("envoyerReponse", () => {
     expect(r).toEqual({ success: false, error: "SMTP indisponible" });
     expect(fauxRequests[0].statut).toBe("erreur");
     expect(fauxRequests[0].erreur).toBe("SMTP indisponible");
+  });
+
+  it("construireColis lève AVANT l'envoi ⇒ statut erreur + motif, aucun mail envoyé", async () => {
+    mocks.construireColis.mockRejectedValue(new Error("MinIO indisponible"));
+    const r = await envoyerReponse(1, {});
+    expect(r).toEqual({ success: false, error: "MinIO indisponible" });
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
+    expect(fauxRequests[0].statut).toBe("erreur");
+    expect(fauxRequests[0].erreur).toBe("MinIO indisponible");
+  });
+
+  it("db.update lève APRÈS un envoi réussi (même après retry) ⇒ résout {success:true}, pas de second sendEmail", async () => {
+    updateDoitEchouer = true;
+    const r = await envoyerReponse(1, {});
+    // Invariant : le mail est déjà parti, la fonction ne doit jamais
+    // signaler d'échec au-delà de ce point (cf. revue Task 6).
+    expect(r).toEqual({ success: true });
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
+    // Le update ayant systématiquement rejeté, la ligne fauxRequests n'a pas
+    // été mutée (best-effort épuisé) — pas de statut "envoyee" erroné ici.
+    expect(fauxRequests[0].statut).toBe("prete");
   });
 });

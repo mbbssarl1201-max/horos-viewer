@@ -103,7 +103,9 @@ function recapExamensHtml(exams: ExtractionDemande["exams"]): string {
  * Construit un CR PDF par étude (métadonnées, cf. `buildStudyExportPdf`) pour
  * une éventuelle pièce jointe directe — en plus du colis ZIP qui contient déjà
  * les mêmes CR (cf. `construireColis`). Best-effort : une étude/CR
- * indisponible est ignorée sans bloquer l'envoi.
+ * indisponible est ignorée sans bloquer l'envoi — si TOUTES les études
+ * échouent, le mail part quand même sans CR en pièce jointe (le colis ZIP,
+ * lui, peut aussi être partiel : cas dégradé accepté, cf. revue Task 6).
  */
 async function buildCrAttachments(
   studyIds: number[]
@@ -126,6 +128,10 @@ async function buildCrAttachments(
   return out;
 }
 
+function messageErreur(err: unknown, defaut: string): string {
+  return err instanceof Error && err.message ? err.message : defaut;
+}
+
 /**
  * Envoie la réponse (colis DICOM+CR) d'une demande assureur : construit le
  * colis et son jeton de téléchargement (Task 5), compose le mail FR (récap
@@ -142,18 +148,6 @@ export async function envoyerReponse(
   const db = await getDb();
   if (!db) return { success: false, error: "Base de données indisponible" };
 
-  const rows = await db
-    .select()
-    .from(insurerRequests)
-    .where(eq(insurerRequests.id, requestId))
-    .limit(1);
-  const row = rows[0];
-  if (!row) return { success: false, error: "Demande introuvable" };
-
-  const studyIds = row.studyIds ?? [];
-  const extraction = (row.extraction as ExtractionDemande | null) ?? null;
-  const adresseReponse = row.adresseReponse;
-
   const echouer = async (motif: string) => {
     try {
       await db
@@ -166,46 +160,74 @@ export async function envoyerReponse(
     return { success: false as const, error: motif };
   };
 
-  if (!adresseReponse) {
-    return echouer("Adresse de réponse absente de la demande");
-  }
-  if (!studyIds.length) {
-    return echouer("Aucune étude à transmettre");
-  }
+  // INVARIANT (revue Task 6) : cette fonction doit TOUJOURS se résoudre en
+  // {success, error?}, jamais rejeter — et surtout, une fois `sendEmail`
+  // résolu avec succès, le PHI est PARTI : elle ne doit plus JAMAIS renvoyer
+  // {success:false} au-delà de ce point, sous peine qu'un appelant retente
+  // l'envoi et duplique l'expédition du colis assureur. Tout le corps est
+  // donc encadré d'un try/catch ; `mailEnvoye` distingue les deux régimes
+  // d'erreur ci-dessous.
+  let mailEnvoye = false;
 
-  // Garde egress PHI (audit I-email) : fail-closed en production si aucun
-  // domaine n'est whitelisté, quel que soit le destinataire.
-  if (
-    !isAllowedPhiRecipientStrict(
-      adresseReponse,
-      ENV.reportEmailAllowedDomains,
-      ENV.isProduction
-    )
-  ) {
-    return echouer(
-      ENV.isProduction && ENV.reportEmailAllowedDomains.length === 0
-        ? "Envoi PHI désactivé : REPORT_EMAIL_ALLOWED_DOMAINS non configuré."
-        : "Destinataire non autorisé (domaine non whitelisté)."
+  try {
+    const rows = await db
+      .select()
+      .from(insurerRequests)
+      .where(eq(insurerRequests.id, requestId))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return { success: false, error: "Demande introuvable" };
+
+    const studyIds = row.studyIds ?? [];
+    const extraction = (row.extraction as ExtractionDemande | null) ?? null;
+    const adresseReponse = row.adresseReponse;
+
+    if (!adresseReponse) {
+      return await echouer("Adresse de réponse absente de la demande");
+    }
+    if (!studyIds.length) {
+      return await echouer("Aucune étude à transmettre");
+    }
+
+    // Garde egress PHI (audit I-email) : fail-closed en production si aucun
+    // domaine n'est whitelisté, quel que soit le destinataire.
+    if (
+      !isAllowedPhiRecipientStrict(
+        adresseReponse,
+        ENV.reportEmailAllowedDomains,
+        ENV.isProduction
+      )
+    ) {
+      return await echouer(
+        ENV.isProduction && ENV.reportEmailAllowedDomains.length === 0
+          ? "Envoi PHI désactivé : REPORT_EMAIL_ALLOWED_DOMAINS non configuré."
+          : "Destinataire non autorisé (domaine non whitelisté)."
+      );
+    }
+
+    const { bundleKey, tailleOctets } = await construireColis(
+      requestId,
+      studyIds
     );
-  }
+    const { tokenClair } = await creerJeton(requestId, bundleKey);
 
-  const { bundleKey, tailleOctets } = await construireColis(
-    requestId,
-    studyIds
-  );
-  const { tokenClair } = await creerJeton(requestId, bundleKey);
+    const base = process.env.APP_BASE_URL ?? "https://mediview.ch";
+    const lien = `${base}/dl/${tokenClair}`;
 
-  const base = process.env.APP_BASE_URL ?? "https://mediview.ch";
-  const lien = `${base}/dl/${tokenClair}`;
+    const crAttachments = await buildCrAttachments(studyIds);
+    const totalCrOctets = crAttachments.reduce(
+      (s, a) => s + a.content.length,
+      0
+    );
+    const inclureCrEnPJ = crAttachments.length > 0 && totalCrOctets < QUINZE_MO;
 
-  const crAttachments = await buildCrAttachments(studyIds);
-  const totalCrOctets = crAttachments.reduce((s, a) => s + a.content.length, 0);
-  const inclureCrEnPJ = crAttachments.length > 0 && totalCrOctets < QUINZE_MO;
+    const exams = extraction?.exams ?? [];
+    const refSinistre = extraction?.refSinistre ?? null;
 
-  const exams = extraction?.exams ?? [];
-  const refSinistre = extraction?.refSinistre ?? null;
-
-  const html = `
+    // NB (revue Task 6, confirmé) : le nom/DDN du patient est volontairement
+    // OMIS du mail — minimisation PHI. La réf. sinistre + le récap d'examens
+    // suffisent à l'assureur pour identifier le dossier de son côté.
+    const html = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
       <div style="background: #1a1a2e; color: #e0e0e0; padding: 20px; border-radius: 8px;">
         <h2 style="color: #4fc3f7; margin-top: 0;">Réponse à votre demande d'imagerie</h2>
@@ -228,32 +250,73 @@ export async function envoyerReponse(
     </div>
   `;
 
-  const result = await sendEmail({
-    to: adresseReponse,
-    subject: "[MediView] Réponse à votre demande d'imagerie",
-    html,
-    attachments: inclureCrEnPJ ? crAttachments : undefined,
-  });
+    const result = await sendEmail({
+      to: adresseReponse,
+      subject: "[MediView] Réponse à votre demande d'imagerie",
+      html,
+      attachments: inclureCrEnPJ ? crAttachments : undefined,
+    });
 
-  if (!result.success) {
-    return echouer(result.error || "Échec de l'envoi du courriel");
+    if (!result.success) {
+      return await echouer(result.error || "Échec de l'envoi du courriel");
+    }
+    mailEnvoye = true;
+
+    // À partir d'ici, PLUS AUCUN échec ne doit remonter à l'appelant (cf.
+    // invariant) : transition de statut retentée une fois, puis journal
+    // d'accès en best-effort — leurs erreurs éventuelles sont rattrapées
+    // par le catch ci-dessous (`mailEnvoye === true`) sans jamais renvoyer
+    // {success:false}.
+    const envoyePar = opts.valideParUserId ?? null;
+    const appliquerTransition = () =>
+      db
+        .update(insurerRequests)
+        .set({ statut: "envoyee", envoyeLe: new Date(), envoyePar })
+        .where(eq(insurerRequests.id, requestId));
+    try {
+      await appliquerTransition();
+    } catch (err) {
+      console.error(
+        "[insurer] transition 'envoyee' échouée, nouvelle tentative (PHI déjà envoyé) :",
+        err
+      );
+      await appliquerTransition();
+    }
+
+    // userId 0 = agent système (envoi automatique, sans validateur humain) —
+    // accessLogs.userId est NOT NULL, donc pas de null ici. Cf. Task 6 brief.
+    await recordAccess({
+      userId: opts.valideParUserId ?? 0,
+      action: "insurer_send",
+      studyId: null,
+      detail: `demande assureur #${requestId} (${studyIds.length} étude(s), ${tailleOctets} octets)`,
+      ipAddress: null,
+    });
+
+    return { success: true };
+  } catch (err) {
+    if (mailEnvoye) {
+      // Le mail EST PARTI : on ne signale jamais d'échec ici (cf. invariant).
+      // Dernier best-effort : consigner le motif dans la ligne, puis logger.
+      console.error(
+        "[insurer] erreur après envoi du mail (PHI déjà transmis, pas de re-signalement) :",
+        err
+      );
+      try {
+        await db
+          .update(insurerRequests)
+          .set({ erreur: `Post-envoi : ${messageErreur(err, String(err))}` })
+          .where(eq(insurerRequests.id, requestId));
+      } catch (err2) {
+        console.error(
+          "[insurer] écriture du motif d'erreur post-envoi également en échec :",
+          err2
+        );
+      }
+      return { success: true };
+    }
+    return await echouer(
+      messageErreur(err, "Erreur technique lors de l'envoi")
+    );
   }
-
-  const envoyePar = opts.valideParUserId ?? null;
-  await db
-    .update(insurerRequests)
-    .set({ statut: "envoyee", envoyeLe: new Date(), envoyePar })
-    .where(eq(insurerRequests.id, requestId));
-
-  // userId 0 = agent système (envoi automatique, sans validateur humain) —
-  // accessLogs.userId est NOT NULL, donc pas de null ici. Cf. Task 6 brief.
-  await recordAccess({
-    userId: opts.valideParUserId ?? 0,
-    action: "insurer_send",
-    studyId: null,
-    detail: `demande assureur #${requestId} (${studyIds.length} étude(s), ${tailleOctets} octets)`,
-    ipAddress: null,
-  });
-
-  return { success: true };
 }

@@ -133,6 +133,50 @@ function messageErreur(err: unknown, defaut: string): string {
 }
 
 /**
+ * Compose le mail FR de réponse (sujet + HTML) — fonction PURE, aucun I/O.
+ * Extraite d'`envoyerReponse` pour être réutilisée par l'aperçu du routeur
+ * tRPC (`insurer.detail`, Task 8) SANS jamais construire de colis ni de
+ * jeton : cet appelant-là passe `lien` en placeholder et `inclureCrEnPJ`
+ * à `false` (l'aperçu ne construit pas les pièces jointes CR).
+ */
+export function buildMailReponse(args: {
+  extraction: ExtractionDemande | null;
+  lien: string;
+  inclureCrEnPJ: boolean;
+}): { subject: string; html: string } {
+  const exams = args.extraction?.exams ?? [];
+  const refSinistre = args.extraction?.refSinistre ?? null;
+
+  // NB (revue Task 6, confirmé) : le nom/DDN du patient est volontairement
+  // OMIS du mail — minimisation PHI. La réf. sinistre + le récap d'examens
+  // suffisent à l'assureur pour identifier le dossier de son côté.
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="background: #1a1a2e; color: #e0e0e0; padding: 20px; border-radius: 8px;">
+        <h2 style="color: #4fc3f7; margin-top: 0;">Réponse à votre demande d'imagerie</h2>
+        ${refSinistre ? `<p style="color:#9e9e9e;">Référence sinistre : <span style="color:#fff;">${esc(refSinistre)}</span></p>` : ""}
+        <p style="color:#fff;">Examens transmis :</p>
+        <ul style="color:#fff;">${recapExamensHtml(exams)}</ul>
+        <p style="color:#fff;">
+          Le colis complet (images DICOM${args.inclureCrEnPJ ? "" : " et compte-rendu"})
+          est disponible via le lien sécurisé suivant :
+        </p>
+        <p><a href="${esc(args.lien)}" style="color:#4fc3f7;">${esc(args.lien)}</a></p>
+        <p style="color:#ffcdd2;">Ce lien expire automatiquement 14 jours après son émission.</p>
+        ${
+          args.inclureCrEnPJ
+            ? `<p style="color:#fff;">Le compte-rendu radiologique est joint à ce message.</p>`
+            : `<p style="color:#fff;">Le compte-rendu radiologique est inclus dans le colis téléchargeable ci-dessus (fichier trop volumineux pour être joint directement).</p>`
+        }
+        <p style="margin-top: 20px; font-size: 12px; color: #757575;">Ceci est un message automatisé de MediView.</p>
+      </div>
+    </div>
+  `;
+
+  return { subject: "[MediView] Réponse à votre demande d'imagerie", html };
+}
+
+/**
  * Envoie la réponse (colis DICOM+CR) d'une demande assureur : construit le
  * colis et son jeton de téléchargement (Task 5), compose le mail FR (récap
  * examens, lien de téléchargement, mention d'expiration), passe la garde
@@ -221,38 +265,15 @@ export async function envoyerReponse(
     );
     const inclureCrEnPJ = crAttachments.length > 0 && totalCrOctets < QUINZE_MO;
 
-    const exams = extraction?.exams ?? [];
-    const refSinistre = extraction?.refSinistre ?? null;
-
-    // NB (revue Task 6, confirmé) : le nom/DDN du patient est volontairement
-    // OMIS du mail — minimisation PHI. La réf. sinistre + le récap d'examens
-    // suffisent à l'assureur pour identifier le dossier de son côté.
-    const html = `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-      <div style="background: #1a1a2e; color: #e0e0e0; padding: 20px; border-radius: 8px;">
-        <h2 style="color: #4fc3f7; margin-top: 0;">Réponse à votre demande d'imagerie</h2>
-        ${refSinistre ? `<p style="color:#9e9e9e;">Référence sinistre : <span style="color:#fff;">${esc(refSinistre)}</span></p>` : ""}
-        <p style="color:#fff;">Examens transmis :</p>
-        <ul style="color:#fff;">${recapExamensHtml(exams)}</ul>
-        <p style="color:#fff;">
-          Le colis complet (images DICOM${inclureCrEnPJ ? "" : " et compte-rendu"})
-          est disponible via le lien sécurisé suivant :
-        </p>
-        <p><a href="${esc(lien)}" style="color:#4fc3f7;">${esc(lien)}</a></p>
-        <p style="color:#ffcdd2;">Ce lien expire automatiquement 14 jours après son émission.</p>
-        ${
-          inclureCrEnPJ
-            ? `<p style="color:#fff;">Le compte-rendu radiologique est joint à ce message.</p>`
-            : `<p style="color:#fff;">Le compte-rendu radiologique est inclus dans le colis téléchargeable ci-dessus (fichier trop volumineux pour être joint directement).</p>`
-        }
-        <p style="margin-top: 20px; font-size: 12px; color: #757575;">Ceci est un message automatisé de MediView.</p>
-      </div>
-    </div>
-  `;
+    const { subject, html } = buildMailReponse({
+      extraction,
+      lien,
+      inclureCrEnPJ,
+    });
 
     const result = await sendEmail({
       to: adresseReponse,
-      subject: "[MediView] Réponse à votre demande d'imagerie",
+      subject,
       html,
       attachments: inclureCrEnPJ ? crAttachments : undefined,
     });

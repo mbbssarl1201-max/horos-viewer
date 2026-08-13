@@ -73,6 +73,8 @@ import {
 } from "./knowledge/store";
 import { syncVault, listVaultMarkdown } from "./knowledge/vaultSync";
 import { selectRelevant } from "./knowledge/retrieve";
+import { envoyerReponse, buildMailReponse } from "./insurer/packageAndSend";
+import type { ExtractionDemande } from "./insurer/types";
 
 // Garde commune aux endpoints `notifications.notify*` : ils sortent du PHI
 // (patientName) vers un destinataire LIBRE. On applique la même allow-list de
@@ -3027,6 +3029,196 @@ export const appRouter = router({
           action: "referent.deleteContact",
           studyId: null,
           detail: `id=${input.id}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { ok: true };
+      }),
+  }),
+
+  // Agent SUVA — file d'attente des demandes d'imagerie assureur reçues par
+  // mail (Task 8). Toutes les procédures sont medicalProcedure (admin ou
+  // médecin uniquement, jamais le rôle "user" par défaut) : la liste et le
+  // détail exposent des PHI (récap d'examens, adresse de réponse).
+  insurer: router({
+    list: medicalProcedure
+      .input(
+        z
+          .object({
+            statut: z
+              .enum([
+                "recue",
+                "extraite",
+                "identifiee",
+                "prete",
+                "a_valider",
+                "envoyee",
+                "rejetee",
+                "erreur",
+              ])
+              .optional(),
+          })
+          .optional()
+      )
+      .query(async ({ input }) => {
+        const { getDb } = await import("./db");
+        const { insurerRequests } = await import("../drizzle/schema");
+        const { eq, desc } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) return { items: [] };
+        const items = input?.statut
+          ? await db
+              .select()
+              .from(insurerRequests)
+              .where(eq(insurerRequests.statut, input.statut))
+              .orderBy(desc(insurerRequests.recuLe))
+              .limit(100)
+          : await db
+              .select()
+              .from(insurerRequests)
+              .orderBy(desc(insurerRequests.recuLe))
+              .limit(100);
+        return { items };
+      }),
+
+    // Ligne complète + jetons (SANS tokenHash, secret de téléchargement) +
+    // aperçu du mail de réponse. L'aperçu réutilise `buildMailReponse` (Task 6)
+    // avec un lien placeholder : AUCUN colis ni jeton n'est créé ici (cf.
+    // Task 8 brief — la lecture ne doit jamais avoir d'effet de bord PHI).
+    detail: medicalProcedure
+      .input(z.object({ id: z.number().int() }))
+      .query(async ({ input }) => {
+        const { getDb } = await import("./db");
+        const { insurerRequests, insurerBundleTokens } = await import(
+          "../drizzle/schema"
+        );
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const rows = await db
+          .select()
+          .from(insurerRequests)
+          .where(eq(insurerRequests.id, input.id))
+          .limit(1);
+        const request = rows[0];
+        if (!request) throw new TRPCError({ code: "NOT_FOUND" });
+        const tokenRows = await db
+          .select()
+          .from(insurerBundleTokens)
+          .where(eq(insurerBundleTokens.requestId, input.id))
+          .limit(500);
+        const tokens = tokenRows.map(t => ({
+          id: t.id,
+          expireLe: t.expireLe,
+          revoqueLe: t.revoqueLe,
+          telechargements: (t.telechargements ?? []).length,
+        }));
+        const mailPreview = buildMailReponse({
+          extraction: (request.extraction as ExtractionDemande | null) ?? null,
+          lien: "<lien généré à l'envoi>",
+          inclureCrEnPJ: false,
+        });
+        return { request, tokens, mailPreview };
+      }),
+
+    // Valide et envoie la réponse (colis DICOM+CR) — délègue à `envoyerReponse`
+    // (Task 6) avec le userId du validateur. Refuse les statuts déjà terminaux
+    // (envoyee/rejetee) ou pas encore extraits (recue/extraite/identifiee) :
+    // seuls a_valider / prete / erreur sont validables.
+    approve: medicalProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input, ctx }) => {
+        const { getDb } = await import("./db");
+        const { insurerRequests } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const rows = await db
+          .select()
+          .from(insurerRequests)
+          .where(eq(insurerRequests.id, input.id))
+          .limit(1);
+        const request = rows[0];
+        if (!request) throw new TRPCError({ code: "NOT_FOUND" });
+        const STATUTS_VALIDABLES = ["a_valider", "prete", "erreur"];
+        if (!STATUTS_VALIDABLES.includes(request.statut)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Statut '${request.statut}' non validable (attendu : ${STATUTS_VALIDABLES.join(", ")}).`,
+          });
+        }
+        const result = await envoyerReponse(input.id, {
+          valideParUserId: ctx.user.id,
+        });
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "insurer.approve",
+          studyId: null,
+          detail: `demande #${input.id} → ${result.success ? "envoyée" : `erreur: ${result.error}`}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return result;
+      }),
+
+    // Rejette la demande (pas d'envoi). Le motif est persisté dans
+    // `motifValidation` (pas de colonne dédiée à ce stade) préfixé "REJET: "
+    // pour le distinguer sans ambiguïté d'un éventuel motif futur.
+    reject: medicalProcedure
+      .input(
+        z.object({ id: z.number().int(), motif: z.string().min(1).max(1000) })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { getDb } = await import("./db");
+        const { insurerRequests } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const rows = await db
+          .select()
+          .from(insurerRequests)
+          .where(eq(insurerRequests.id, input.id))
+          .limit(1);
+        if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND" });
+        await db
+          .update(insurerRequests)
+          .set({ statut: "rejetee", motifValidation: `REJET: ${input.motif}` })
+          .where(eq(insurerRequests.id, input.id));
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "insurer.reject",
+          studyId: null,
+          detail: `demande #${input.id}: ${input.motif}`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { ok: true };
+      }),
+
+    // Révoque TOUS les jetons de téléchargement du colis d'une demande (ex :
+    // fuite suspectée, ou demande rejetée après un envoi antérieur).
+    revokeToken: medicalProcedure
+      .input(z.object({ requestId: z.number().int() }))
+      .mutation(async ({ input, ctx }) => {
+        const { getDb } = await import("./db");
+        const { insurerRequests, insurerBundleTokens } = await import(
+          "../drizzle/schema"
+        );
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const rows = await db
+          .select()
+          .from(insurerRequests)
+          .where(eq(insurerRequests.id, input.requestId))
+          .limit(1);
+        if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND" });
+        await db
+          .update(insurerBundleTokens)
+          .set({ revoqueLe: new Date() })
+          .where(eq(insurerBundleTokens.requestId, input.requestId));
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "insurer.revokeToken",
+          studyId: null,
+          detail: `demande #${input.requestId}`,
           ipAddress: ctx.req?.ip ?? null,
         });
         return { ok: true };

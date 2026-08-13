@@ -9,8 +9,13 @@ migration, déploiement, vérifications post-deploy, test E2E et révocation.
 Un poller IMAP (`server/insurer/mailPoller.ts`, intervalle 2 min, no-op tant
 que `INSURER_IMAP_HOST` est vide) lit la boîte dédiée. Chaque mail est
 enregistré (`insurer_requests`, idempotent par `Message-ID`), puis passe le
-pipeline : extraction (texte + pièces jointes via LLM/vision CH — jamais un
-fournisseur US) → identification patient multi-critère (jamais la DDN seule)
+pipeline : extraction (texte + pièces jointes via le LLM/vision configuré par
+`INFOMANIAK_VISION_URL/KEY/MODEL` — depuis le 13.08.2026, en prod ces variables
+pointent vers le sidecar `gemini-vision` du VPS72, `http://gemini-vision:11437/v1/chat/completions`,
+qui proxifie **Gemini 2.5 Pro sur Vertex AI en régions UE** avec failover
+europe-west4→west1→west9 ; l'API Infomaniak d'origine est morte. Jamais un
+fournisseur US. Renommage des variables en `VISION_API_*` = dette à traiter)
+→ identification patient multi-critère (jamais la DDN seule)
 → recherche des études → colisage (CR PDF + ZIP DICOM sur lien à jeton,
 `insurer_bundle_tokens`, haché, expirable, révocable). Le contenu des mails
 entrants est traité comme non fiable (parsing pur, jamais d'instructions

@@ -204,3 +204,67 @@ export function buildReportPdf(input: ReportPdfInput): Buffer {
 
   return Buffer.from(doc.output("arraybuffer"));
 }
+
+/** Étude minimale requise pour la fiche d'export (métadonnées, pas de contenu clinique). */
+export interface StudyExportInput {
+  patientName?: string | null;
+  patientId?: string | null;
+  birthDate?: string | null;
+  studyDate?: string | null;
+  modality?: string | null;
+  studyDescription?: string | null;
+  institution?: string | null;
+  referringPhysician?: string | null;
+  numberOfSeries?: number | null;
+  numberOfInstances?: number | null;
+}
+
+/**
+ * PDF d'export minimal (métadonnées étude/patient, pas de contenu clinique
+ * signé) — utilisé par `GET /api/export/pdf-report/:studyId` et par le colis
+ * assureur (`construireColis`). Extrait de l'ancienne route inline pour être
+ * réutilisable sans dupliquer la mise en page (aucun changement de rendu).
+ */
+export function buildStudyExportPdf(study: StudyExportInput): Buffer {
+  const doc = new jsPDF();
+
+  // Header
+  doc.setFontSize(18);
+  doc.setTextColor(0, 102, 204);
+  doc.text("Radiology Report", 20, 20);
+  doc.setDrawColor(0, 102, 204);
+  doc.line(20, 24, 190, 24);
+
+  // Patient info
+  doc.setFontSize(12);
+  doc.setTextColor(0, 0, 0);
+  doc.text("Patient Information", 20, 35);
+  doc.setFontSize(10);
+  doc.text(`Name: ${study.patientName || "N/A"}`, 25, 43);
+  doc.text(`Patient ID: ${study.patientId || "N/A"}`, 25, 50);
+  doc.text(`Date of Birth: ${study.birthDate || "N/A"}`, 25, 57);
+
+  // Study info
+  doc.setFontSize(12);
+  doc.text("Study Information", 20, 70);
+  doc.setFontSize(10);
+  doc.text(`Study Date: ${study.studyDate || "N/A"}`, 25, 78);
+  doc.text(`Modality: ${study.modality || "N/A"}`, 25, 85);
+  doc.text(`Description: ${study.studyDescription || "N/A"}`, 25, 92);
+  doc.text(`Institution: ${study.institution || "N/A"}`, 25, 99);
+  doc.text(
+    `Referring Physician: ${study.referringPhysician || "N/A"}`,
+    25,
+    106
+  );
+  doc.text(`Number of Series: ${study.numberOfSeries || 0}`, 25, 113);
+  doc.text(`Number of Images: ${study.numberOfInstances || 0}`, 25, 120);
+
+  // Footer
+  doc.setFontSize(8);
+  doc.setTextColor(100, 100, 100);
+  doc.text(`Generated: ${new Date().toISOString()}`, 20, 280);
+  doc.text("MediView - For diagnostic purposes only", 20, 286);
+
+  return Buffer.from(doc.output("arraybuffer"));
+}

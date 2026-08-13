@@ -116,6 +116,9 @@ async function startServer() {
   app.use("/api/export", exportLimiter);
   app.use("/api/trpc", loginLimiter);
   app.use("/r", shareLimiter);
+  // Colis assureur (`/dl/:token`) : même exposition qu'un lien public non
+  // authentifié → même limiteur dédié que `/r/:token`.
+  app.use("/dl", shareLimiter);
 
   // CSRF mitigation for the PHI export GET routes: a cross-site context (e.g. a
   // malicious page triggering a navigation/download) is rejected. Same-origin
@@ -623,48 +626,8 @@ async function startServer() {
         ipAddress: req.ip ?? null,
       });
 
-      const { jsPDF } = await import("jspdf");
-      const doc = new jsPDF();
-
-      // Header
-      doc.setFontSize(18);
-      doc.setTextColor(0, 102, 204);
-      doc.text("Radiology Report", 20, 20);
-      doc.setDrawColor(0, 102, 204);
-      doc.line(20, 24, 190, 24);
-
-      // Patient info
-      doc.setFontSize(12);
-      doc.setTextColor(0, 0, 0);
-      doc.text("Patient Information", 20, 35);
-      doc.setFontSize(10);
-      doc.text(`Name: ${study.patientName || "N/A"}`, 25, 43);
-      doc.text(`Patient ID: ${study.patientId || "N/A"}`, 25, 50);
-      doc.text(`Date of Birth: ${study.birthDate || "N/A"}`, 25, 57);
-
-      // Study info
-      doc.setFontSize(12);
-      doc.text("Study Information", 20, 70);
-      doc.setFontSize(10);
-      doc.text(`Study Date: ${study.studyDate || "N/A"}`, 25, 78);
-      doc.text(`Modality: ${study.modality || "N/A"}`, 25, 85);
-      doc.text(`Description: ${study.studyDescription || "N/A"}`, 25, 92);
-      doc.text(`Institution: ${study.institution || "N/A"}`, 25, 99);
-      doc.text(
-        `Referring Physician: ${study.referringPhysician || "N/A"}`,
-        25,
-        106
-      );
-      doc.text(`Number of Series: ${study.numberOfSeries || 0}`, 25, 113);
-      doc.text(`Number of Images: ${study.numberOfInstances || 0}`, 25, 120);
-
-      // Footer
-      doc.setFontSize(8);
-      doc.setTextColor(100, 100, 100);
-      doc.text(`Generated: ${new Date().toISOString()}`, 20, 280);
-      doc.text("MediView - For diagnostic purposes only", 20, 286);
-
-      const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+      const { buildStudyExportPdf } = await import("../report/reportPdf");
+      const pdfBuffer = buildStudyExportPdf(study);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
@@ -734,6 +697,41 @@ async function startServer() {
       res.redirect(`/viewer/${consumed.studyId}`);
     } catch {
       res.status(500).send("Erreur serveur.");
+    }
+  });
+
+  // Colis DICOM+CR d'une demande assureur : jeton en clair dans l'URL (256
+  // bits, non énumérable), pas de session requise (le destinataire assureur
+  // n'a pas de compte MediView). Multi-téléchargement INTENTIONNEL pendant la
+  // fenêtre de validité (14 j), plafonné à 10 rédemptions (cf. I2) — le
+  // message 410 générique ci-dessous couvre donc inconnu/expiré/révoqué/
+  // plafond atteint, sans distinguer ces cas (pas d'oracle) ; formulation
+  // dédiée (≠ `/r/:token`, lien usage unique) pour ne pas suggérer à tort
+  // qu'un seul téléchargement suffit à invalider le lien.
+  app.get("/dl/:token", async (req, res) => {
+    try {
+      const { racheterJeton } = await import("../insurer/bundle");
+      const token = req.params.token as string;
+      const result = await racheterJeton(token, req.ip ?? "");
+      if (!result.ok) {
+        res.status(410).send("Lien expiré ou révoqué.");
+        return;
+      }
+      const { storageGetObject } = await import("../storage");
+      const { body } = await storageGetObject(result.bundleKey);
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader(
+        "Content-Disposition",
+        'attachment; filename="imagerie.zip"'
+      );
+      body.on("error", err => {
+        console.error("[dl] stream error:", err);
+        if (!res.headersSent) res.status(502).end();
+        else res.destroy(err);
+      });
+      body.pipe(res);
+    } catch {
+      if (!res.headersSent) res.status(500).send("Erreur serveur.");
     }
   });
 
@@ -901,6 +899,12 @@ async function startServer() {
   // Agent CR autonome : génère les brouillons des nouvelles études (si activé).
   void import("../report/autoReportAgent")
     .then(m => m.startAutoReportAgent())
+    .catch(() => {});
+
+  // Agent assureur (SUVA) : poller IMAP + pipeline de traitement des
+  // demandes d'imagerie (no-op si INSURER_IMAP_HOST absent).
+  void import("../insurer/mailPoller")
+    .then(m => m.demarrerPollerAssureur())
     .catch(() => {});
 
   server.listen(port, () => {

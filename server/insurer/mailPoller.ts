@@ -532,6 +532,48 @@ export async function traiterDemande(requestId: number): Promise<void> {
       }
     }
 
+    // Rattrapage : les demandes reçues AVANT le déploiement de la rastérisation
+    // ont un PDF scanné stocké (doc-N.pdf) mais aucune image → extraction vide
+    // et motif « PDF scanné ». Au re-traitement, on rastérise ces PDF stockés,
+    // on stocke les pages en PNG et on les ajoute à `attachmentKeys` (persisté)
+    // pour que la vision puisse enfin les lire. Idempotent : une fois les PNG
+    // présents, cette branche ne se redéclenche pas.
+    if (images.length === 0) {
+      const clesPdf = (row.attachmentKeys ?? []).filter(k =>
+        k.toLowerCase().endsWith(".pdf")
+      );
+      const nouvellesCles: string[] = [];
+      let idxImg = 0;
+      for (const clePdf of clesPdf) {
+        try {
+          const pdf = await storageGetBuffer(clePdf);
+          const pages = await rasteriserPdf(pdf);
+          for (const page of pages) {
+            const { key } = await storagePut(
+              `insurer/${requestId}/reimg-${idxImg++}.png`,
+              page,
+              "image/png"
+            );
+            nouvellesCles.push(key);
+            images.push({ data: page, mime: "image/png" });
+          }
+        } catch (err) {
+          console.warn(
+            "[insurer] échec rastérisation PDF stocké au re-traitement :",
+            messageErreur(err, String(err))
+          );
+        }
+      }
+      if (nouvellesCles.length) {
+        const cumulees = [...(row.attachmentKeys ?? []), ...nouvellesCles];
+        row.attachmentKeys = cumulees;
+        await db
+          .update(insurerRequests)
+          .set({ attachmentKeys: cumulees })
+          .where(eq(insurerRequests.id, requestId));
+      }
+    }
+
     let extraction: ExtractionDemande;
     try {
       extraction = await extraireDemande({ texte, images });

@@ -819,6 +819,55 @@ describe("traiterDemande", () => {
     }
   });
 
+  // Rattrapage : demande reçue avant la rastérisation (PDF stocké, aucune
+  // image) ⇒ re-traitement re-rastérise le PDF, persiste les PNG et les
+  // transmet à la vision.
+  it("(i) re-traitement rastérise un PDF stocké sans image et persiste les PNG", async () => {
+    const row = seedRow({
+      attachmentKeys: ["insurer/1/doc-0.pdf"],
+      corpsTexte: `Corps. ${"[[MOTIF:PDF scanné non lisible automatiquement]]"}`,
+    });
+    mocks.storageGetBuffer.mockResolvedValue(Buffer.from("%PDF-1.4 scan"));
+    mocks.rasteriserPdf.mockResolvedValue([
+      Buffer.from("png-1"),
+      Buffer.from("png-2"),
+    ]);
+    mocks.extraireDemande.mockResolvedValue(EXTRACTION_NOMINALE);
+    mocks.matchPatient.mockResolvedValue({
+      statut: "aucun",
+      patientId: null,
+      candidats: 0,
+    });
+    mocks.matchStudies.mockResolvedValue({
+      tousTrouves: false,
+      datesExactes: false,
+      parExamen: [],
+    });
+    mocks.decideEnvoiAuto.mockReturnValue({ auto: false, motifs: ["x"] });
+
+    await traiterDemande(row.id);
+
+    // Les pages rastérisées sont stockées en reimg-N.png…
+    expect(mocks.storagePut).toHaveBeenCalledWith(
+      expect.stringMatching(/reimg-0\.png$/),
+      expect.anything(),
+      "image/png"
+    );
+    // …ajoutées à attachmentKeys (persisté)…
+    expect(row.attachmentKeys).toEqual(
+      expect.arrayContaining([
+        "insurer/1/doc-0.pdf",
+        expect.stringMatching(/reimg-0\.png$/),
+        expect.stringMatching(/reimg-1\.png$/),
+      ])
+    );
+    // …et transmises à la vision (2 images).
+    expect(mocks.extraireDemande).toHaveBeenCalledWith(
+      expect.objectContaining({ images: expect.arrayContaining([]) })
+    );
+    expect(mocks.extraireDemande.mock.calls[0][0].images).toHaveLength(2);
+  });
+
   // Backfill : étude trouvée mais fiche méta-seule (images pas encore
   // rapatriées du PACS) ⇒ motif posé, envoi auto JAMAIS vrai.
   it("(h) étude sans images ⇒ motif rapatriement + a_valider, auto JAMAIS même si decideEnvoiAuto dit oui", async () => {

@@ -100,4 +100,36 @@ describe("anonymizeDicomBuffer", () => {
     const garbage = Buffer.from("this is not a dicom file at all");
     expect(() => anonymizeDicomBuffer(garbage)).toThrow();
   });
+
+  // Les CT Toshiba du cabinet contiennent des DS > 16 octets (non conformes
+  // mais réels) ; l'anonymisation ne doit pas rejeter ces fichiers.
+  it("accepts nonconforming over-long DS values instead of rejecting the file", () => {
+    const longDs = "0.774637877941132"; // 17 car. + bourrage = 18 > max DS (16)
+    const dd = new DicomDict(
+      DicomMetaDictionary.denaturalizeDataset({
+        FileMetaInformationVersion: new Uint8Array([0, 1]).buffer,
+        MediaStorageSOPClassUID: "1.2.840.10008.5.1.4.1.1.2",
+        MediaStorageSOPInstanceUID: "1.2.3.4.5.1.1",
+        TransferSyntaxUID: "1.2.840.10008.1.2.1",
+        ImplementationClassUID: "1.2.3.4",
+      })
+    );
+    dd.dict = DicomMetaDictionary.denaturalizeDataset({
+      PatientName: "DOE^JOHN",
+      Modality: "CT",
+      StudyInstanceUID: "1.2.3.4.5",
+      SeriesInstanceUID: "1.2.3.4.5.1",
+      SOPInstanceUID: "1.2.3.4.5.1.1",
+      SOPClassUID: "1.2.840.10008.5.1.4.1.1.2",
+    });
+    // Tag DS injecté brut (denaturalize tronquerait) : 17 caractères sérialisés
+    // + octet de bourrage pair DICOM = 18 > max 16, comme dans les fichiers réels.
+    dd.dict["00180050"] = { vr: "DS", Value: [longDs] };
+    const input = Buffer.from(dd.write({ allowInvalidVRLength: true }));
+
+    const out = anonymizeDicomBuffer(input);
+    const ds = readNaturalized(out);
+    expect(isEmptyish(ds.PatientName)).toBe(true);
+    expect(String(ds.SliceThickness)).toContain(longDs);
+  });
 });

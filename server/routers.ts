@@ -176,7 +176,10 @@ export function anonymizeDicomBuffer(buffer: Buffer): Buffer {
       ignoreErrors: true,
     });
     scrubDicomDataset(dicomDict.dict as Record<string, any>);
-    const out = dicomDict.write();
+    // allowInvalidVRLength : les CT du cabinet (Toshiba Aquilion) contiennent
+    // des DS de 17-18 octets (> max 16, non conformes mais réels) ; sans cette
+    // option dcmjs rejette le fichier entier et les coupes sont perdues.
+    const out = dicomDict.write({ allowInvalidVRLength: true });
     return Buffer.from(out);
   } catch (err) {
     console.error("[Anonymize] DICOM anonymization failed:", err);

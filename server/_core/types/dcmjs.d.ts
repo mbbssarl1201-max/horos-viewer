@@ -4,7 +4,7 @@ declare module "dcmjs" {
   interface DicomDictInstance {
     dict: Record<string, { vr?: string; Value?: any[] }>;
     meta: Record<string, any>;
-    write(): ArrayBuffer;
+    write(options?: { allowInvalidVRLength?: boolean }): ArrayBuffer;
   }
 
   interface DicomDictConstructor {

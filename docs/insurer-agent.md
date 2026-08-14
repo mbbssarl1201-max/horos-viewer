@@ -86,7 +86,7 @@ d'activer le poller.
 
 ```
 INSURER_IMAP_HOST=mailu-imap-1           # Dovecot interne Mailu (réseau mailu_default)
-INSURER_IMAP_PORT=993
+INSURER_IMAP_PORT=143               # Dovecot interne en clair (993/TLS seulement via le front public)
 INSURER_IMAP_USER=suva@mediview.ch
 INSURER_IMAP_PASS=<mot de passe fort>
 INSURER_TRUSTED_SENDERS=institut.med.champel@gmail.com

@@ -567,20 +567,29 @@ export async function traiterDemande(requestId: number): Promise<void> {
       if (nouvellesCles.length) {
         const cumulees = [...(row.attachmentKeys ?? []), ...nouvellesCles];
         row.attachmentKeys = cumulees;
-        // Le PDF a bien été rastérisé et va être lu : le marqueur « PDF scanné
-        // non lisible » posé à l'ingestion est désormais faux — on le retire de
-        // `corpsTexte` (persisté) ET des motifs de ce tour, pour ne pas afficher
-        // « illisible » sur un scan qui a été lu.
-        const corpsNettoye = corpsTexteBrut.replace(
-          marqueurMotif(MOTIF_PDF_SCANNE),
-          ""
-        );
-        motifsPieces = motifsPieces.filter(m => m !== MOTIF_PDF_SCANNE);
         await db
           .update(insurerRequests)
-          .set({ attachmentKeys: cumulees, corpsTexte: corpsNettoye })
+          .set({ attachmentKeys: cumulees })
           .where(eq(insurerRequests.id, requestId));
       }
+    }
+
+    // Le marqueur « PDF scanné non lisible » posé à l'ingestion devient faux dès
+    // qu'on a des images à soumettre à la vision (rastérisées à l'instant OU
+    // PNG déjà présents d'un re-traitement précédent) : on le retire de
+    // `corpsTexte` (persisté) et des motifs du tour, pour ne pas afficher
+    // « illisible » sur un scan qui a été lu.
+    if (images.length > 0 && motifsPieces.includes(MOTIF_PDF_SCANNE)) {
+      motifsPieces = motifsPieces.filter(m => m !== MOTIF_PDF_SCANNE);
+      const corpsNettoye = (row.corpsTexte || "").replace(
+        marqueurMotif(MOTIF_PDF_SCANNE),
+        ""
+      );
+      row.corpsTexte = corpsNettoye;
+      await db
+        .update(insurerRequests)
+        .set({ corpsTexte: corpsNettoye })
+        .where(eq(insurerRequests.id, requestId));
     }
 
     let extraction: ExtractionDemande;

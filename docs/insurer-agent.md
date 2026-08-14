@@ -96,6 +96,10 @@ INSURER_TRUSTED_SENDERS=institut.med.champel@gmail.com
 INSURER_AUTO_SEND_DOMAINS=suva.ch
 INSURER_NOTIFY_EMAIL=institut.med.champel@gmail.com
 REPORT_EMAIL_ALLOWED_DOMAINS=gmail.com,suva.ch
+# Destination unique forcée (décision gérant 2026-08-14) : toutes les réponses
+# partent à cette adresse, l'adresse lue dans le courrier est ignorée.
+# Retirer la variable pour revenir à la précédence extraite → Reply-To/From.
+INSURER_REPLY_TO=suva.ouest@suva.ch
 ```
 
 `REPORT_EMAIL_ALLOWED_DOMAINS` est actuellement `gmail.com` en prod : il

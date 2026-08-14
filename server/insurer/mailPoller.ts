@@ -246,7 +246,10 @@ async function traiterMessage(
 
   const from = adresseDe(parsed.from) || "";
   const replyTo = adresseDe(parsed.replyTo);
-  const adresseReponse = replyTo || from || null;
+  // INSURER_REPLY_TO : destination unique forcée (le gérant envoie toujours à
+  // la même adresse SUVA) — prime sur le Reply-To/From du mail transféré.
+  const adresseReponse =
+    normaliserAdresseUnique(ENV.insurerReplyTo) || replyTo || from || null;
   const texteBase = (parsed.text || "").slice(0, LONGUEUR_MAX_TEXTE);
 
   await db.insert(insurerRequests).values({
@@ -545,8 +548,14 @@ export async function traiterDemande(requestId: number): Promise<void> {
     const adresseExtraiteNormalisee = normaliserAdresseUnique(
       extraction.adresseReponse
     );
+    const adresseForcee = normaliserAdresseUnique(ENV.insurerReplyTo);
     let adresseReponse: string | null;
-    if (extraction.adresseReponse && !adresseExtraiteNormalisee) {
+    if (adresseForcee) {
+      // Destination unique forcée (INSURER_REPLY_TO) : l'adresse lue dans le
+      // courrier n'est jamais utilisée — supprime aussi la surface d'attaque
+      // « adresse smugglée dans le corps du mail » tant que l'option est posée.
+      adresseReponse = adresseForcee;
+    } else if (extraction.adresseReponse && !adresseExtraiteNormalisee) {
       motifsAdresse.push("Adresse de réponse invalide ou multiple");
       adresseReponse = normaliserAdresseUnique(row.adresseReponse);
     } else {

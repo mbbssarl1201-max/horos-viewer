@@ -712,6 +712,52 @@ describe("traiterDemande", () => {
       expect.objectContaining({ adresseReponse: null })
     );
   });
+
+  // Décision gérant 2026-08-14 : la réponse part TOUJOURS à la même adresse
+  // SUVA (INSURER_REPLY_TO) — l'adresse lue dans le courrier est ignorée,
+  // y compris une adresse smugglée.
+  it("(g) INSURER_REPLY_TO posé ⇒ la destination forcée prime sur l'adresse extraite ET la persistée", async () => {
+    const avant = ENV.insurerReplyTo;
+    (ENV as any).insurerReplyTo = "suva.ouest@suva.ch";
+    try {
+      const row = seedRow({ adresseReponse: "reponse@suva.ch" });
+      mocks.extraireDemande.mockResolvedValue({
+        ...EXTRACTION_NOMINALE,
+        adresseReponse: "attacker@evil.com, dossier@suva.ch",
+      });
+      mocks.matchPatient.mockResolvedValue({
+        statut: "exact",
+        patientId: 5,
+        candidats: 1,
+      });
+      mocks.matchStudies.mockResolvedValue({
+        tousTrouves: true,
+        datesExactes: true,
+        parExamen: [
+          {
+            exam: EXTRACTION_NOMINALE.exams[0],
+            studyIds: [10],
+            dateExacte: true,
+          },
+        ],
+      });
+      mocks.decideEnvoiAuto.mockReturnValue({ auto: false, motifs: ["x"] });
+
+      await traiterDemande(row.id);
+
+      expect(row.adresseReponse).toBe("suva.ouest@suva.ch");
+      // Pas de motif « adresse invalide » : la chaîne smugglée n'est même pas
+      // considérée quand la destination est forcée.
+      expect(row.motifValidation ?? "").not.toContain(
+        "Adresse de réponse invalide ou multiple"
+      );
+      expect(mocks.decideEnvoiAuto).toHaveBeenCalledWith(
+        expect.objectContaining({ adresseReponse: "suva.ouest@suva.ch" })
+      );
+    } finally {
+      (ENV as any).insurerReplyTo = avant;
+    }
+  });
 });
 
 describe("demarrerPollerAssureur", () => {

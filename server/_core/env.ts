@@ -182,6 +182,11 @@ export const ENV = {
     .filter(Boolean),
   // Adresse notifiée quand une demande passe en validation (vide = pas de notification).
   insurerNotifyEmail: process.env.INSURER_NOTIFY_EMAIL ?? "",
+  // Adresse de réponse FORCÉE (décision gérant 2026-08-14) : si posée, TOUTES
+  // les réponses assureur partent à cette adresse ; ce que dit le courrier
+  // (Reply-To, adresse extraite du document) est ignoré. Vide = comportement
+  // par précédence (extraite → Reply-To/From).
+  insurerReplyTo: process.env.INSURER_REPLY_TO ?? "",
 };
 
 // Garde fail-safe : signaler quand SMTP_INSECURE est posé en production mais

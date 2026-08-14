@@ -3173,7 +3173,28 @@ export const appRouter = router({
           lien: "<lien généré à l'envoi>",
           inclureCrEnPJ: false,
         });
-        return { request, tokens, mailPreview };
+        // Récap des études trouvées, avec l'identité DÉCHIFFRÉE du dossier
+        // matché : permet au gérant de croiser visuellement le patient du
+        // dossier retrouvé avec celui écrit sur la feuille SUVA (garde anti-
+        // mauvais dossier) et d'ouvrir chaque étude dans le viewer pour
+        // contrôler AVANT d'envoyer.
+        const { getStudyById } = await import("./db");
+        const studyIds = (request.studyIds as number[] | null) ?? [];
+        const etudes = [];
+        for (const sid of studyIds) {
+          const s = await getStudyById(sid);
+          if (!s) continue;
+          etudes.push({
+            studyId: s.id,
+            patientName: s.patientName,
+            birthDate: s.birthDate,
+            studyDate: s.studyDate,
+            modality: s.modality,
+            studyDescription: s.studyDescription,
+            numberOfInstances: s.numberOfInstances ?? 0,
+          });
+        }
+        return { request, tokens, mailPreview, etudes };
       }),
 
     // Valide et envoie la réponse (colis DICOM+CR) — délègue à `envoyerReponse`

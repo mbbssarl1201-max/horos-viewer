@@ -44,6 +44,13 @@ type Statut =
   | "rejetee"
   | "erreur";
 
+// Formate une date DICOM (YYYYMMDD) en JJ.MM.AAAA ; renvoie la valeur brute
+// si elle n'est pas au format attendu.
+function formatDicomDate(d: string | null | undefined): string {
+  if (!d || !/^\d{8}$/.test(d)) return d || "—";
+  return `${d.slice(6, 8)}.${d.slice(4, 6)}.${d.slice(0, 4)}`;
+}
+
 const STATUT_LABEL: Record<Statut, string> = {
   recue: "Reçue",
   extraite: "Extraite",
@@ -180,6 +187,7 @@ export default function InsurerRequests() {
   const request = detail.data?.request;
   const tokens = detail.data?.tokens ?? [];
   const mailPreview = detail.data?.mailPreview;
+  const etudes = detail.data?.etudes ?? [];
   const extraction = (request?.extraction ?? null) as {
     patient?: {
       nom: string | null;
@@ -423,23 +431,67 @@ export default function InsurerRequests() {
                     <User className="w-3.5 h-3.5" />
                     Patient identifié &amp; études
                   </h3>
-                  <div className="rounded border border-border p-3 space-y-1 text-xs">
-                    <div>
-                      <span className="text-muted-foreground">Patient : </span>
-                      {request.patientId != null
-                        ? `dossier #${request.patientId}`
-                        : "non identifié"}
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">
-                        Études trouvées :{" "}
-                      </span>
-                      {(request.studyIds ?? []).length > 0
-                        ? (request.studyIds as number[])
-                            .map(id => `#${id}`)
-                            .join(", ")
-                        : "aucune"}
-                    </div>
+                  <div className="rounded border border-border p-3 space-y-2 text-xs">
+                    {request.patientId == null ? (
+                      <div className="text-muted-foreground">
+                        Patient non identifié dans MediView.
+                      </div>
+                    ) : etudes.length === 0 ? (
+                      <div className="text-muted-foreground">
+                        Dossier #{request.patientId} identifié, mais aucune
+                        étude correspondante trouvée.
+                      </div>
+                    ) : (
+                      <>
+                        {/* Identité du DOSSIER retrouvé — à croiser avec la
+                            feuille SUVA (section « Extraction lue » ci-dessus)
+                            pour confirmer que c'est le bon patient. */}
+                        <div className="rounded bg-muted/40 px-2 py-1.5">
+                          <span className="text-muted-foreground">
+                            Dossier retrouvé :{" "}
+                          </span>
+                          <span className="font-medium">
+                            {etudes[0].patientName || "—"}
+                          </span>
+                          {etudes[0].birthDate ? (
+                            <span className="text-muted-foreground">
+                              {" "}
+                              — né(e) le {etudes[0].birthDate}
+                            </span>
+                          ) : null}
+                          <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-500">
+                            ⚠️ Vérifiez que ce nom et cette date correspondent à
+                            la feuille SUVA avant d'envoyer.
+                          </div>
+                        </div>
+                        {etudes.map(e => (
+                          <div
+                            key={e.studyId}
+                            className="flex items-center justify-between gap-2 border-t border-border pt-1.5"
+                          >
+                            <span>
+                              {e.modality || "?"} —{" "}
+                              {formatDicomDate(e.studyDate)} —{" "}
+                              {e.numberOfInstances > 0 ? (
+                                `${e.numberOfInstances} image(s)`
+                              ) : (
+                                <span className="text-amber-600 dark:text-amber-500">
+                                  images en cours de rapatriement
+                                </span>
+                              )}
+                            </span>
+                            <a
+                              href={`/viewer/${e.studyId}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="shrink-0 rounded border border-border px-2 py-0.5 hover:bg-muted"
+                            >
+                              Ouvrir
+                            </a>
+                          </div>
+                        ))}
+                      </>
+                    )}
                   </div>
                 </section>
 

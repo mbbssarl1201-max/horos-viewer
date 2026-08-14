@@ -866,6 +866,10 @@ describe("traiterDemande", () => {
       expect.objectContaining({ images: expect.arrayContaining([]) })
     );
     expect(mocks.extraireDemande.mock.calls[0][0].images).toHaveLength(2);
+    // …et le marqueur « PDF scanné » périmé est retiré (le scan a été lu) :
+    // ni dans corpsTexte persisté, ni dans le motif de validation affiché.
+    expect(row.corpsTexte).not.toContain("PDF scanné");
+    expect(row.motifValidation ?? "").not.toContain("PDF scanné");
   });
 
   // Backfill : étude trouvée mais fiche méta-seule (images pas encore

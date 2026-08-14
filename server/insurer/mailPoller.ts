@@ -505,7 +505,7 @@ export async function traiterDemande(requestId: number): Promise<void> {
     // volumineuse, image non exploitable…) : extraits puis retirés du texte
     // avant qu'il n'atteigne l'extraction LLM (ni contenu assureur, ni
     // instruction pour le modèle).
-    const motifsPieces = Array.from(
+    let motifsPieces = Array.from(
       corpsTexteBrut.matchAll(REGEX_MOTIF_PJ),
       m => m[1]
     );
@@ -567,9 +567,18 @@ export async function traiterDemande(requestId: number): Promise<void> {
       if (nouvellesCles.length) {
         const cumulees = [...(row.attachmentKeys ?? []), ...nouvellesCles];
         row.attachmentKeys = cumulees;
+        // Le PDF a bien été rastérisé et va être lu : le marqueur « PDF scanné
+        // non lisible » posé à l'ingestion est désormais faux — on le retire de
+        // `corpsTexte` (persisté) ET des motifs de ce tour, pour ne pas afficher
+        // « illisible » sur un scan qui a été lu.
+        const corpsNettoye = corpsTexteBrut.replace(
+          marqueurMotif(MOTIF_PDF_SCANNE),
+          ""
+        );
+        motifsPieces = motifsPieces.filter(m => m !== MOTIF_PDF_SCANNE);
         await db
           .update(insurerRequests)
-          .set({ attachmentKeys: cumulees })
+          .set({ attachmentKeys: cumulees, corpsTexte: corpsNettoye })
           .where(eq(insurerRequests.id, requestId));
       }
     }

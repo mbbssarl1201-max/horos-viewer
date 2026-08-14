@@ -735,6 +735,27 @@ async function startServer() {
     }
   });
 
+  // Backfill PACS : la passerelle du cabinet demande la liste des études
+  // (UID/accession, ZÉRO PHI) réclamées par une demande assureur en cours et
+  // encore dépourvues d'images, pour les rapatrier via C-GET puis dicom.import.
+  // Même jeton Bearer que dicom.import (restreint à l'IP du cabinet par Traefik).
+  app.get("/api/insurer/etudes-a-rapatrier", async (req, res) => {
+    const { isValidImportToken } = await import("../importToken");
+    if (!isValidImportToken(req.headers.authorization)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    try {
+      const { espaceLibreOctets } = await import("../insurer/espaceDisque");
+      const { etudesARapatrier } = await import("../insurer/backfill");
+      const libre = await espaceLibreOctets("/");
+      const studies = await etudesARapatrier(libre);
+      res.json({ studies });
+    } catch (e: unknown) {
+      res.status(500).json({ error: (e as Error)?.message || "Erreur" });
+    }
+  });
+
   // ── INTÉGRATION MEDICENTRAL (service-to-service, réseau interne medical-net) ──
   // MediCentral appelle ces routes avec le token partagé MEDICENTRAL_SERVICE_TOKEN
   // pour afficher les études + comptes-rendus d'un patient dans SON dossier. OFF

@@ -5,6 +5,7 @@ import { simpleParser, type ParsedMail } from "mailparser";
 // fichier de test au démarrage → crash ENOENT en prod (vécu le 13.08.2026).
 import pdfParse from "pdf-parse/lib/pdf-parse.js";
 import { rasteriserPdf } from "./pdfRaster";
+import { etudesSansImages, MOTIF_IMAGES_A_RAPATRIER } from "./backfill";
 import { eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { storagePut, storageGetBuffer } from "../storage";
@@ -610,13 +611,30 @@ export async function traiterDemande(requestId: number): Promise<void> {
       },
     });
 
-    const motifs = [...decision.motifs, ...motifsPieces, ...motifsAdresse];
+    // Garde anti-colis-vide (backfill) : si une étude trouvée est une fiche
+    // méta-seule (images pas encore rapatriées du PACS), on ne peut pas encore
+    // constituer le colis — motif posé, envoi auto bloqué, la passerelle du
+    // cabinet rapatriera les images (cf. /api/insurer/etudes-a-rapatrier).
+    const motifsImages =
+      studyIds.length && (await etudesSansImages(studyIds))
+        ? [MOTIF_IMAGES_A_RAPATRIER]
+        : [];
+
+    const motifs = [
+      ...decision.motifs,
+      ...motifsPieces,
+      ...motifsAdresse,
+      ...motifsImages,
+    ];
     // Garde dure : tout motif posé au stockage des PJ (PDF scanné, PJ trop
-    // volumineuse, image non exploitable…) OU une adresse de réponse invalide
-    // (cf. `motifsAdresse` ci-dessus) bloque TOUJOURS l'envoi automatique,
-    // quel que soit le verdict de `decideEnvoiAuto`.
+    // volumineuse, image non exploitable…), une adresse de réponse invalide
+    // (cf. `motifsAdresse`) OU des images pas encore rapatriées bloque TOUJOURS
+    // l'envoi automatique, quel que soit le verdict de `decideEnvoiAuto`.
     const auto =
-      decision.auto && motifsPieces.length === 0 && motifsAdresse.length === 0;
+      decision.auto &&
+      motifsPieces.length === 0 &&
+      motifsAdresse.length === 0 &&
+      motifsImages.length === 0;
 
     await db
       .update(insurerRequests)

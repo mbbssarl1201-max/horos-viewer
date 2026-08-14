@@ -78,6 +78,17 @@ export async function construireColis(
     }
   }
 
+  // Garde anti-colis-vide : ne jamais produire un ZIP sans la moindre coupe
+  // DICOM. Se produit quand les études trouvées sont des fiches méta-seules dont
+  // les images n'ont pas encore été rapatriées du PACS (backfill). Lever ici
+  // protège aussi la validation manuelle 1-clic (pas seulement l'envoi auto).
+  const nbDicom = files.filter(f => f.name.endsWith(".dcm")).length;
+  if (nbDicom === 0) {
+    throw new Error(
+      "Colis vide : aucune image DICOM disponible (images pas encore rapatriées du PACS)"
+    );
+  }
+
   const zip = await zipBuffers(files);
   const { key } = await storagePut(
     `insurer/${requestId}/bundle.zip`,

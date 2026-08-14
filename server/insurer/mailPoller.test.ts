@@ -19,6 +19,7 @@ const mocks = {
   simpleParser: vi.fn(),
   pdfParse: vi.fn(),
   rasteriserPdf: vi.fn(),
+  etudesSansImages: vi.fn(),
   storagePut: vi.fn(),
   storageGetBuffer: vi.fn(),
   sendEmail: vi.fn(),
@@ -50,6 +51,14 @@ vi.mock("pdf-parse/lib/pdf-parse.js", () => ({
 vi.mock("./pdfRaster", () => ({
   rasteriserPdf: (...a: any[]) => mocks.rasteriserPdf(...a),
 }));
+
+vi.mock("./backfill", async orig => {
+  const actual = await orig<any>();
+  return {
+    ...actual,
+    etudesSansImages: (...a: any[]) => mocks.etudesSansImages(...a),
+  };
+});
 
 vi.mock("../storage", () => ({
   storagePut: (...a: any[]) => mocks.storagePut(...a),
@@ -228,6 +237,9 @@ beforeEach(() => {
   // Par défaut la rastérisation ne produit rien : les tests historiques du
   // motif « PDF scanné » restent représentatifs (pdftoppm absent/échec).
   mocks.rasteriserPdf.mockResolvedValue([]);
+  // Par défaut les études trouvées ont leurs images : les tests d'envoi auto
+  // ne sont pas bloqués par le motif de rapatriement.
+  mocks.etudesSansImages.mockResolvedValue(false);
 });
 
 afterEach(() => {
@@ -805,6 +817,37 @@ describe("traiterDemande", () => {
     } finally {
       (ENV as any).insurerReplyTo = avant;
     }
+  });
+
+  // Backfill : étude trouvée mais fiche méta-seule (images pas encore
+  // rapatriées du PACS) ⇒ motif posé, envoi auto JAMAIS vrai.
+  it("(h) étude sans images ⇒ motif rapatriement + a_valider, auto JAMAIS même si decideEnvoiAuto dit oui", async () => {
+    const row = seedRow({ adresseReponse: "reponse@suva.ch" });
+    mocks.extraireDemande.mockResolvedValue(EXTRACTION_NOMINALE);
+    mocks.matchPatient.mockResolvedValue({
+      statut: "exact",
+      patientId: 5,
+      candidats: 1,
+    });
+    mocks.matchStudies.mockResolvedValue({
+      tousTrouves: true,
+      datesExactes: true,
+      parExamen: [
+        {
+          exam: EXTRACTION_NOMINALE.exams[0],
+          studyIds: [10],
+          dateExacte: true,
+        },
+      ],
+    });
+    mocks.etudesSansImages.mockResolvedValue(true); // fiche méta-seule
+    mocks.decideEnvoiAuto.mockReturnValue({ auto: true, motifs: [] });
+
+    await traiterDemande(row.id);
+
+    expect(mocks.envoyerReponse).not.toHaveBeenCalled();
+    expect(row.statut).toBe("a_valider");
+    expect(row.motifValidation).toContain("Images en cours de rapatriement");
   });
 });
 

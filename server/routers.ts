@@ -1069,6 +1069,56 @@ export const appRouter = router({
           instanceId: instance.id,
         };
       }),
+
+    // Backfill PACS : enregistre la FICHE d'une étude (patient + étude, sans
+    // pixels) pour rendre l'historique identifiable par l'agent assureur. Les
+    // images sont rapatriées plus tard, à la demande, via dicom.import. Même
+    // jeton de service que `import`. Idempotent (findOrCreatePatient/createStudy).
+    importStudyMeta: importProcedure
+      .input(
+        z.object({
+          patientId: z.string(),
+          patientName: z.string(),
+          birthDate: z.string().optional(),
+          sex: z.string().optional(),
+          studyInstanceUid: z.string(),
+          studyDate: z.string().optional(),
+          studyTime: z.string().optional(),
+          studyDescription: z.string().optional(),
+          accessionNumber: z.string().optional(),
+          referringPhysician: z.string().optional(),
+          performingPhysician: z.string().optional(),
+          institution: z.string().optional(),
+          modality: z.string().optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const patient = await findOrCreatePatient({
+          patientId: input.patientId,
+          patientName: input.patientName,
+          birthDate: input.birthDate,
+          sex: input.sex,
+        });
+        const study = await createStudy({
+          patientId: patient.id,
+          studyInstanceUid: input.studyInstanceUid,
+          studyDate: input.studyDate,
+          studyTime: input.studyTime,
+          studyDescription: input.studyDescription,
+          accessionNumber: input.accessionNumber,
+          referringPhysician: input.referringPhysician,
+          performingPhysician: input.performingPhysician,
+          institution: input.institution,
+          modality: input.modality,
+        });
+        // `createStudy` est idempotent par studyInstanceUid : une fiche déjà
+        // présente (ou déjà pourvue d'images) n'est jamais écrasée.
+        return {
+          success: true,
+          patientId: patient.id,
+          studyId: study.id,
+        };
+      }),
   }),
 
   // Annotations router

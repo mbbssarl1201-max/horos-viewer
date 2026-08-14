@@ -87,6 +87,71 @@ function StatutBadge({ statut }: { statut: string }) {
   );
 }
 
+// Verdict « simple » : la seule info que le gérant veut voir d'un coup d'œil.
+const VERDICT_UI: Record<
+  string,
+  { label: string; cls: string; banner: string; bannerCls: string }
+> = {
+  disponible: {
+    label: "✅ Résultat dispo",
+    cls: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
+    banner:
+      "✅ ON A LE RÉSULTAT — patient et examens trouvés, images complètes. Vérifiez le nom ci-dessous puis « Valider et envoyer ».",
+    bannerCls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+  },
+  preparation: {
+    label: "🕓 En préparation",
+    cls: "bg-cyan-500/20 text-cyan-300 border-cyan-500/30",
+    banner:
+      "🕓 RÉSULTAT TROUVÉ — les images sont en cours de récupération depuis le PACS du cabinet. Revenez d'ici quelques minutes (le Mac passerelle doit être au cabinet).",
+    bannerCls: "border-cyan-500/40 bg-cyan-500/10 text-cyan-200",
+  },
+  introuvable: {
+    label: "❌ Pas chez nous",
+    cls: "bg-red-500/20 text-red-300 border-red-500/30",
+    banner:
+      "❌ PAS DE RÉSULTAT CORRESPONDANT — ce patient ou cet examen n'est pas dans notre PACS (fait ailleurs, ou date différente). → « Rejeter », ou répondre à la main.",
+    bannerCls: "border-red-500/40 bg-red-500/10 text-red-200",
+  },
+  envoyee: {
+    label: "📤 Envoyée",
+    cls: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
+    banner: "📤 Réponse déjà envoyée à la SUVA.",
+    bannerCls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+  },
+  rejetee: {
+    label: "🚫 Rejetée",
+    cls: "bg-slate-500/20 text-slate-300 border-slate-500/30",
+    banner: "🚫 Demande rejetée (aucun envoi).",
+    bannerCls: "border-slate-500/40 bg-slate-500/10 text-slate-300",
+  },
+  en_cours: {
+    label: "… Lecture",
+    cls: "bg-slate-500/20 text-slate-300 border-slate-500/30",
+    banner: "… Lecture du courrier en cours (moins de 2 minutes).",
+    bannerCls: "border-slate-500/40 bg-slate-500/10 text-slate-300",
+  },
+};
+
+function VerdictBadge({
+  verdict,
+  statut,
+}: {
+  verdict?: string;
+  statut: string;
+}) {
+  const v = verdict ? VERDICT_UI[verdict] : undefined;
+  if (!v) return <StatutBadge statut={statut} />;
+  return (
+    <Badge
+      variant="outline"
+      className={`${v.cls} font-normal whitespace-nowrap`}
+    >
+      {v.label}
+    </Badge>
+  );
+}
+
 function formatDate(v: unknown): string {
   if (!v) return "-";
   const t = new Date(v as string | number | Date);
@@ -294,12 +359,14 @@ export default function InsurerRequests() {
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-medium truncate">
-                        {it.expediteur}
+                        {it.patientLabel || it.sujet || it.expediteur}
                       </span>
-                      <StatutBadge statut={it.statut} />
+                      <VerdictBadge verdict={it.verdict} statut={it.statut} />
                     </div>
                     <div className="text-[11px] text-muted-foreground truncate mt-0.5">
-                      {it.sujet || "(sans objet)"}
+                      {it.patientLabel
+                        ? it.expediteur
+                        : it.sujet || "(sans objet)"}
                     </div>
                     <div className="text-[10px] text-muted-foreground/70 mt-1">
                       {formatDate(it.recuLe)}
@@ -338,8 +405,20 @@ export default function InsurerRequests() {
                       {formatDate(request.recuLe)}
                     </p>
                   </div>
-                  <StatutBadge statut={request.statut} />
+                  <VerdictBadge
+                    verdict={detail.data?.verdict}
+                    statut={request.statut}
+                  />
                 </div>
+
+                {/* LA réponse que le gérant attend, en un coup d'œil. */}
+                {detail.data?.verdict && VERDICT_UI[detail.data.verdict] && (
+                  <div
+                    className={`rounded border p-3 text-sm font-medium ${VERDICT_UI[detail.data.verdict].bannerCls}`}
+                  >
+                    {VERDICT_UI[detail.data.verdict].banner}
+                  </div>
+                )}
 
                 {request.erreur && (
                   <div className="rounded border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
@@ -348,9 +427,14 @@ export default function InsurerRequests() {
                 )}
 
                 {request.motifValidation && (
-                  <div className="rounded border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-300">
-                    {request.motifValidation}
-                  </div>
+                  <details className="text-[11px] text-muted-foreground">
+                    <summary className="cursor-pointer select-none">
+                      Détails techniques
+                    </summary>
+                    <div className="mt-1 rounded border border-border p-2">
+                      {request.motifValidation}
+                    </div>
+                  </details>
                 )}
 
                 {/* Extraction */}

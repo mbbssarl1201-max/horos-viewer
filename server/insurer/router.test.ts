@@ -6,7 +6,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // repris de server/reports.lifecycle.test.ts (fake db chaînable + createCaller)
 // et server/insurer/packageAndSend.test.ts (mock de `eq`/`desc` pour lire les
 // filtres passés aux requêtes drizzle).
-import { insurerRequests, insurerBundleTokens } from "../../drizzle/schema";
+import {
+  insurerRequests,
+  insurerBundleTokens,
+  studies,
+} from "../../drizzle/schema";
 
 const mocks = {
   recordAccess: vi.fn(),
@@ -28,7 +32,14 @@ function fakeDb() {
       dernierEq = null; // nouvelle requête : pas de filtre tant que .where() n'est pas rappelé
       return builder;
     },
-    where: (_c: unknown) => builder,
+    where: (_c: unknown) => {
+      // La requête « verdict » de insurer.list (études référencées) se termine
+      // sur .where sans .limit : on la résout directement (aucune étude connue
+      // dans ce fake ⇒ verdict « preparation », sans incidence sur les
+      // assertions existantes).
+      if (currentTable === studies) return Promise.resolve([]);
+      return builder;
+    },
     orderBy: (_c: unknown) => builder,
     limit: (_n: unknown) => {
       if (currentTable === insurerRequests) {

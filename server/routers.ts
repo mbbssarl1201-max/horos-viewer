@@ -3133,7 +3133,58 @@ export const appRouter = router({
               .from(insurerRequests)
               .orderBy(desc(insurerRequests.recuLe))
               .limit(100);
-        return { items };
+
+        // Verdict « simple » par ligne (a-t-on le résultat, oui/non ?) + nom du
+        // patient lu sur la feuille : la liste doit se lire d'un coup d'œil,
+        // pas afficher 30 fois l'adresse de la photocopieuse. Une seule requête
+        // pour toutes les études référencées.
+        const { verdictDemande } = await import("./insurer/verdict");
+        const tousStudyIds = Array.from(
+          new Set(
+            items.flatMap(r => ((r.studyIds as number[] | null) ?? []).slice())
+          )
+        );
+        const imagesParEtude = new Map<number, number>();
+        if (tousStudyIds.length) {
+          const { studies } = await import("../drizzle/schema");
+          const { inArray } = await import("drizzle-orm");
+          const rows = await db
+            .select({
+              id: studies.id,
+              numberOfInstances: studies.numberOfInstances,
+            })
+            .from(studies)
+            .where(inArray(studies.id, tousStudyIds));
+          for (const r of rows) {
+            imagesParEtude.set(
+              r.id as number,
+              (r.numberOfInstances as number) ?? 0
+            );
+          }
+        }
+        const enriched = items.map(r => {
+          const ids = (r.studyIds as number[] | null) ?? [];
+          const sansImages = ids.some(
+            id => (imagesParEtude.get(id) ?? 0) === 0
+          );
+          const ex = r.extraction as {
+            patient?: { nom?: string | null; prenom?: string | null };
+          } | null;
+          const patientLabel =
+            [ex?.patient?.prenom, ex?.patient?.nom].filter(Boolean).join(" ") ||
+            null;
+          return {
+            ...r,
+            verdict: verdictDemande({
+              statut: r.statut,
+              patientId: r.patientId,
+              studyIds: ids,
+              etudesSansImages: sansImages,
+            }),
+            patientLabel,
+          };
+        });
+        return { items: enriched };
       }),
 
     // Ligne complète + jetons (SANS tokenHash, secret de téléchargement) +
@@ -3194,7 +3245,14 @@ export const appRouter = router({
             numberOfInstances: s.numberOfInstances ?? 0,
           });
         }
-        return { request, tokens, mailPreview, etudes };
+        const { verdictDemande } = await import("./insurer/verdict");
+        const verdict = verdictDemande({
+          statut: request.statut,
+          patientId: request.patientId,
+          studyIds,
+          etudesSansImages: etudes.some(e => e.numberOfInstances === 0),
+        });
+        return { request, tokens, mailPreview, etudes, verdict };
       }),
 
     // Valide et envoie la réponse (colis DICOM+CR) — délègue à `envoyerReponse`

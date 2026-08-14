@@ -3264,6 +3264,44 @@ export const appRouter = router({
         return { ok: true };
       }),
 
+    // Re-traite une demande (ré-extraction + ré-identification patient +
+    // matching). Utile après le backfill des fiches PACS : une demande reçue
+    // AVANT que le patient/étude existe dans MediView était classée « non
+    // identifié » ; ce ré-traitement la ré-évalue une fois les fiches poussées.
+    // Interdit sur une demande déjà envoyée (PHI parti) ou rejetée.
+    reprocess: medicalProcedure
+      .input(z.object({ id: z.number().int() }))
+      .mutation(async ({ input, ctx }) => {
+        const { getDb } = await import("./db");
+        const { insurerRequests } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const rows = await db
+          .select()
+          .from(insurerRequests)
+          .where(eq(insurerRequests.id, input.id))
+          .limit(1);
+        const request = rows[0];
+        if (!request) throw new TRPCError({ code: "NOT_FOUND" });
+        if (request.statut === "envoyee" || request.statut === "rejetee") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Statut '${request.statut}' : demande terminée, re-traitement impossible.`,
+          });
+        }
+        const { traiterDemande } = await import("./insurer/mailPoller");
+        await traiterDemande(input.id);
+        await recordAccess({
+          userId: ctx.user.id,
+          action: "insurer.reprocess",
+          studyId: null,
+          detail: `demande #${input.id} re-traitée`,
+          ipAddress: ctx.req?.ip ?? null,
+        });
+        return { ok: true };
+      }),
+
     // Révoque TOUS les jetons de téléchargement du colis d'une demande (ex :
     // fuite suspectée, ou demande rejetée après un envoi antérieur).
     revokeToken: medicalProcedure

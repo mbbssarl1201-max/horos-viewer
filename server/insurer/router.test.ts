@@ -12,6 +12,7 @@ const mocks = {
   recordAccess: vi.fn(),
   envoyerReponse: vi.fn(),
   buildMailReponse: vi.fn(),
+  traiterDemande: vi.fn(),
 };
 
 let fauxRequests: any[] = [];
@@ -87,6 +88,10 @@ vi.mock("../db", async orig => {
 vi.mock("./packageAndSend", () => ({
   envoyerReponse: (...a: any[]) => mocks.envoyerReponse(...a),
   buildMailReponse: (...a: any[]) => mocks.buildMailReponse(...a),
+}));
+
+vi.mock("./mailPoller", () => ({
+  traiterDemande: (...a: any[]) => mocks.traiterDemande(...a),
 }));
 
 vi.mock("drizzle-orm", async orig => {
@@ -252,6 +257,36 @@ describe("insurer.reject", () => {
     const res = await caller.insurer.reject({ id: 1, motif: "hors périmètre" });
     expect(res).toEqual({ ok: true });
     expect(fauxRequests[0].statut).toBe("rejetee");
+  });
+});
+
+describe("insurer.reprocess", () => {
+  it("re-traite une demande non terminale (appelle traiterDemande + audit)", async () => {
+    fauxRequests[0].statut = "a_valider";
+    const caller = appRouter.createCaller(medicalCtx());
+    const res = await caller.insurer.reprocess({ id: 1 });
+    expect(res).toEqual({ ok: true });
+    expect(mocks.traiterDemande).toHaveBeenCalledWith(1);
+    expect(mocks.recordAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 7, action: "insurer.reprocess" })
+    );
+  });
+
+  it("refuse NOT_FOUND si la demande n'existe pas", async () => {
+    const caller = appRouter.createCaller(medicalCtx());
+    await expect(caller.insurer.reprocess({ id: 999 })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(mocks.traiterDemande).not.toHaveBeenCalled();
+  });
+
+  it("refuse (BAD_REQUEST) sur statut 'envoyee' — demande terminée", async () => {
+    fauxRequests[0].statut = "envoyee";
+    const caller = appRouter.createCaller(medicalCtx());
+    await expect(caller.insurer.reprocess({ id: 1 })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+    expect(mocks.traiterDemande).not.toHaveBeenCalled();
   });
 });
 

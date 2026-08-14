@@ -145,6 +145,14 @@ export default function InsurerRequests() {
     onError: err => toast.error(err.message),
   });
 
+  const reprocess = trpc.insurer.reprocess.useMutation({
+    onSuccess: () => {
+      toast.success("Demande re-traitée (patient et études réévalués).");
+      invalidateAll();
+    },
+    onError: err => toast.error(err.message),
+  });
+
   if (!loading && !isAuthenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -524,6 +532,21 @@ export default function InsurerRequests() {
                     >
                       <XCircle className="w-3.5 h-3.5" />
                       Rejeter
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={reprocess.isPending}
+                      onClick={() => reprocess.mutate({ id: request.id })}
+                      className="gap-1.5"
+                      title="Réévalue le patient et les études (ex : après import de l'historique du PACS)"
+                    >
+                      {reprocess.isPending ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      )}
+                      Re-traiter
                     </Button>
                     <Button
                       size="sm"

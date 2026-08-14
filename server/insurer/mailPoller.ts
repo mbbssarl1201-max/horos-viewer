@@ -4,6 +4,7 @@ import { simpleParser, type ParsedMail } from "mailparser";
 // debug (`!module.parent`) qui, une fois bundlé par esbuild, tente de lire son
 // fichier de test au démarrage → crash ENOENT en prod (vécu le 13.08.2026).
 import pdfParse from "pdf-parse/lib/pdf-parse.js";
+import { rasteriserPdf } from "./pdfRaster";
 import { eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { storagePut, storageGetBuffer } from "../storage";
@@ -200,10 +201,43 @@ async function stockerPiecesJointes(
           messageErreur(err, String(err))
         );
       }
-      ajoutTexte +=
-        texte.length >= PDF_MIN_CARACTERES
-          ? `\n\n${texte}`
-          : `\n\n${marqueurMotif(MOTIF_PDF_SCANNE)}`;
+      if (texte.length >= PDF_MIN_CARACTERES) {
+        ajoutTexte += `\n\n${texte}`;
+        continue;
+      }
+      // PDF sans couche texte (scan de la photocopieuse) : rastériser les
+      // pages en PNG stockés comme des images de PJ — `traiterDemande` les
+      // relira par extension et les passera à l'extraction vision. Le motif
+      // « PDF scanné » n'est posé QUE si la rastérisation ne produit rien
+      // (pdftoppm absent, PDF corrompu…) : il force la validation humaine.
+      let pages: Buffer[] = [];
+      try {
+        pages = await rasteriserPdf(content);
+      } catch (err) {
+        console.warn(
+          "[insurer] échec rastérisation PDF scanné :",
+          messageErreur(err, String(err))
+        );
+      }
+      if (!pages.length) {
+        ajoutTexte += `\n\n${marqueurMotif(MOTIF_PDF_SCANNE)}`;
+        continue;
+      }
+      for (const page of pages) {
+        if (totalOctets + page.length > MAX_TOTAL_PJ_OCTETS) {
+          console.warn(
+            "[insurer] pages rastérisées ignorées (cumul du message >100 Mo)"
+          );
+          break;
+        }
+        const { key } = await storagePut(
+          `insurer/${requestId}/img-${imgIdx++}.png`,
+          page,
+          "image/png"
+        );
+        attachmentKeys.push(key);
+        totalOctets += page.length;
+      }
       continue;
     }
 

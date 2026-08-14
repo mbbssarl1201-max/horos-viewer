@@ -18,6 +18,7 @@ const mocks = {
   logout: vi.fn(),
   simpleParser: vi.fn(),
   pdfParse: vi.fn(),
+  rasteriserPdf: vi.fn(),
   storagePut: vi.fn(),
   storageGetBuffer: vi.fn(),
   sendEmail: vi.fn(),
@@ -44,6 +45,10 @@ vi.mock("mailparser", () => ({
 
 vi.mock("pdf-parse/lib/pdf-parse.js", () => ({
   default: (...a: any[]) => mocks.pdfParse(...a),
+}));
+
+vi.mock("./pdfRaster", () => ({
+  rasteriserPdf: (...a: any[]) => mocks.rasteriserPdf(...a),
 }));
 
 vi.mock("../storage", () => ({
@@ -220,6 +225,9 @@ beforeEach(() => {
   mocks.storagePut.mockImplementation((key: string) =>
     Promise.resolve({ key, url: `https://minio.example/${key}` })
   );
+  // Par défaut la rastérisation ne produit rien : les tests historiques du
+  // motif « PDF scanné » restent représentatifs (pdftoppm absent/échec).
+  mocks.rasteriserPdf.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -576,6 +584,46 @@ describe("traiterDemande", () => {
     expect(mocks.matchPatient).not.toHaveBeenCalled();
     expect(mocks.sendEmail).not.toHaveBeenCalled();
     expect(mocks.envoyerReponse).not.toHaveBeenCalled();
+  });
+
+  it("(d2) PDF scanné rastérisable ⇒ pages stockées en img-N.png (circuit vision), AUCUN motif « PDF scanné »", async () => {
+    mocks.fetch.mockReturnValue(
+      asyncIterable([{ uid: 21, source: Buffer.from("m") }])
+    );
+    mocks.simpleParser.mockResolvedValueOnce(
+      fauxParsedMail({
+        messageId: "<pdf-scanne-raster@suva.ch>",
+        attachments: [
+          {
+            contentType: "application/pdf",
+            content: Buffer.from("%PDF-1.4 scanned"),
+          },
+        ],
+      })
+    );
+    mocks.pdfParse.mockResolvedValueOnce({ text: "trop court" }); // <80 caractères
+    mocks.rasteriserPdf.mockResolvedValueOnce([
+      Buffer.from("png-page-1"),
+      Buffer.from("png-page-2"),
+    ]);
+
+    await traiterBoite();
+    const row = fauxRequests[0];
+    expect(row.corpsTexte).not.toContain(MOTIF_PDF_SCANNE);
+    expect(mocks.storagePut).toHaveBeenCalledWith(
+      expect.stringMatching(/img-0\.png$/),
+      expect.anything(),
+      "image/png"
+    );
+    expect(mocks.storagePut).toHaveBeenCalledWith(
+      expect.stringMatching(/img-1\.png$/),
+      expect.anything(),
+      "image/png"
+    );
+    // Les clés PNG sont référencées : `traiterDemande` les passera à la vision.
+    expect(
+      (row.attachmentKeys as string[]).filter(k => k.endsWith(".png"))
+    ).toHaveLength(2);
   });
 
   it("(d) PDF scanné non lisible (via traiterBoite) ⇒ motif présent, auto JAMAIS vrai même si decideEnvoiAuto dit oui", async () => {

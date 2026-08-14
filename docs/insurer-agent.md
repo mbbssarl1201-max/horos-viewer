@@ -60,37 +60,34 @@ seul `From` déclaratif.
 
 ## 1. Créer la boîte mail dédiée (Mailu, VPS72)
 
-Le Mailu du VPS72 sert aujourd'hui `DOMAIN=mediadmin.ch`
-(`HOSTNAMES=mail.mediadmin.ch`) — il ne sert pas encore `mediview.ch`. Deux
-options, **à trancher par le gérant au déploiement** :
+**État courant (2026-08-14)** : la boîte est **`suva@mediview.ch`**. L'option
+initiale `suva@mediadmin.ch` (déployée le 13.08) est morte le lendemain :
+**le domaine mediadmin.ch a expiré et a été supprimé du registre nic.ch** —
+plus aucun mail ne pouvait y être livré. Bascule effectuée :
 
-**Option A — zéro DNS (rapide)**
-Créer la boîte `suva@mediadmin.ch` directement dans l'admin Mailu (mot de
-passe fort, généré). Aucune modification DNS. Inconvénient : l'adresse ne
-porte pas le nom de MediView/mediview.ch.
+1. Domaine `mediview.ch` ajouté à Mailu (`flask mailu domain mediview.ch`)
+   - boîte `suva@mediview.ch` (`flask mailu user suva mediview.ch <mdp>` ;
+     mot de passe : `/root/mediview-suva-imap-pass.txt` sur le 72, et `.env`).
+2. DNS Hostinger de `mediview.ch` : `mail` A → 72.62.26.49, MX
+   `10 mail.mediview.ch`, SPF `TXT v=spf1 a mx ip4:72.62.26.49 ~all`.
+   (Reste à poser : DKIM `dkim._domainkey` via l'admin Mailu + DMARC.)
+3. Greylisting rspamd actif : le premier mail d'un expéditeur inconnu est
+   retardé de ~1 minute (451 « Try again later ») — les vrais MTA réessaient.
+4. Le poller exige un `Message-ID` (idempotence) — les mails de vrais clients
+   en ont toujours un.
 
-**Option B — propre (ajoute le domaine mediview.ch à Mailu)**
-
-1. Dans l'admin Mailu : ajouter le domaine `mediview.ch`.
-2. Chez Hostinger (DNS de `mediview.ch`) : ajouter un enregistrement
-   MX `mediview.ch → mail.mediadmin.ch` (priorité 10) + un enregistrement
-   SPF (`TXT` `v=spf1 mx ~all` ou fusionné avec un SPF existant sur le
-   domaine).
-3. Créer la boîte `suva@mediview.ch` dans l'admin Mailu.
-
-Dans les deux cas : noter le mot de passe (gestionnaire de secrets, jamais
-dans un `.md` versionné — cf. règle globale secrets), et vérifier la
-connexion IMAP avant d'activer le poller (`openssl s_client -connect
-mail.mediadmin.ch:993` ou un client mail de test).
+Noter le mot de passe (gestionnaire de secrets, jamais dans un `.md`
+versionné — cf. règle globale secrets), et vérifier la connexion IMAP avant
+d'activer le poller.
 
 ## 2. Variables d'environnement (`/opt/medical/mediview/.env`)
 
 À ajouter/mettre à jour :
 
 ```
-INSURER_IMAP_HOST=mail.mediadmin.ch      # ou l'IP du conteneur front Mailu
+INSURER_IMAP_HOST=mailu-imap-1           # Dovecot interne Mailu (réseau mailu_default)
 INSURER_IMAP_PORT=993
-INSURER_IMAP_USER=suva@mediadmin.ch      # ou suva@mediview.ch (option B)
+INSURER_IMAP_USER=suva@mediview.ch
 INSURER_IMAP_PASS=<mot de passe fort>
 INSURER_TRUSTED_SENDERS=institut.med.champel@gmail.com
 INSURER_AUTO_SEND_DOMAINS=suva.ch

@@ -58,9 +58,12 @@ async function startServer() {
     next();
   });
 
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  // Configure body parser with larger size limit for file uploads.
+  // 160 Mo : les grosses coupes DICOM (mammographie MG ~50 Mo/image → ~67 Mo
+  // base64, gros CT) rapatriées du PACS dépassent 50 Mo. Endpoints lourds
+  // protégés par jeton de service + rate-limit (cf. dicom.import).
+  app.use(express.json({ limit: "160mb" }));
+  app.use(express.urlencoded({ limit: "160mb", extended: true }));
 
   // Rate limiting (DoS / abuse mitigation). DICOM import is ONE request per
   // instance, so a single study (often 100s–1000s of slices) bursts many

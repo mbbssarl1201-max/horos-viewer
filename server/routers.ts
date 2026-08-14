@@ -980,9 +980,12 @@ export const appRouter = router({
           windowWidth: z.string().optional(),
           // base64 d'un fichier DICOM. Borne explicite (audit) : défense en
           // profondeur contre un DoS mémoire (buffer décodé par requête),
-          // alignée sur la limite du body-parser (~50 Mo). 60M chars base64 ≈ 45 Mo binaire.
-          fileData: z.string().min(1).max(60_000_000),
-          fileSize: z.number().int().min(0).max(60_000_000),
+          // alignée sur la limite du body-parser (160 Mo). 200M chars base64 ≈
+          // 150 Mo binaire — nécessaire pour les grosses coupes (mammographie MG
+          // ~50 Mo/image, gros CT) rapatriées du PACS ; le poste est protégé par
+          // jeton de service + rate-limit.
+          fileData: z.string().min(1).max(200_000_000),
+          fileSize: z.number().int().min(0).max(200_000_000),
         })
       )
       .mutation(async ({ input, ctx }) => {

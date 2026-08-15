@@ -690,12 +690,16 @@ export async function traiterDemande(requestId: number): Promise<void> {
     // Appariement par variante d'orthographe (repli DDN) : identité très
     // probable mais pas littérale — toujours une validation humaine, jamais
     // d'envoi automatique.
-    const motifsVariante =
-      matchP.variante === true
+    const motifsVariante = [
+      ...(matchP.variante === true
         ? [
             "Nom rapproché par variante d'orthographe (DDN identique) — vérifier l'identité",
           ]
-        : [];
+        : []),
+      ...(matchP.ddnAbsente === true
+        ? ["Dossier sans date de naissance enregistrée — vérifier l'identité"]
+        : []),
+    ];
 
     const motifs = [
       ...decision.motifs,

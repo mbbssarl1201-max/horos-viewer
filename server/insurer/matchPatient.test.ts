@@ -203,6 +203,25 @@ describe("matchPatient", () => {
     expect(r).toMatchObject({ statut: "exact", patientIds: [1, 2] });
   });
 
+  it("nom unique dont les fiches n'ont AUCUNE DDN ⇒ exact avec ddnAbsente:true (jamais d'auto)", async () => {
+    fauxPatients = [
+      { id: 4, nameSearch: cle("markovic aleksandar"), birthDate: null },
+      { id: 5, nameSearch: cle("markovic aleksandar"), birthDate: null },
+    ];
+    const r = await matchPatient({
+      nom: "Markovic",
+      prenom: "Aleksandar",
+      ddn: "25.10.2000",
+      tel: null,
+    });
+    expect(r).toMatchObject({
+      statut: "exact",
+      patientIds: [4, 5],
+      ddnAbsente: true,
+      variante: false,
+    });
+  });
+
   it("homonyme d'une AUTRE personne (DDN différente) ⇒ les fiches sans DDN ne sont PAS rattachées", async () => {
     fauxPatients = [
       { id: 1, nameSearch: cle("dupont marie"), birthDate: "19850312" },

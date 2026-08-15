@@ -137,6 +137,8 @@ export async function matchPatient(p: ExtractionDemande["patient"]): Promise<{
   patientIds: number[];
   /** Vrai si apparié par le repli DDN+variante d'orthographe (jamais d'auto). */
   variante: boolean;
+  /** Vrai si le dossier n'a AUCUNE date de naissance pour confirmer (jamais d'auto). */
+  ddnAbsente: boolean;
   candidats: number;
 }> {
   const vide = {
@@ -144,6 +146,7 @@ export async function matchPatient(p: ExtractionDemande["patient"]): Promise<{
     patientId: null,
     patientIds: [],
     variante: false,
+    ddnAbsente: false,
     candidats: 0,
   };
   const nom = (p.nom || "").trim();
@@ -200,12 +203,23 @@ export async function matchPatient(p: ExtractionDemande["patient"]): Promise<{
         patientId: ids[0],
         patientIds: ids,
         variante: false,
+        ddnAbsente: false,
         candidats: candidats.length,
       };
     }
     if (sansDdn.length && !conflits.length) {
-      // Nom trouvé mais aucune DDN en base pour confirmer → validation humaine.
-      return { ...vide, statut: "ambigu", candidats: candidats.length };
+      // Nom trouvé de façon UNIQUE mais les fiches (souvent issues du backfill
+      // PACS) n'ont pas de date de naissance enregistrée : on identifie quand
+      // même — sans aucun homonyme conflictuel, c'est la seule personne de ce
+      // nom — mais ddnAbsente force un motif et interdit l'envoi automatique.
+      return {
+        statut: "exact",
+        patientId: sansDdn[0].id,
+        patientIds: sansDdn.map(c => c.id),
+        variante: false,
+        ddnAbsente: true,
+        candidats: candidats.length,
+      };
     }
     // Sinon : homonymes d'autres personnes → repli variante ci-dessous.
   }
@@ -230,6 +244,7 @@ export async function matchPatient(p: ExtractionDemande["patient"]): Promise<{
     patientId: compatibles[0].id,
     patientIds: compatibles.map(c => c.id),
     variante: true,
+    ddnAbsente: false,
     candidats: compatibles.length,
   };
 }

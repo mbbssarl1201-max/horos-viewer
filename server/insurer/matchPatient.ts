@@ -66,12 +66,86 @@ function dateUtcMs(ymd: string | null): number | null {
  * chiffre — la DDN seule (sans nom) ou le nom seul (sans DDN) ne suffisent
  * jamais à identifier un patient de façon certaine.
  */
+/** Normalisation locale identique à celle du blind index (db.normalizeName). */
+function normaliserNom(s: string): string {
+  return s
+    .replace(/\^/g, " ")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Distance de Levenshtein bornée (suffit pour ≤2). */
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (Math.abs(m - n) > 2) return 3;
+  const dp = Array.from({ length: m + 1 }, (_, i) => i);
+  for (let j = 1; j <= n; j++) {
+    let prev = dp[0];
+    dp[0] = j;
+    for (let i = 1; i <= m; i++) {
+      const tmp = dp[i];
+      dp[i] = Math.min(
+        dp[i] + 1,
+        dp[i - 1] + 1,
+        prev + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+      prev = tmp;
+    }
+  }
+  return dp[m];
+}
+
+/**
+ * Compatibilité de noms pour le repli par DDN : chaque token de la liste la
+ * plus COURTE doit s'apparier à un token de l'autre (exact, préfixe ≥3, ou
+ * Levenshtein ≤2 sur des tokens ≥4 lettres — couvre les translittérations type
+ * « Dzuka »/« Xhuka »), avec AU MOINS un appariement exact. Les tokens
+ * surnuméraires (2ᵉ nom de famille, nom d'épouse…) sont tolérés.
+ */
+export function nomsCompatibles(a: string, b: string): boolean {
+  const ta = normaliserNom(a)
+    .split(/[\s-]+/)
+    .filter(t => t.length > 1);
+  const tb = normaliserNom(b)
+    .split(/[\s-]+/)
+    .filter(t => t.length > 1);
+  if (!ta.length || !tb.length) return false;
+  const [courts, longs] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  let exact = 0;
+  for (const t of courts) {
+    const ok = longs.some(u => {
+      if (u === t) {
+        return true;
+      }
+      if (t.length >= 3 && (u.startsWith(t) || t.startsWith(u))) return true;
+      return t.length >= 4 && u.length >= 4 && levenshtein(t, u) <= 2;
+    });
+    if (!ok) return false;
+    if (longs.includes(t)) exact++;
+  }
+  return exact >= 1;
+}
+
 export async function matchPatient(p: ExtractionDemande["patient"]): Promise<{
   statut: "exact" | "ambigu" | "aucun";
   patientId: number | null;
+  /** TOUS les dossiers (doublons PACS) de la même personne — pour matchStudies. */
+  patientIds: number[];
+  /** Vrai si apparié par le repli DDN+variante d'orthographe (jamais d'auto). */
+  variante: boolean;
   candidats: number;
 }> {
-  const vide = { statut: "aucun" as const, patientId: null, candidats: 0 };
+  const vide = {
+    statut: "aucun" as const,
+    patientId: null,
+    patientIds: [],
+    variante: false,
+    candidats: 0,
+  };
   const nom = (p.nom || "").trim();
   const prenom = (p.prenom || "").trim();
   if (!nom || !prenom) return vide;
@@ -94,35 +168,70 @@ export async function matchPatient(p: ExtractionDemande["patient"]): Promise<{
     .from(patients)
     .where(inArray(patients.nameSearch, cles))
     .limit(50);
-  if (!candidats.length) return vide;
 
   const ddn = normaliserDate(p.ddn);
-  if (!ddn) {
+  if (candidats.length && !ddn) {
     // Jamais "exact" sans DDN, même avec un seul homonyme trouvé.
-    return { statut: "ambigu", patientId: null, candidats: candidats.length };
+    return { ...vide, statut: "ambigu", candidats: candidats.length };
   }
 
-  const correspondants = candidats.filter(c => {
+  if (candidats.length && ddn) {
+    const avecDdn = candidats.map(c => ({
+      id: c.id,
+      ddn: (decryptField(c.birthDate) || "").replace(/\D/g, ""),
+    }));
+    const confirmes = avecDdn.filter(c => c.ddn === ddn);
+    const sansDdn = avecDdn.filter(c => !c.ddn);
+    const conflits = avecDdn.filter(c => c.ddn && c.ddn !== ddn);
+
+    if (confirmes.length) {
+      // Le PACS du cabinet contient beaucoup de dossiers en DOUBLE (même
+      // personne, plusieurs patientId) : même nom + même DDN = même personne,
+      // on renvoie TOUS ses dossiers pour que la recherche d'études les couvre.
+      // Les fiches homonymes SANS DDN ne sont rattachées que s'il n'existe
+      // aucun homonyme d'une AUTRE personne (DDN différente) — sinon on ne
+      // peut pas trancher à qui elles appartiennent.
+      const ids = [
+        ...confirmes.map(c => c.id),
+        ...(conflits.length ? [] : sansDdn.map(c => c.id)),
+      ];
+      return {
+        statut: "exact",
+        patientId: ids[0],
+        patientIds: ids,
+        variante: false,
+        candidats: candidats.length,
+      };
+    }
+    if (sansDdn.length && !conflits.length) {
+      // Nom trouvé mais aucune DDN en base pour confirmer → validation humaine.
+      return { ...vide, statut: "ambigu", candidats: candidats.length };
+    }
+    // Sinon : homonymes d'autres personnes → repli variante ci-dessous.
+  }
+
+  // REPLI variantes d'orthographe : la feuille SUVA et le PACS écrivent parfois
+  // le même patient différemment (« Dzuka »/« Xhuka », nom d'épouse ajouté,
+  // ordre inversé…). Exigences STRICTES pour ne jamais prendre le mauvais
+  // patient : DDN exacte obligatoire + noms compatibles (cf. nomsCompatibles).
+  // Coût : un scan déchiffré (~7k dossiers), uniquement quand l'index échoue.
+  if (!ddn) return vide;
+  const tous = await db.select().from(patients).limit(20000);
+  const feuille = `${prenom} ${nom}`;
+  const compatibles = tous.filter(c => {
     const b = (decryptField(c.birthDate) || "").replace(/\D/g, "");
-    return b === ddn;
+    if (b !== ddn) return false;
+    const nomDossier = decryptField(c.patientName) || "";
+    return nomsCompatibles(feuille, nomDossier);
   });
-
-  if (correspondants.length === 1) {
-    return {
-      statut: "exact",
-      patientId: correspondants[0].id,
-      candidats: candidats.length,
-    };
-  }
-  if (correspondants.length > 1) {
-    return {
-      statut: "ambigu",
-      patientId: null,
-      candidats: correspondants.length,
-    };
-  }
-  // Homonyme(s) trouvé(s) mais aucun ne concorde par DDN.
-  return { statut: "aucun", patientId: null, candidats: candidats.length };
+  if (!compatibles.length) return { ...vide, candidats: candidats.length };
+  return {
+    statut: "exact",
+    patientId: compatibles[0].id,
+    patientIds: compatibles.map(c => c.id),
+    variante: true,
+    candidats: compatibles.length,
+  };
 }
 
 /**
@@ -131,7 +240,9 @@ export async function matchPatient(p: ExtractionDemande["patient"]): Promise<{
  * étude), même `studyDate` exacte sinon à ±7 jours (`dateExacte: false`).
  */
 export async function matchStudies(
-  patientId: number,
+  // Un numéro seul (compat) ou TOUS les dossiers d'une même personne
+  // (doublons PACS, cf. matchPatient.patientIds).
+  patientId: number | number[],
   exams: ExtractionDemande["exams"]
 ): Promise<{
   tousTrouves: boolean;
@@ -154,11 +265,14 @@ export async function matchStudies(
     };
   }
 
-  const etudes = await db
-    .select()
-    .from(studies)
-    .where(eq(studies.patientId, patientId))
-    .limit(500);
+  const ids = Array.isArray(patientId) ? patientId : [patientId];
+  const etudes = ids.length
+    ? await db
+        .select()
+        .from(studies)
+        .where(inArray(studies.patientId, ids))
+        .limit(500)
+    : [];
 
   const parExamen = exams.map(exam => {
     const modalite = (exam.modalite || "").trim().toUpperCase();

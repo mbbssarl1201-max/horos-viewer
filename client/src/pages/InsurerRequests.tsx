@@ -253,6 +253,7 @@ export default function InsurerRequests() {
   const tokens = detail.data?.tokens ?? [];
   const mailPreview = detail.data?.mailPreview;
   const etudes = detail.data?.etudes ?? [];
+  const pieces = detail.data?.pieces ?? [];
   const extraction = (request?.extraction ?? null) as {
     patient?: {
       nom: string | null;
@@ -435,6 +436,43 @@ export default function InsurerRequests() {
                       {request.motifValidation}
                     </div>
                   </details>
+                )}
+
+                {/* Document reçu de la SUVA : la feuille scannée telle quelle,
+                    pour confirmer l'extraction d'un coup d'œil. */}
+                {pieces.length > 0 && (
+                  <section className="space-y-2">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5" />
+                      Document reçu (feuille SUVA)
+                    </h3>
+                    <div className="rounded border border-border p-2 space-y-2">
+                      {pieces
+                        .filter((p: any) => p.ext !== "pdf")
+                        .map((p: any) => (
+                          <img
+                            key={p.idx}
+                            src={`/api/insurer/piece/${request.id}/${p.idx}`}
+                            alt={`Page ${p.idx + 1} du document reçu`}
+                            className="w-full rounded border border-border bg-white"
+                            loading="lazy"
+                          />
+                        ))}
+                      {pieces
+                        .filter((p: any) => p.ext === "pdf")
+                        .map((p: any) => (
+                          <a
+                            key={p.idx}
+                            href={`/api/insurer/piece/${request.id}/${p.idx}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-block rounded border border-border px-2 py-1 text-xs hover:bg-muted"
+                          >
+                            📄 Ouvrir le PDF original
+                          </a>
+                        ))}
+                    </div>
+                  </section>
                 )}
 
                 {/* Extraction */}

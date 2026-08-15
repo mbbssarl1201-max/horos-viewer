@@ -610,7 +610,14 @@ export async function traiterDemande(requestId: number): Promise<void> {
     const matchP = await matchPatient(extraction.patient);
     const matchS =
       matchP.statut === "exact" && matchP.patientId
-        ? await matchStudies(matchP.patientId, extraction.exams)
+        ? await matchStudies(
+            // Tous les dossiers de la même personne (doublons PACS) : les
+            // études peuvent être réparties entre eux.
+            (matchP.patientIds ?? []).length
+              ? matchP.patientIds
+              : matchP.patientId,
+            extraction.exams
+          )
         : { tousTrouves: false, datesExactes: false, parExamen: [] };
     const studyIds = matchS.parExamen.flatMap(e => e.studyIds);
 
@@ -680,11 +687,22 @@ export async function traiterDemande(requestId: number): Promise<void> {
         ? [MOTIF_IMAGES_A_RAPATRIER]
         : [];
 
+    // Appariement par variante d'orthographe (repli DDN) : identité très
+    // probable mais pas littérale — toujours une validation humaine, jamais
+    // d'envoi automatique.
+    const motifsVariante =
+      matchP.variante === true
+        ? [
+            "Nom rapproché par variante d'orthographe (DDN identique) — vérifier l'identité",
+          ]
+        : [];
+
     const motifs = [
       ...decision.motifs,
       ...motifsPieces,
       ...motifsAdresse,
       ...motifsImages,
+      ...motifsVariante,
     ];
     // Garde dure : tout motif posé au stockage des PJ (PDF scanné, PJ trop
     // volumineuse, image non exploitable…), une adresse de réponse invalide
@@ -694,7 +712,8 @@ export async function traiterDemande(requestId: number): Promise<void> {
       decision.auto &&
       motifsPieces.length === 0 &&
       motifsAdresse.length === 0 &&
-      motifsImages.length === 0;
+      motifsImages.length === 0 &&
+      motifsVariante.length === 0;
 
     await db
       .update(insurerRequests)

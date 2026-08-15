@@ -759,6 +759,69 @@ async function startServer() {
     }
   });
 
+  // Pièce jointe d'une demande assureur (feuille SUVA scannée…) : le gérant
+  // doit pouvoir VOIR le document reçu pour confirmer l'extraction avant
+  // d'envoyer. Session clinique obligatoire ; la clé est bornée aux
+  // attachmentKeys de LA demande (pas de traversée arbitraire de MinIO).
+  app.get("/api/insurer/piece/:requestId/:idx", async (req, res) => {
+    try {
+      const { sdk } = await import("./sdk");
+      const { hasMedicalAccess } = await import("../rbac");
+      let user;
+      try {
+        user = await sdk.authenticateRequest(req as any);
+      } catch {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      if (!hasMedicalAccess(user)) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      const requestId = parseInt(req.params.requestId);
+      const idx = parseInt(req.params.idx);
+      if (Number.isNaN(requestId) || Number.isNaN(idx) || idx < 0) {
+        res.status(400).json({ error: "Bad request" });
+        return;
+      }
+      const { getDb } = await import("../db");
+      const { insurerRequests } = await import("../../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      const db = await getDb();
+      if (!db) {
+        res.status(500).json({ error: "DB" });
+        return;
+      }
+      const rows = await db
+        .select({ attachmentKeys: insurerRequests.attachmentKeys })
+        .from(insurerRequests)
+        .where(eq(insurerRequests.id, requestId))
+        .limit(1);
+      const keys = (rows[0]?.attachmentKeys as string[] | null) ?? [];
+      const key = keys[idx];
+      if (!key) {
+        res.status(404).json({ error: "Not found" });
+        return;
+      }
+      const { storageGetBuffer } = await import("../storage");
+      const buf = await storageGetBuffer(key);
+      const ext = key.split(".").pop()?.toLowerCase() ?? "";
+      const mime =
+        ext === "png"
+          ? "image/png"
+          : ext === "jpg" || ext === "jpeg"
+            ? "image/jpeg"
+            : ext === "pdf"
+              ? "application/pdf"
+              : "application/octet-stream";
+      res.setHeader("Content-Type", mime);
+      res.setHeader("Cache-Control", "private, max-age=300");
+      res.send(buf);
+    } catch {
+      if (!res.headersSent) res.status(500).json({ error: "Erreur" });
+    }
+  });
+
   // ── INTÉGRATION MEDICENTRAL (service-to-service, réseau interne medical-net) ──
   // MediCentral appelle ces routes avec le token partagé MEDICENTRAL_SERVICE_TOKEN
   // pour afficher les études + comptes-rendus d'un patient dans SON dossier. OFF

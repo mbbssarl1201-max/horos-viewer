@@ -3252,7 +3252,16 @@ export const appRouter = router({
           studyIds,
           etudesSansImages: etudes.some(e => e.numberOfInstances === 0),
         });
-        return { request, tokens, mailPreview, etudes, verdict };
+        // Pièces reçues (feuille SUVA scannée…) affichables par
+        // /api/insurer/piece/:requestId/:idx — pages PNG d'abord (lisibles en
+        // ligne), PDF originaux ensuite.
+        const pieces = ((request.attachmentKeys as string[] | null) ?? [])
+          .map((k, idx) => {
+            const ext = k.split(".").pop()?.toLowerCase() ?? "";
+            return { idx, ext };
+          })
+          .filter(p => ["png", "jpg", "jpeg", "pdf"].includes(p.ext));
+        return { request, tokens, mailPreview, etudes, verdict, pieces };
       }),
 
     // Valide et envoie la réponse (colis DICOM+CR) — délègue à `envoyerReponse`

@@ -69,12 +69,19 @@ function fakeDb() {
                 fauxPatients.filter(p => cles.includes(p.nameSearch))
               );
             }
-            const pid = dernierEq?.value;
+            // studies : filtrage par patientId — eq (un seul) ou inArray
+            // (tous les dossiers d'une même personne).
+            const ids = dernierInArray?.values ?? [dernierEq?.value];
             return Promise.resolve(
-              fauxStudies.filter(s => s.patientId === pid)
+              fauxStudies.filter(s => ids.includes(s.patientId))
             );
           },
         }),
+        // Scan complet (repli variantes de matchPatient) : from().limit() sans where.
+        limit: (_n: any) => {
+          if (table === patients) return Promise.resolve(fauxPatients);
+          return Promise.resolve(fauxStudies);
+        },
       }),
     }),
   };
@@ -164,7 +171,7 @@ describe("matchPatient", () => {
     expect(r).toMatchObject({ statut: "exact", patientId: 1 });
   });
 
-  it("2 patients même nom+DDN ⇒ ambigu", async () => {
+  it("2 dossiers même nom+DDN = MÊME personne (doublons PACS) ⇒ exact, tous les ids", async () => {
     fauxPatients = [
       { id: 1, nameSearch: cle("dupont marie"), birthDate: "19850312" },
       { id: 2, nameSearch: cle("dupont marie"), birthDate: "19850312" },
@@ -175,7 +182,102 @@ describe("matchPatient", () => {
       ddn: "12.03.1985",
       tel: null,
     });
-    expect(r).toMatchObject({ statut: "ambigu", patientId: null });
+    expect(r).toMatchObject({
+      statut: "exact",
+      patientIds: [1, 2],
+      variante: false,
+    });
+  });
+
+  it("doublon homonyme SANS DDN rattaché à la personne confirmée (aucun conflit)", async () => {
+    fauxPatients = [
+      { id: 1, nameSearch: cle("dupont marie"), birthDate: "19850312" },
+      { id: 2, nameSearch: cle("dupont marie"), birthDate: null },
+    ];
+    const r = await matchPatient({
+      nom: "Dupont",
+      prenom: "Marie",
+      ddn: "12.03.1985",
+      tel: null,
+    });
+    expect(r).toMatchObject({ statut: "exact", patientIds: [1, 2] });
+  });
+
+  it("homonyme d'une AUTRE personne (DDN différente) ⇒ les fiches sans DDN ne sont PAS rattachées", async () => {
+    fauxPatients = [
+      { id: 1, nameSearch: cle("dupont marie"), birthDate: "19850312" },
+      { id: 2, nameSearch: cle("dupont marie"), birthDate: null },
+      { id: 3, nameSearch: cle("dupont marie"), birthDate: "19900101" },
+    ];
+    const r = await matchPatient({
+      nom: "Dupont",
+      prenom: "Marie",
+      ddn: "12.03.1985",
+      tel: null,
+    });
+    expect(r).toMatchObject({ statut: "exact", patientIds: [1] });
+  });
+
+  it("variante d'orthographe (Dzuka/Xhuka) + DDN exacte ⇒ exact via repli, variante:true", async () => {
+    fauxPatients = [
+      {
+        id: 7,
+        nameSearch: cle("xhuka bekim"),
+        patientName: "XHUKA^BEKIM",
+        birthDate: "19860830",
+      },
+    ];
+    const r = await matchPatient({
+      nom: "Dzuka",
+      prenom: "Bekim",
+      ddn: "30.08.1986",
+      tel: null,
+    });
+    expect(r).toMatchObject({
+      statut: "exact",
+      patientIds: [7],
+      variante: true,
+    });
+  });
+
+  it("repli : nom d'épouse surnuméraire toléré (Kopácová Jahiri vs Kopacova) + DDN exacte", async () => {
+    fauxPatients = [
+      {
+        id: 8,
+        nameSearch: cle("kopacova marcela"),
+        patientName: "KOPACOVA^MARCELA",
+        birthDate: "19790926",
+      },
+    ];
+    const r = await matchPatient({
+      nom: "Kopácová Jahiri",
+      prenom: "Marcela",
+      ddn: "26.09.1979",
+      tel: null,
+    });
+    expect(r).toMatchObject({
+      statut: "exact",
+      patientIds: [8],
+      variante: true,
+    });
+  });
+
+  it("repli : même DDN mais nom SANS rapport ⇒ aucun (jamais la DDN seule)", async () => {
+    fauxPatients = [
+      {
+        id: 9,
+        nameSearch: cle("ros maxime"),
+        patientName: "ROS^MAXIME JOSE",
+        birthDate: "19930523",
+      },
+    ];
+    const r = await matchPatient({
+      nom: "Qarri",
+      prenom: "Egzona",
+      ddn: "23.05.1993",
+      tel: null,
+    });
+    expect(r).toMatchObject({ statut: "aucun", patientId: null });
   });
 
   it("sans DDN, jamais exact même si patient unique", async () => {
@@ -201,7 +303,7 @@ describe("matchPatient", () => {
       ddn: "01.01.2000",
       tel: null,
     });
-    expect(r).toEqual({ statut: "aucun", patientId: null, candidats: 1 });
+    expect(r).toMatchObject({ statut: "aucun", patientId: null });
   });
 
   it("aucune correspondance de nom ⇒ aucun (le faux drizzle filtre réellement, ne renvoie pas l'homonyme non demandé)", async () => {

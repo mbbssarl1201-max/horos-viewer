@@ -1,7 +1,8 @@
 import { eq, inArray } from "drizzle-orm";
 import { getDb, nameSearchKey } from "../db";
 import { decryptField } from "../_core/crypto";
-import { patients, studies } from "../../drizzle/schema";
+import { patients, studies, series } from "../../drizzle/schema";
+import { filtrerParAnatomie } from "./anatomie";
 import type { ExtractionDemande } from "./types";
 
 const JOUR_MS = 86_400_000;
@@ -322,9 +323,50 @@ export async function matchStudies(
     return { exam, studyIds: proches.map(e => e.id), dateExacte: false };
   });
 
+  // Filtre ANATOMIQUE : l'assureur demande un examen précis (« CT pied /
+  // chevilles ») — un CT abdomen fait la même semaine ne doit JAMAIS être
+  // retenu à sa place. On confronte la description demandée aux libellés
+  // réels (studyDescription + séries + bodyPart) de chaque candidate.
+  const idsCandidats = Array.from(new Set(parExamen.flatMap(e => e.studyIds)));
+  if (idsCandidats.length) {
+    const seriesRows = await db
+      .select()
+      .from(series)
+      .where(inArray(series.studyId, idsCandidats))
+      .limit(2000);
+    const libellesParEtude = new Map<number, string>();
+    for (const e of etudes) {
+      if (idsCandidats.includes(e.id)) {
+        libellesParEtude.set(e.id, e.studyDescription || "");
+      }
+    }
+    for (const s of seriesRows) {
+      const sid = (s as any).studyId as number;
+      const morceaux = [(s as any).seriesDescription, (s as any).bodyPart]
+        .filter(Boolean)
+        .join(" ");
+      if (morceaux) {
+        libellesParEtude.set(
+          sid,
+          `${libellesParEtude.get(sid) || ""} ${morceaux}`
+        );
+      }
+    }
+    for (const e of parExamen) {
+      if (!e.studyIds.length) continue;
+      e.studyIds = filtrerParAnatomie(
+        e.exam.description || "",
+        e.studyIds.map(id => ({
+          studyId: id,
+          libelles: libellesParEtude.get(id) || "",
+        }))
+      );
+    }
+  }
+
   return {
     tousTrouves: parExamen.every(e => e.studyIds.length > 0),
-    datesExactes: parExamen.every(e => e.dateExacte),
+    datesExactes: parExamen.every(e => e.dateExacte && e.studyIds.length > 0),
     parExamen,
   };
 }

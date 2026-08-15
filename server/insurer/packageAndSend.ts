@@ -187,7 +187,12 @@ export function buildMailReponse(args: {
  */
 export async function envoyerReponse(
   requestId: number,
-  opts: { valideParUserId?: number }
+  opts: {
+    valideParUserId?: number;
+    /** Références curaMED des CR à joindre (déjà validées par l'appelant :
+     *  membres de la liste calculée par `chercherCrCuramed` pour CE patient). */
+    crCuramedRefs?: string[];
+  }
 ): Promise<{ success: boolean; error?: string }> {
   const db = await getDb();
   if (!db) return { success: false, error: "Base de données indisponible" };
@@ -259,6 +264,61 @@ export async function envoyerReponse(
     const lien = `${base}/dl/${tokenClair}`;
 
     const crAttachments = await buildCrAttachments(studyIds);
+
+    // CR curaMED (rapport écrit du radiologue, stock local monté RO) : joints
+    // au mail quand l'appelant (validation gérant) a confirmé les références.
+    // Un échec de lecture n'empêche jamais l'envoi (mail part sans ce CR).
+    if (opts.crCuramedRefs?.length) {
+      try {
+        const { chercherCrCuramed, lireCrPdf } = await import("./curamedCr");
+        const premierStudy = studyIds.length
+          ? await getStudyById(studyIds[0])
+          : undefined;
+        if (premierStudy?.patientName) {
+          const [nomA, ...resteA] = premierStudy.patientName
+            .replace(/\^/g, " ")
+            .split(/\s+/);
+          const candidats = await chercherCrCuramed({
+            nom: nomA || "",
+            prenom: resteA.join(" "),
+            ddnDigits: (premierStudy.birthDate || "").replace(/\D/g, ""),
+            examDatesYmd: studyIds.length
+              ? Array.from(
+                  new Set(
+                    (
+                      await Promise.all(
+                        studyIds.map(
+                          async id => (await getStudyById(id))?.studyDate
+                        )
+                      )
+                    ).filter((d): d is string => !!d)
+                  )
+                )
+              : [],
+            descriptionDemande: (extraction?.exams ?? [])
+              .map(e => e.description || "")
+              .join(" "),
+          });
+          for (const ref of opts.crCuramedRefs) {
+            const c = candidats.find(x => x.reference === ref);
+            if (!c) continue; // référence hors des candidats calculés : ignorée
+            try {
+              const pdf = await lireCrPdf(c.chemin);
+              crAttachments.push({
+                filename: `Rapport-${c.date || ref}.pdf`,
+                content: pdf,
+                contentType: "application/pdf",
+              });
+            } catch {
+              /* CR illisible : on continue sans lui */
+            }
+          }
+        }
+      } catch {
+        /* stock curaMED indisponible : mail sans CR curaMED */
+      }
+    }
+
     const totalCrOctets = crAttachments.reduce(
       (s, a) => s + a.content.length,
       0

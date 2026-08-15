@@ -3283,7 +3283,52 @@ export const appRouter = router({
             return { idx, ext };
           })
           .filter(p => ["png", "jpg", "jpeg", "pdf"].includes(p.ext));
-        return { request, tokens, mailPreview, etudes, verdict, pieces };
+
+        // Rapport(s) curaMED du patient pour ces examens (stock local RO) :
+        // proposés au gérant, joints au mail à la validation s'il les coche.
+        let crCuramed: { titre: string; date: string; reference: string }[] =
+          [];
+        if (etudes.length && etudes[0].patientName) {
+          try {
+            const { chercherCrCuramed } = await import("./insurer/curamedCr");
+            const [nomA, ...resteA] = etudes[0].patientName
+              .replace(/\^/g, " ")
+              .split(/\s+/);
+            const exDetail = request.extraction as {
+              exams?: { description?: string | null }[];
+            } | null;
+            crCuramed = (
+              await chercherCrCuramed({
+                nom: nomA || "",
+                prenom: resteA.join(" "),
+                ddnDigits: (etudes[0].birthDate || "").replace(/\D/g, ""),
+                examDatesYmd: Array.from(
+                  new Set(
+                    etudes.map(e => e.studyDate).filter((d): d is string => !!d)
+                  )
+                ),
+                descriptionDemande: (exDetail?.exams ?? [])
+                  .map(e => e.description || "")
+                  .join(" "),
+              })
+            ).map(c => ({
+              titre: c.titre,
+              date: c.date,
+              reference: c.reference,
+            }));
+          } catch {
+            /* stock curaMED indisponible : liste vide */
+          }
+        }
+        return {
+          request,
+          tokens,
+          mailPreview,
+          etudes,
+          verdict,
+          pieces,
+          crCuramed,
+        };
       }),
 
     // Valide et envoie la réponse (colis DICOM+CR) — délègue à `envoyerReponse`
@@ -3298,6 +3343,9 @@ export const appRouter = router({
           // études matchées). Absent = toutes. Ne jamais divulguer à
           // l'assureur plus que ce qu'il demande (minimisation nLPD).
           studyIds: z.array(z.number().int()).min(1).optional(),
+          // Rapport(s) curaMED cochés par le gérant : re-validés côté serveur
+          // (membres des candidats recalculés) avant d'être joints au mail.
+          crCuramedRefs: z.array(z.string().min(1).max(64)).max(5).optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -3342,6 +3390,7 @@ export const appRouter = router({
         }
         const result = await envoyerReponse(input.id, {
           valideParUserId: ctx.user.id,
+          crCuramedRefs: input.crCuramedRefs,
         });
         await recordAccess({
           userId: ctx.user.id,

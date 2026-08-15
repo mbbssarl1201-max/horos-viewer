@@ -256,6 +256,9 @@ export default function InsurerRequests() {
   const mailPreview = detail.data?.mailPreview;
   const etudes = detail.data?.etudes ?? [];
   const pieces = detail.data?.pieces ?? [];
+  const crCuramed = detail.data?.crCuramed ?? [];
+  // Rapport(s) curaMED cochés (par défaut : le mieux classé).
+  const [crCoches, setCrCoches] = useState<Set<string>>(new Set());
 
   // À chaque nouvelle demande affichée : pré-cocher tous les examens matchés
   // qui ont des images (le gérant décoche ceux qui ne correspondent pas).
@@ -267,6 +270,8 @@ export default function InsurerRequests() {
           .map((e: any) => e.studyId)
       )
     );
+    const cr = detail.data?.crCuramed ?? [];
+    setCrCoches(new Set(cr.length ? [cr[0].reference] : []));
   }, [detail.data?.request?.id, detail.data?.etudes?.length]);
   const extraction = (request?.extraction ?? null) as {
     patient?: {
@@ -656,6 +661,51 @@ export default function InsurerRequests() {
                   </div>
                 </section>
 
+                {/* Rapport(s) écrits trouvés dans le stock curaMED : cochés =
+                    joints au mail SUVA en PDF à la validation. */}
+                {crCuramed.length > 0 && (
+                  <section className="space-y-2">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5" />
+                      Rapport écrit (curaMED)
+                    </h3>
+                    <div className="rounded border border-border p-3 space-y-1.5 text-xs">
+                      {crCuramed.map((c: any) => (
+                        <label
+                          key={c.reference}
+                          className="flex items-center gap-2 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            className="accent-primary"
+                            checked={crCoches.has(c.reference)}
+                            onChange={ev => {
+                              setCrCoches(prev => {
+                                const n = new Set(prev);
+                                if (ev.target.checked) n.add(c.reference);
+                                else n.delete(c.reference);
+                                return n;
+                              });
+                            }}
+                          />
+                          <span>
+                            📄 {c.titre}
+                            {c.date ? (
+                              <span className="text-muted-foreground">
+                                {" "}
+                                — {formatDicomDate(c.date)}
+                              </span>
+                            ) : null}
+                          </span>
+                        </label>
+                      ))}
+                      <div className="text-[11px] text-muted-foreground">
+                        Coché = joint au mail en PDF avec les images.
+                      </div>
+                    </div>
+                  </section>
+                )}
+
                 {/* Aperçu du mail */}
                 <section className="space-y-2">
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
@@ -733,6 +783,9 @@ export default function InsurerRequests() {
                             id: request.id,
                             ...(etudes.length > 0
                               ? { studyIds: Array.from(etudesCochees) }
+                              : {}),
+                            ...(crCoches.size > 0
+                              ? { crCuramedRefs: Array.from(crCoches) }
                               : {}),
                           });
                         }

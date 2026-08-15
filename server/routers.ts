@@ -3229,19 +3229,41 @@ export const appRouter = router({
         // dossier retrouvé avec celui écrit sur la feuille SUVA (garde anti-
         // mauvais dossier) et d'ouvrir chaque étude dans le viewer pour
         // contrôler AVANT d'envoyer.
-        const { getStudyById } = await import("./db");
+        const { getStudyById, listSeriesByStudy } = await import("./db");
         const studyIds = (request.studyIds as number[] | null) ?? [];
         const etudes = [];
         for (const sid of studyIds) {
           const s = await getStudyById(sid);
           if (!s) continue;
+          // Description lisible de l'examen : les fiches backfillées n'ont pas
+          // de studyDescription — on la reconstruit depuis les SÉRIES des
+          // images rapatriées (« Scano cheville », « Thorax natif »…), pour que
+          // le gérant reconnaisse le bon examen sans ouvrir le viewer.
+          let seriesResume = "";
+          try {
+            const series = await listSeriesByStudy(sid);
+            const libelles = Array.from(
+              new Set(
+                series
+                  .map(x =>
+                    ((x as any).seriesDescription || (x as any).bodyPart || "")
+                      .toString()
+                      .trim()
+                  )
+                  .filter(Boolean)
+              )
+            );
+            seriesResume = libelles.slice(0, 3).join(" · ");
+          } catch {
+            /* résumé indisponible : champ vide, pas bloquant */
+          }
           etudes.push({
             studyId: s.id,
             patientName: s.patientName,
             birthDate: s.birthDate,
             studyDate: s.studyDate,
             modality: s.modality,
-            studyDescription: s.studyDescription,
+            studyDescription: s.studyDescription || seriesResume || null,
             numberOfInstances: s.numberOfInstances ?? 0,
           });
         }
@@ -3269,7 +3291,15 @@ export const appRouter = router({
     // (envoyee/rejetee) ou pas encore extraits (recue/extraite/identifiee) :
     // seuls a_valider / prete / erreur sont validables.
     approve: medicalProcedure
-      .input(z.object({ id: z.number().int() }))
+      .input(
+        z.object({
+          id: z.number().int(),
+          // Sélection du gérant : n'envoyer QUE ces études (sous-ensemble des
+          // études matchées). Absent = toutes. Ne jamais divulguer à
+          // l'assureur plus que ce qu'il demande (minimisation nLPD).
+          studyIds: z.array(z.number().int()).min(1).optional(),
+        })
+      )
       .mutation(async ({ input, ctx }) => {
         const { getDb } = await import("./db");
         const { insurerRequests } = await import("../drizzle/schema");
@@ -3289,6 +3319,26 @@ export const appRouter = router({
             code: "BAD_REQUEST",
             message: `Statut '${request.statut}' non validable (attendu : ${STATUTS_VALIDABLES.join(", ")}).`,
           });
+        }
+        if (input.studyIds) {
+          const actuels = new Set(
+            ((request.studyIds as number[] | null) ?? []).map(Number)
+          );
+          const invalides = input.studyIds.filter(s => !actuels.has(s));
+          if (invalides.length) {
+            // Strictement un SOUS-ENSEMBLE des études déjà matchées : on ne
+            // peut pas glisser une étude arbitraire dans un colis assureur.
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Étude(s) hors demande : ${invalides.join(", ")}`,
+            });
+          }
+          // Persisté AVANT l'envoi : le colis (envoyerReponse → construireColis)
+          // lit row.studyIds, et l'audit reflète ce qui est réellement parti.
+          await db
+            .update(insurerRequests)
+            .set({ studyIds: input.studyIds })
+            .where(eq(insurerRequests.id, input.id));
         }
         const result = await envoyerReponse(input.id, {
           valideParUserId: ctx.user.id,

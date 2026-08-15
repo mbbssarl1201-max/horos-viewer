@@ -217,6 +217,24 @@ describe("insurer.approve", () => {
     });
   });
 
+  it("sélection d'études : un id HORS de la demande ⇒ BAD_REQUEST, rien n'est envoyé", async () => {
+    const caller = appRouter.createCaller(medicalCtx());
+    await expect(
+      caller.insurer.approve({ id: 1, studyIds: [10, 999] })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(mocks.envoyerReponse).not.toHaveBeenCalled();
+  });
+
+  it("sélection d'études : sous-ensemble valide ⇒ persisté avant l'envoi", async () => {
+    fauxRequests[0].studyIds = [10, 11, 12];
+    mocks.envoyerReponse.mockResolvedValue({ success: true });
+    const caller = appRouter.createCaller(medicalCtx());
+    const res = await caller.insurer.approve({ id: 1, studyIds: [11] });
+    expect(res).toEqual({ success: true });
+    // Le colis (envoyerReponse → row.studyIds) ne contiendra QUE la sélection.
+    expect(fauxRequests[0].studyIds).toEqual([11]);
+  });
+
   it("refuse un utilisateur non médical (FORBIDDEN)", async () => {
     const caller = appRouter.createCaller(ctxWithRole("user"));
     await expect(caller.insurer.approve({ id: 1 })).rejects.toMatchObject({

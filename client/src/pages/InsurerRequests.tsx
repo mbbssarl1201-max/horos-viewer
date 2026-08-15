@@ -4,7 +4,7 @@
 // demandes d'imagerie reçues par mail (Task 8), validation 1 clic. Accès
 // clinique uniquement (insurer.* = medicalProcedure) : la liste et le détail
 // exposent des PHI (identité patient, examens, adresse de réponse).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -166,6 +166,8 @@ export default function InsurerRequests() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [rejectMotif, setRejectMotif] = useState("");
   const [showRejectForm, setShowRejectForm] = useState(false);
+  // Examens cochés pour l'envoi (par défaut : tous ceux qui ont des images).
+  const [etudesCochees, setEtudesCochees] = useState<Set<number>>(new Set());
 
   const hasMedicalAccess =
     user?.role === "admin" ||
@@ -254,6 +256,18 @@ export default function InsurerRequests() {
   const mailPreview = detail.data?.mailPreview;
   const etudes = detail.data?.etudes ?? [];
   const pieces = detail.data?.pieces ?? [];
+
+  // À chaque nouvelle demande affichée : pré-cocher tous les examens matchés
+  // qui ont des images (le gérant décoche ceux qui ne correspondent pas).
+  useEffect(() => {
+    setEtudesCochees(
+      new Set(
+        (detail.data?.etudes ?? [])
+          .filter((e: any) => e.numberOfInstances > 0)
+          .map((e: any) => e.studyId)
+      )
+    );
+  }, [detail.data?.request?.id, detail.data?.etudes?.length]);
   const extraction = (request?.extraction ?? null) as {
     patient?: {
       nom: string | null;
@@ -591,17 +605,42 @@ export default function InsurerRequests() {
                             key={e.studyId}
                             className="flex items-center justify-between gap-2 border-t border-border pt-1.5"
                           >
-                            <span>
-                              {e.modality || "?"} —{" "}
-                              {formatDicomDate(e.studyDate)} —{" "}
-                              {e.numberOfInstances > 0 ? (
-                                `${e.numberOfInstances} image(s)`
-                              ) : (
-                                <span className="text-amber-600 dark:text-amber-500">
-                                  images en cours de rapatriement
-                                </span>
-                              )}
-                            </span>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              {/* Cocher = inclure dans l'envoi à l'assureur.
+                                  Ne jamais envoyer plus que demandé. */}
+                              <input
+                                type="checkbox"
+                                className="accent-primary"
+                                disabled={e.numberOfInstances === 0}
+                                checked={etudesCochees.has(e.studyId)}
+                                onChange={ev => {
+                                  setEtudesCochees(prev => {
+                                    const n = new Set(prev);
+                                    if (ev.target.checked) n.add(e.studyId);
+                                    else n.delete(e.studyId);
+                                    return n;
+                                  });
+                                }}
+                              />
+                              <span>
+                                {e.modality || "?"} —{" "}
+                                {formatDicomDate(e.studyDate)}
+                                {e.studyDescription ? (
+                                  <span className="text-muted-foreground">
+                                    {" "}
+                                    — {e.studyDescription}
+                                  </span>
+                                ) : null}{" "}
+                                —{" "}
+                                {e.numberOfInstances > 0 ? (
+                                  `${e.numberOfInstances} image(s)`
+                                ) : (
+                                  <span className="text-amber-600 dark:text-amber-500">
+                                    images en cours de rapatriement
+                                  </span>
+                                )}
+                              </span>
+                            </label>
                             <a
                               href={`/viewer/${e.studyId}`}
                               target="_blank"
@@ -678,14 +717,24 @@ export default function InsurerRequests() {
                   <div className="flex flex-wrap gap-2">
                     <Button
                       size="sm"
-                      disabled={!peutValider || approve.isPending}
+                      disabled={
+                        !peutValider ||
+                        approve.isPending ||
+                        (etudes.length > 0 && etudesCochees.size === 0)
+                      }
                       onClick={() => {
+                        const n = etudesCochees.size;
                         if (
                           window.confirm(
-                            `Valider et envoyer la réponse (colis DICOM + CR) à ${request.expediteur} ?`
+                            `Envoyer ${n} examen(s) coché(s) (colis DICOM + CR) à la SUVA ?`
                           )
                         ) {
-                          approve.mutate({ id: request.id });
+                          approve.mutate({
+                            id: request.id,
+                            ...(etudes.length > 0
+                              ? { studyIds: Array.from(etudesCochees) }
+                              : {}),
+                          });
                         }
                       }}
                       className="gap-1.5"

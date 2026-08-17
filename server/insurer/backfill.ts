@@ -40,6 +40,10 @@ export type EtudeMinimale = {
 export type EtudeARapatrier = {
   studyInstanceUid: string;
   accessionNumber: string | null;
+  /** Nombre d'images DÉJÀ présentes localement. La passerelle compare au PACS
+   *  (C-FIND) et ne tire que si le PACS en a davantage → reprise automatique
+   *  d'une étude partiellement rapatriée (C-GET interrompu sur Wi-Fi). */
+  nbImagesLocal: number;
 };
 
 // Motif posé sur une demande dont au moins une étude trouvée est encore une
@@ -91,13 +95,16 @@ export function selectionnerEtudesARapatrier(
       if (vus.has(studyId)) continue;
       vus.add(studyId);
       const etude = etudesParId.get(studyId);
-      // Étude inconnue (fiche pas encore poussée) ou déjà pourvue d'images :
-      // rien à rapatrier.
+      // Étude inconnue (fiche pas encore poussée) : rien à tirer pour l'instant.
+      // On renvoie AUSSI les études déjà pourvues d'images, avec leur compte
+      // local : la passerelle compare au PACS et ne re-tire que si celui-ci en
+      // a plus (reprise d'un rapatriement interrompu). Une étude complète est
+      // donc renvoyée mais la passerelle la sautera après un simple C-FIND.
       if (!etude) continue;
-      if ((etude.numberOfInstances ?? 0) > 0) continue;
       resultat.push({
         studyInstanceUid: etude.studyInstanceUid,
         accessionNumber: etude.accessionNumber,
+        nbImagesLocal: etude.numberOfInstances ?? 0,
       });
       if (resultat.length >= limite) return resultat;
     }

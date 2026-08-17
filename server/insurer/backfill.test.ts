@@ -25,11 +25,13 @@ describe("selectionnerEtudesARapatrier", () => {
       numberOfInstances: 0,
     });
     expect(selectionnerEtudesARapatrier(demandes, etudes, ESPACE_OK)).toEqual([
-      { studyInstanceUid: "1.2.3", accessionNumber: "ACC-1" },
+      { studyInstanceUid: "1.2.3", accessionNumber: "ACC-1", nbImagesLocal: 0 },
     ]);
   });
 
-  it("ignore une étude qui a déjà des images", () => {
+  it("renvoie AUSSI une étude déjà pourvue d'images, avec son compte local (reprise partielle)", () => {
+    // La passerelle comparera nbImagesLocal au PACS : si le PACS en a plus,
+    // elle reprend le rapatriement interrompu ; sinon elle saute après C-FIND.
     const demandes: DemandeMinimale[] = [
       { statut: "a_valider", studyIds: [1] },
     ];
@@ -39,9 +41,9 @@ describe("selectionnerEtudesARapatrier", () => {
       accessionNumber: null,
       numberOfInstances: 12,
     });
-    expect(selectionnerEtudesARapatrier(demandes, etudes, ESPACE_OK)).toEqual(
-      []
-    );
+    expect(selectionnerEtudesARapatrier(demandes, etudes, ESPACE_OK)).toEqual([
+      { studyInstanceUid: "1.2.3", accessionNumber: null, nbImagesLocal: 12 },
+    ]);
   });
 
   it("ignore les demandes en statut terminal (envoyee, rejetee)", () => {

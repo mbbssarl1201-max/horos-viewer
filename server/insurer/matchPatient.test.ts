@@ -444,6 +444,50 @@ describe("matchPatient", () => {
     });
   });
 
+  // Cas réel #9 : le LLM met parfois TOUT le nom dans `nom` et laisse `prenom`
+  // vide (« Patrício Lopes Victor Manuel »). Un nom complet d'au moins deux
+  // mots suffit — la règle dure (nom + DDN) reste respectée.
+  it("prénom vide mais nom complet multi-mots ⇒ le matching s'applique quand même", async () => {
+    fauxPatients = [
+      {
+        id: 61,
+        nameSearch: cle("patricio lopes v"),
+        patientName: "PATRICIO LOPES V",
+        birthDate: null,
+      },
+    ];
+    const r = await matchPatient({
+      nom: "Patrício Lopes Victor Manuel",
+      prenom: null,
+      ddn: "20.09.1964",
+      tel: null,
+    });
+    expect(r).toMatchObject({
+      statut: "exact",
+      patientIds: [61],
+      variante: true,
+      ddnAbsente: true,
+    });
+  });
+
+  it("prénom vide et nom d'UN SEUL mot ⇒ aucun (trop faible pour identifier)", async () => {
+    fauxPatients = [
+      {
+        id: 62,
+        nameSearch: cle("dupont"),
+        patientName: "DUPONT",
+        birthDate: "19850312",
+      },
+    ];
+    const r = await matchPatient({
+      nom: "Dupont",
+      prenom: null,
+      ddn: "12.03.1985",
+      tel: null,
+    });
+    expect(r).toMatchObject({ statut: "aucun", patientId: null });
+  });
+
   it("sans DDN, jamais exact même si patient unique", async () => {
     fauxPatients = [
       { id: 1, nameSearch: cle("dupont marie"), birthDate: "19850312" },

@@ -152,7 +152,13 @@ export async function matchPatient(p: ExtractionDemande["patient"]): Promise<{
   };
   const nom = (p.nom || "").trim();
   const prenom = (p.prenom || "").trim();
-  if (!nom || !prenom) return vide;
+  // Le LLM met parfois tout le nom dans `nom` (prénom vide) : on accepte dès
+  // que nom+prénom réunis comptent AU MOINS DEUX mots significatifs — un seul
+  // mot ne suffit jamais à identifier, même avec la DDN.
+  const motsSignificatifs = normaliserNom(`${nom} ${prenom}`)
+    .split(/[\s-]+/)
+    .filter(t => t.length > 1);
+  if (motsSignificatifs.length < 2) return vide;
 
   const db = await getDb();
   if (!db) return vide;

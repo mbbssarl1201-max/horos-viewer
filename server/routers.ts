@@ -3230,7 +3230,12 @@ export const appRouter = router({
         // mauvais dossier) et d'ouvrir chaque étude dans le viewer pour
         // contrôler AVANT d'envoyer.
         const { getStudyById, listSeriesByStudy } = await import("./db");
-        const studyIds = (request.studyIds as number[] | null) ?? [];
+        // Défensif : dédup à la lecture aussi, pour que les demandes déjà
+        // persistées avec des doublons (avant le correctif d'enregistrement)
+        // n'affichent chaque étude qu'une fois sans devoir les re-traiter.
+        const studyIds = Array.from(
+          new Set((request.studyIds as number[] | null) ?? [])
+        );
         const etudes = [];
         for (const sid of studyIds) {
           const s = await getStudyById(sid);

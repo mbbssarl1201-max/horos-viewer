@@ -619,7 +619,14 @@ export async function traiterDemande(requestId: number): Promise<void> {
             extraction.exams
           )
         : { tousTrouves: false, datesExactes: false, parExamen: [] };
-    const studyIds = matchS.parExamen.flatMap(e => e.studyIds);
+    // Dédup : plusieurs examens demandés peuvent pointer la MÊME étude (ex. un
+    // scanner « corps entier » sans étiquette de région satisfait à la fois la
+    // demande épaule, thorax, abdomen…). Sans dédup, la même étude serait
+    // listée — et ENVOYÉE — une fois par examen (bug repéré sur Berisha :
+    // studyIds=[2668,2668,2668,2668,2668]).
+    const studyIds = Array.from(
+      new Set(matchS.parExamen.flatMap(e => e.studyIds))
+    );
 
     await db
       .update(insurerRequests)

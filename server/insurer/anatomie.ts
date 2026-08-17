@@ -91,6 +91,11 @@ const REGIONS: Record<string, string[]> = {
     "lws",
     "bws",
     "hws",
+    // Le rachis cervical vit dans le cou : une étude « Neck » (étiquette
+    // machine fréquente) peut être la colonne cervicale demandée.
+    "cervical*",
+    "neck",
+    "hals",
   ],
   crane: [
     "crane",
@@ -107,7 +112,7 @@ const REGIONS: Record<string, string[]> = {
     "massif facial",
     "orbite",
   ],
-  cou: ["cou", "neck", "cervical", "carotide", "thyroide", "larynx", "hals"],
+  cou: ["cou", "neck", "cervical*", "carotide", "thyroide", "larynx", "hals"],
   thorax: [
     "thorax",
     "chest",

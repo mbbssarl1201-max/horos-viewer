@@ -64,6 +64,31 @@ describe("filtrerParAnatomie", () => {
     expect(retenus).toEqual([1, 2]);
   });
 
+  // Cas réel #9 : IRM étiquetée « Neck » par la machine = colonne cervicale —
+  // le cou et le rachis se recouvrent, « neck » ne doit PAS contredire une
+  // demande « colonne vertébrale ».
+  it("« RM colonne vertébrale » retient une étude étiquetée « Neck »", () => {
+    const retenus = filtrerParAnatomie("RM colonne vertébrale", [
+      { studyId: 412, libelles: "Neck" },
+    ]);
+    expect(retenus).toEqual([412]);
+  });
+
+  it("« colonne cervicale » (féminin) est bien détectée comme rachis", () => {
+    const retenus = filtrerParAnatomie("Radiographie colonne cervicale", [
+      { studyId: 1, libelles: "HWS nativ" },
+      { studyId: 2, libelles: "Abdo Std." },
+    ]);
+    expect(retenus).toEqual([1]);
+  });
+
+  it("« neck » ne suffit pas pour une demande thorax (pas de recouvrement)", () => {
+    const retenus = filtrerParAnatomie("CT thorax", [
+      { studyId: 1, libelles: "Neck" },
+    ]);
+    expect(retenus).toEqual([]);
+  });
+
   it("toutes les études contredisent la demande ⇒ aucune retenue", () => {
     const retenus = filtrerParAnatomie("CT cheville", [
       { studyId: 1, libelles: "Abdo Std." },

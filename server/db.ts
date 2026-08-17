@@ -411,6 +411,37 @@ export function nameSearchKey(name?: string | null): string | null {
 
 // ============ PATIENT QUERIES ============
 
+/** Ne conserve que les chiffres d'une date de naissance (compare des formats
+ *  hétérogènes : `16.02.1986`, `1986-02-16`, `19860216`…). */
+export function normaliserDdn(s?: string | null): string {
+  return (s || "").replace(/\D/g, "");
+}
+
+/**
+ * Cœur PUR de l'identité patient à l'import. Parmi les dossiers de MÊME nom
+ * (déjà filtrés par nameSearch), choisit l'id de celui qui correspond à la
+ * date de naissance voulue ; `null` si aucun ⇒ créer un nouveau dossier.
+ *
+ * La machine du cabinet attribue des PatientID DICOM NON FIABLES (un même id
+ * pour deux personnes ; des ids différents pour une même personne). Le nom +
+ * la date de naissance sont les seuls critères sûrs. Règles :
+ *  - DDN fournie : on ne réutilise qu'un dossier de DDN EXACTEMENT concordante
+ *    (jamais un dossier sans DDN — ce pourrait être un homonyme) ;
+ *  - DDN absente : on réutilise un dossier homonyme lui aussi sans DDN.
+ */
+export function choisirDossierPatient(
+  candidats: { id: number; birthDate: string | null }[],
+  ddnVoulue?: string | null
+): number | null {
+  const cible = normaliserDdn(ddnVoulue);
+  if (cible !== "") {
+    const exact = candidats.find(c => normaliserDdn(c.birthDate) === cible);
+    return exact ? exact.id : null;
+  }
+  const sansDdn = candidats.find(c => normaliserDdn(c.birthDate) === "");
+  return sansDdn ? sansDdn.id : null;
+}
+
 export async function findOrCreatePatient(patientData: {
   patientId: string;
   patientName: string;
@@ -420,9 +451,10 @@ export async function findOrCreatePatient(patientData: {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // patientId chiffré DÉTERMINISTE : la dédup par égalité fonctionne toujours
-  // sur l'index, mais la valeur stockée est chiffrée au repos (nLPD).
+  // patientId chiffré DÉTERMINISTE (référence uniquement — PAS la clé d'identité,
+  // cf. choisirDossierPatient : la machine recycle/varie les PatientID DICOM).
   const encPatientId = encryptDeterministic(patientData.patientId)!;
+  const cleNom = nameSearchKey(patientData.patientName);
 
   const decryptRow = (p: typeof patients.$inferSelect) => ({
     ...p,
@@ -432,28 +464,56 @@ export async function findOrCreatePatient(patientData: {
     sex: decryptField(p.sex),
   });
 
-  const existing = await db
-    .select()
-    .from(patients)
-    .where(eq(patients.patientId, encPatientId))
-    .limit(1);
-
-  if (existing.length > 0) return decryptRow(existing[0]);
+  // Identité par NOM + DDN. Sans nom exploitable (nameSearch nul), repli sur
+  // l'ancienne dédup par PatientID DICOM (rien de mieux à disposition).
+  if (cleNom) {
+    const homonymes = await db
+      .select()
+      .from(patients)
+      .where(eq(patients.nameSearch, cleNom))
+      .limit(50);
+    const choixId = choisirDossierPatient(
+      homonymes.map(h => ({
+        id: h.id,
+        birthDate: decryptField(h.birthDate),
+      })),
+      patientData.birthDate
+    );
+    if (choixId != null) {
+      const dossier = homonymes.find(h => h.id === choixId)!;
+      return decryptRow(dossier);
+    }
+  } else {
+    const existing = await db
+      .select()
+      .from(patients)
+      .where(eq(patients.patientId, encPatientId))
+      .limit(1);
+    if (existing.length > 0) return decryptRow(existing[0]);
+  }
 
   await db.insert(patients).values({
     patientId: encPatientId,
     patientName: encryptField(patientData.patientName)!,
     birthDate: encryptField(patientData.birthDate || null),
     sex: encryptField(patientData.sex || null),
-    nameSearch: nameSearchKey(patientData.patientName),
+    nameSearch: cleNom,
   });
 
-  const newPatient = await db
-    .select()
-    .from(patients)
-    .where(eq(patients.patientId, encPatientId))
-    .limit(1);
-  return decryptRow(newPatient[0]);
+  // Relire le dossier fraîchement créé. On cible le dernier inséré de ce nom
+  // (ou de ce PatientID si pas de nom) avec la DDN voulue.
+  const relire = cleNom
+    ? await db.select().from(patients).where(eq(patients.nameSearch, cleNom))
+    : await db
+        .select()
+        .from(patients)
+        .where(eq(patients.patientId, encPatientId));
+  const cibleDdn = normaliserDdn(patientData.birthDate);
+  const cree =
+    relire
+      .filter(p => normaliserDdn(decryptField(p.birthDate)) === cibleDdn)
+      .sort((a, b) => b.id - a.id)[0] ?? relire.sort((a, b) => b.id - a.id)[0];
+  return decryptRow(cree);
 }
 
 // ============ DICOM IMPORT ============
@@ -480,7 +540,21 @@ export async function createStudy(data: {
     .where(eq(studies.studyInstanceUid, data.studyInstanceUid))
     .limit(1);
 
-  if (existing.length > 0) return existing[0];
+  if (existing.length > 0) {
+    // RÉPARATION : une étude déjà importée peut avoir été rattachée au MAUVAIS
+    // dossier (collision de PatientID DICOM, cf. findOrCreatePatient). Au
+    // ré-import, `data.patientId` provient désormais de l'identité nom+DDN
+    // fiable : si l'étude pointe ailleurs, on la re-rattache. On ne touche
+    // qu'au lien patient — jamais aux images (idempotence par UID préservée).
+    if (existing[0].patientId !== data.patientId) {
+      await db
+        .update(studies)
+        .set({ patientId: data.patientId })
+        .where(eq(studies.id, existing[0].id));
+      return { ...existing[0], patientId: data.patientId };
+    }
+    return existing[0];
+  }
 
   await db.insert(studies).values(data);
 

@@ -239,15 +239,52 @@ export async function matchPatient(p: ExtractionDemande["patient"]): Promise<{
     const nomDossier = decryptField(c.patientName) || "";
     return nomsCompatibles(feuille, nomDossier);
   });
-  if (!compatibles.length) return { ...vide, candidats: candidats.length };
-  return {
-    statut: "exact",
-    patientId: compatibles[0].id,
-    patientIds: compatibles.map(c => c.id),
-    variante: true,
-    ddnAbsente: false,
-    candidats: compatibles.length,
-  };
+  if (compatibles.length) {
+    return {
+      statut: "exact",
+      patientId: compatibles[0].id,
+      patientIds: compatibles.map(c => c.id),
+      variante: true,
+      ddnAbsente: false,
+      candidats: compatibles.length,
+    };
+  }
+
+  // Dernier repli : fiches SANS DDN (fréquentes dans le backfill PACS — la
+  // machine n'enregistre pas toujours la date de naissance) dont le nom est
+  // compatible avec la feuille. Accepté UNIQUEMENT sans ambiguïté possible :
+  //  - aucun homonyme compatible porteur d'une AUTRE DDN (sinon la fiche sans
+  //    DDN pourrait appartenir à cette autre personne) ;
+  //  - toutes les fiches candidates compatibles ENTRE ELLES (doublons PACS de
+  //    la même personne), sinon on ne peut pas trancher.
+  // ddnAbsente + variante ⇒ motifs de validation, jamais d'envoi automatique.
+  const conflitAutreDdn = tous.some(c => {
+    const b = (decryptField(c.birthDate) || "").replace(/\D/g, "");
+    if (!b || b === ddn) return false;
+    return nomsCompatibles(feuille, decryptField(c.patientName) || "");
+  });
+  if (!conflitAutreDdn) {
+    const sansDdnCompat = tous.filter(c => {
+      const b = (decryptField(c.birthDate) || "").replace(/\D/g, "");
+      if (b) return false;
+      return nomsCompatibles(feuille, decryptField(c.patientName) || "");
+    });
+    const noms = sansDdnCompat.map(c => decryptField(c.patientName) || "");
+    const memePersonne =
+      sansDdnCompat.length > 0 &&
+      noms.every(n => noms.every(m => nomsCompatibles(n, m)));
+    if (memePersonne) {
+      return {
+        statut: "exact",
+        patientId: sansDdnCompat[0].id,
+        patientIds: sansDdnCompat.map(c => c.id),
+        variante: true,
+        ddnAbsente: true,
+        candidats: sansDdnCompat.length,
+      };
+    }
+  }
+  return { ...vide, candidats: candidats.length };
 }
 
 /**

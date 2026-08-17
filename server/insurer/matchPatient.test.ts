@@ -18,6 +18,7 @@ let fauxPatients: {
   id: number;
   nameSearch: string | null;
   birthDate: string | null;
+  patientName?: string | null;
 }[] = [];
 let fauxStudies: {
   id: number;
@@ -297,6 +298,150 @@ describe("matchPatient", () => {
       tel: null,
     });
     expect(r).toMatchObject({ statut: "aucun", patientId: null });
+  });
+
+  // Cas réel #26 : la feuille SUVA porte le nom complet composé (« Neziri dos
+  // Santos Silva Zjavere ») mais la fiche PACS du backfill est « NEZIRI^ZJAVERE »
+  // SANS date de naissance. L'index (nom exact) rate, et le repli DDN-exacte ne
+  // peut rien vérifier : on accepte quand même quand le nom est compatible et
+  // qu'il n'y a AUCUNE ambiguïté — ddnAbsente+variante interdisent l'envoi auto.
+  it("repli : fiche SANS DDN + nom composé compatible ⇒ exact, variante+ddnAbsente", async () => {
+    fauxPatients = [
+      {
+        id: 11,
+        nameSearch: cle("neziri zjavere"),
+        patientName: "NEZIRI^ZJAVERE",
+        birthDate: null,
+      },
+      {
+        id: 12,
+        nameSearch: cle("neziri adnan"),
+        patientName: "NEZIRI^ADNAN",
+        birthDate: "19960327",
+      },
+    ];
+    const r = await matchPatient({
+      nom: "Neziri dos Santos Silva",
+      prenom: "Zjavere",
+      ddn: "16.02.1986",
+      tel: null,
+    });
+    expect(r).toMatchObject({
+      statut: "exact",
+      patientIds: [11],
+      variante: true,
+      ddnAbsente: true,
+    });
+  });
+
+  // Cas réel #9 : « PATRICIO LOPES V » (nom inversé + prénom tronqué, sans DDN)
+  // pour la feuille « Lopes Victor Manuel Patrício ». Les DOUBLONS PACS de la
+  // même personne (noms compatibles entre eux) sont tous rattachés.
+  it("repli sans DDN : doublons PACS de la même personne ⇒ tous les dossiers", async () => {
+    fauxPatients = [
+      {
+        id: 21,
+        nameSearch: cle("patricio lopes v"),
+        patientName: "PATRICIO LOPES V",
+        birthDate: null,
+      },
+      {
+        id: 22,
+        nameSearch: cle("patricio lopes v"),
+        patientName: "PATRICIO LOPES V",
+        birthDate: null,
+      },
+    ];
+    const r = await matchPatient({
+      nom: "Lopes",
+      prenom: "Victor Manuel Patrício",
+      ddn: "20.09.1964",
+      tel: null,
+    });
+    expect(r).toMatchObject({
+      statut: "exact",
+      patientIds: [21, 22],
+      variante: true,
+      ddnAbsente: true,
+    });
+  });
+
+  it("repli sans DDN : deux fiches compatibles mais personnes DIFFÉRENTES ⇒ aucun", async () => {
+    fauxPatients = [
+      {
+        id: 31,
+        nameSearch: cle("patricio lopes v"),
+        patientName: "PATRICIO LOPES V",
+        birthDate: null,
+      },
+      {
+        id: 32,
+        nameSearch: cle("lopes manuel"),
+        patientName: "LOPES^MANUEL",
+        birthDate: null,
+      },
+    ];
+    const r = await matchPatient({
+      nom: "Lopes",
+      prenom: "Victor Manuel Patrício",
+      ddn: "20.09.1964",
+      tel: null,
+    });
+    expect(r).toMatchObject({ statut: "aucun", patientId: null });
+  });
+
+  it("repli sans DDN : homonyme compatible avec une AUTRE DDN ⇒ aucun (conflit)", async () => {
+    fauxPatients = [
+      {
+        id: 41,
+        nameSearch: cle("dupont marie"),
+        patientName: "DUPONT^MARIE",
+        birthDate: null,
+      },
+      {
+        id: 42,
+        nameSearch: cle("dupont marie claire"),
+        patientName: "DUPONT^MARIE CLAIRE",
+        birthDate: "19900101",
+      },
+    ];
+    const r = await matchPatient({
+      // « Dupond » (typo) pour que l'index rate et que le repli s'applique.
+      nom: "Dupond",
+      prenom: "Marie",
+      ddn: "12.03.1985",
+      tel: null,
+    });
+    expect(r).toMatchObject({ statut: "aucun", patientId: null });
+  });
+
+  it("repli : une fiche DDN exacte reste prioritaire sur les fiches sans DDN", async () => {
+    fauxPatients = [
+      {
+        id: 51,
+        nameSearch: cle("xhuka bekim"),
+        patientName: "XHUKA^BEKIM",
+        birthDate: "19860830",
+      },
+      {
+        id: 52,
+        nameSearch: cle("xhuka bekim"),
+        patientName: "XHUKA^BEKIM",
+        birthDate: null,
+      },
+    ];
+    const r = await matchPatient({
+      nom: "Dzuka",
+      prenom: "Bekim",
+      ddn: "30.08.1986",
+      tel: null,
+    });
+    expect(r).toMatchObject({
+      statut: "exact",
+      patientIds: [51],
+      variante: true,
+      ddnAbsente: false,
+    });
   });
 
   it("sans DDN, jamais exact même si patient unique", async () => {

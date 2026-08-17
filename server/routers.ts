@@ -13,6 +13,7 @@ import {
   createStudy,
   createSeries,
   createInstance,
+  instanceExists,
   updateStudyCounts,
   updateSeriesCount,
   getUserNotifications,
@@ -1010,6 +1011,15 @@ export const appRouter = router({
           institution: input.institution,
           modality: input.modality,
         });
+
+        // Idempotence STOCKAGE : si cette image est déjà stockée, ne pas
+        // re-téléverser — storagePut génère une clé à suffixe aléatoire, un
+        // ré-upload créerait un objet MinIO orphelin. Indispensable pour
+        // compléter une étude partiellement rapatriée (C-GET interrompu) sans
+        // dupliquer les coupes déjà présentes sur un disque déjà tendu.
+        if (await instanceExists(input.sopInstanceUid)) {
+          return { success: true, deja: true, studyId: study.id };
+        }
 
         // 3. Create series
         const seriesRecord = await createSeries({

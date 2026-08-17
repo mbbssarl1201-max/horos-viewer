@@ -629,6 +629,26 @@ export async function createInstance(data: {
   return newInstance[0];
 }
 
+/**
+ * Vrai si une image (SOP instance) est DÉJÀ stockée. Permet à `dicom.import`
+ * d'éviter de re-téléverser (storagePut génère une clé à suffixe aléatoire →
+ * un ré-import créerait un objet MinIO ORPHELIN). Indispensable pour compléter
+ * une étude partiellement rapatriée (ex. C-GET interrompu) sans gâcher le
+ * disque à ré-uploader les coupes déjà présentes.
+ */
+export async function instanceExists(
+  sopInstanceUid: string
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db
+    .select({ id: instances.id })
+    .from(instances)
+    .where(eq(instances.sopInstanceUid, sopInstanceUid))
+    .limit(1);
+  return rows.length > 0;
+}
+
 // ============ NOTIFICATIONS ============
 
 export async function createNotification(data: {

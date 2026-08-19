@@ -146,6 +146,10 @@ export const ENV = {
   sentryDsn: process.env.SENTRY_DSN ?? "",
   // Intervalle (ms) du worker agent CR autonome. Défaut 5 min. 0 = ne pas démarrer.
   agentPollMs: Number(process.env.AGENT_POLL_MS ?? "300000"),
+  // Intervalle (ms) de l'agent d'apprentissage (analyse CR signés vs brouillons →
+  // propositions de règles RAG). Défaut 0 = OPT-IN (désactivé). L'APPLICATION des
+  // règles reste validée à la main : ce planificateur n'automatise que l'analyse.
+  learningPollMs: Number(process.env.LEARNING_POLL_MS ?? "0"),
   // Backend du chat Hermès : "local" (Ollama, PHI-safe) | "vertex" (Gemini UE) | "claude".
   chatBackend: process.env.CHAT_BACKEND ?? "local",
   geminiVertexProject: process.env.GEMINI_VERTEX_PROJECT ?? "",
@@ -187,6 +191,12 @@ export const ENV = {
   // (Reply-To, adresse extraite du document) est ignoré. Vide = comportement
   // par précédence (extraite → Reply-To/From).
   insurerReplyTo: process.env.INSURER_REPLY_TO ?? "",
+  // Adresse mise en en-tête Reply-To des réponses assureur (secrétariat IMCC) :
+  // l'expéditeur reste le domaine authentifié (SMTP_FROM sur mediview.ch, pour
+  // SPF/DKIM), mais toute réponse de l'assureur revient à cette boîte lue par le
+  // secrétariat. Vide = pas de Reply-To ajouté. Distinct de insurerReplyTo, qui
+  // est la DESTINATION (To) forcée de nos envois.
+  insurerSecretariatEmail: process.env.INSURER_SECRETARIAT_EMAIL ?? "",
 };
 
 // Garde fail-safe : signaler quand SMTP_INSECURE est posé en production mais

@@ -1,5 +1,11 @@
-import { describe, it, expect } from "vitest";
-import { groupByModality, stripPhiLike } from "./learning";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import {
+  groupByModality,
+  stripPhiLike,
+  startLearningAgent,
+  stopLearningAgent,
+} from "./learning";
+import { ENV } from "../_core/env";
 
 describe("agent apprentissage", () => {
   it("groupByModality applique le seuil (≥3)", () => {
@@ -22,5 +28,32 @@ describe("agent apprentissage", () => {
     expect(c).not.toMatch(/24\.12\.1997/);
     expect(c).not.toMatch(/1029384/);
     expect(c).toMatch(/zone jonctionnelle 12 mm/);
+  });
+});
+
+describe("startLearningAgent — planification de l'apprentissage", () => {
+  const originalPollMs = ENV.learningPollMs;
+  afterEach(() => {
+    stopLearningAgent();
+    (ENV as any).learningPollMs = originalPollMs;
+    vi.useRealTimers();
+  });
+
+  it("n'exécute rien si LEARNING_POLL_MS <= 0 (opt-in désactivé par défaut)", () => {
+    vi.useFakeTimers();
+    (ENV as any).learningPollMs = 0;
+    const run = vi.fn(async () => ({ proposed: 0 }));
+    startLearningAgent(run);
+    vi.advanceTimersByTime(60_000);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("exécute runLearningAgent à l'intervalle quand activé", () => {
+    vi.useFakeTimers();
+    (ENV as any).learningPollMs = 1000;
+    const run = vi.fn(async () => ({ proposed: 0 }));
+    startLearningAgent(run);
+    vi.advanceTimersByTime(1000);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });

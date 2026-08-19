@@ -211,3 +211,31 @@ export async function applyRagFiche(suggestionId: number): Promise<boolean> {
   ]);
   return true;
 }
+
+// ── Planification de l'agent d'apprentissage ────────────────────────────────
+// Opt-in via LEARNING_POLL_MS (défaut 0 = ne démarre pas). Le planificateur
+// n'automatise QUE l'analyse : runLearningAgent n'écrit que des agentSuggestions
+// en statut « open ». L'application au RAG (applyRagFiche) reste validée à la main.
+let learningTimer: ReturnType<typeof setInterval> | null = null;
+
+export function startLearningAgent(
+  run: () => Promise<unknown> = runLearningAgent
+): void {
+  if (learningTimer || ENV.learningPollMs <= 0) return;
+  learningTimer = setInterval(() => {
+    run().catch(e =>
+      console.warn(
+        "[agent apprentissage] passe échouée:",
+        (e as Error)?.message
+      )
+    );
+  }, ENV.learningPollMs);
+  if (typeof learningTimer.unref === "function") learningTimer.unref();
+}
+
+export function stopLearningAgent(): void {
+  if (learningTimer) {
+    clearInterval(learningTimer);
+    learningTimer = null;
+  }
+}

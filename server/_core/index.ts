@@ -988,6 +988,13 @@ async function startServer() {
     .then(m => m.startAutoReportAgent())
     .catch(() => {});
 
+  // Agent d'apprentissage : analyse les CR signés vs brouillons et propose des
+  // règles RAG (opt-in via LEARNING_POLL_MS ; n'écrit que des suggestions « open »,
+  // l'application au RAG reste validée à la main).
+  void import("../agents/learning")
+    .then(m => m.startLearningAgent())
+    .catch(() => {});
+
   // Agent assureur (SUVA) : poller IMAP + pipeline de traitement des
   // demandes d'imagerie (no-op si INSURER_IMAP_HOST absent).
   void import("../insurer/mailPoller")

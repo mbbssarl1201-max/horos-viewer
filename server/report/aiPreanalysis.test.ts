@@ -115,6 +115,32 @@ describe("generatePreanalysis", () => {
     expect(body.options.num_ctx).toBeGreaterThanOrEqual(4096);
   });
 
+  it("injecte le TEXTE du CR signé antérieur dans le prompt quand on compare une antériorité", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        message: { content: "Résultats:\nx\nConclusion:\ny" },
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { generatePreanalysis } = await import("./aiPreanalysis");
+    await generatePreanalysis([{ pngBase64: "IMGNOW", sliceIndex: 0 }], {
+      modality: "MR",
+      prior: {
+        images: [{ pngBase64: "IMGOLD", sliceIndex: 0 }],
+        date: "2025-11-03",
+      },
+      priorReports:
+        "TEXTE DU CR SIGNÉ ANTÉRIEUR\n- CR ANTÉRIEUR SIGNÉ du 2025-11-03 : Nodule stable de 6 mm.",
+    });
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    const userContent = body.messages.find(
+      (m: any) => m.role === "user"
+    ).content;
+    expect(userContent).toMatch(/CR ANTÉRIEUR SIGNÉ du 2025-11-03/);
+    expect(userContent).toMatch(/Nodule stable de 6 mm/);
+  });
+
   it("injecte la modalité, l'examen et l'indication dans le message", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
@@ -772,7 +798,9 @@ describe("parseurs — étiquettes décorées markdown (gras/titres)", () => {
 
   it("parseKeySlice : « **Anomalie :** oui » et « **Coupe-clé : 47** »", async () => {
     const { parseKeySlice } = await import("./aiPreanalysis");
-    const out = parseKeySlice("**Anomalie :** oui\n**Coupe-clé : coupe n° 47**");
+    const out = parseKeySlice(
+      "**Anomalie :** oui\n**Coupe-clé : coupe n° 47**"
+    );
     expect(out.abnormal).toBe(true);
     expect(out.keySliceNumber).toBe(47);
   });

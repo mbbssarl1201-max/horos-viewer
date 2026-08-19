@@ -4,6 +4,7 @@ import { ENV } from "../_core/env";
 import { anthropicMessagesFetch } from "./anthropicClient";
 import { isFableModel } from "./anthropicModel";
 import { pickCrProvider } from "./crProvider";
+import { buildPriorReportBlock, type PriorReportRow } from "./priorReportBlock";
 import {
   getStudyById,
   listSeriesByStudy,
@@ -451,6 +452,10 @@ export async function generatePreanalysis(
     // Connaissances de référence (RAG) injectées comme DONNÉES : critères ACR/
     // TI-RADS/Fleischner, valeurs normales, sémiologie. Récupérées localement.
     references?: string;
+    // Texte du (des) CR SIGNÉ(S) antérieur(s) du même patient (cf.
+    // buildPriorReportBlock). Ancre l'évolution sur ce qui avait réellement été
+    // écrit/signalé, au-delà de la seule comparaison visuelle. Jamais un brouillon.
+    priorReports?: string;
     // Texte/mesures INCRUSTÉS lus par OCR (organe, valeurs cm/mm, curseurs).
     // Donnée « à vérifier » pour ancrer le rapport dans des valeurs RÉELLES.
     screenText?: string;
@@ -592,6 +597,12 @@ export async function generatePreanalysis(
   if (opts.references) {
     ctxLines.push("");
     ctxLines.push(opts.references);
+  }
+  // Texte du CR antérieur signé : DONNÉES validées par le médecin, pour ancrer la
+  // comparaison d'évolution (n'a de sens que lorsqu'on compare une antériorité).
+  if (comparing && opts.priorReports) {
+    ctxLines.push("");
+    ctxLines.push(opts.priorReports);
   }
   const userText = ctxLines.join("\n");
   const base = buildSystemPrompt(opts.modality);
@@ -1417,6 +1428,9 @@ export async function runAiPreanalysis(
     | { images: PreanalysisKeyImage[]; date?: string; totalSlices?: number }
     | undefined;
   let comparedPriorDate: string | null = null;
+  // Antériorités RÉELLEMENT comparées (images échantillonnées) → on ira chercher
+  // le TEXTE de leur CR signé pour ancrer l'évolution (cf. buildPriorReportBlock).
+  const priorStudiesForText: { id: number; date?: string | null }[] = [];
   if (input.priorStudyId) {
     try {
       const priorStudy = await getStudyById(input.priorStudyId);
@@ -1449,6 +1463,10 @@ export async function runAiPreanalysis(
               totalSlices: sampledPrior.totalSlices,
             };
             comparedPriorDate = (priorStudy as any).studyDate ?? null;
+            priorStudiesForText.push({
+              id: input.priorStudyId,
+              date: (priorStudy as any).studyDate ?? null,
+            });
           }
         }
       }
@@ -1495,6 +1513,9 @@ export async function runAiPreanalysis(
               sliceIndex: x.sliceNumber,
               dateLabel: d,
             });
+          }
+          if (sp.images.length > 0) {
+            priorStudiesForText.push({ id: p.id, date: p.studyDate ?? null });
           }
           if (d && !mostRecent) mostRecent = d;
         } catch {
@@ -1581,6 +1602,29 @@ export async function runAiPreanalysis(
     console.warn("[aiPreanalysis] OCR repères incrustés échoué:", e);
   }
 
+  // Texte des CR SIGNÉS antérieurs (fail-soft) : seuls les CR validés sont repris
+  // (buildPriorReportBlock filtre `status === "signed"`) → jamais un brouillon IA.
+  let priorReports: string | undefined;
+  if (priorStudiesForText.length > 0) {
+    try {
+      const { getReportByStudy } = await import("../db");
+      const rows: PriorReportRow[] = [];
+      for (const ps of priorStudiesForText) {
+        const rep = await getReportByStudy(ps.id);
+        if (rep) {
+          rows.push({
+            date: ps.date ?? null,
+            status: (rep as any).status,
+            conclusion: (rep as any).conclusion ?? null,
+          });
+        }
+      }
+      priorReports = buildPriorReportBlock(rows);
+    } catch (e) {
+      console.warn("[aiPreanalysis] lecture CR antérieur échouée:", e);
+    }
+  }
+
   const result = await _internal.generatePreanalysis(images, {
     indication: input.indication,
     antecedents: input.antecedents,
@@ -1592,6 +1636,7 @@ export async function runAiPreanalysis(
     references,
     screenText,
     prior,
+    priorReports,
   });
 
   // Précision déterministe : on annexe les volumes RÉELS mesurés au rapport, sans

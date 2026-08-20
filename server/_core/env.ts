@@ -78,13 +78,17 @@ export const ENV = {
   // Backend IA pour l'analyse d'images : "claude" (Anthropic cloud, meilleure
   // qualité) ou "ollama" (local, PHI-safe). Défaut "ollama".
   aiBackend: process.env.AI_BACKEND ?? "ollama",
-  // Moteur de GÉNÉRATION DE CR (pré-analyse) : "auto" (défaut, historique :
-  // Infomaniak CH prioritaire dès que sa clé est là), "claude" (router le CR
-  // vers Claude — ex. Fable 5 — sans retirer Infomaniak des autres chemins
-  // vision), "infomaniak". Cf. server/report/crProvider.ts.
-  crProvider: (process.env.CR_PROVIDER ?? "auto").toLowerCase(),
+  // Moteur de GÉNÉRATION DE CR (pré-analyse) : "claude" (défaut — meilleur
+  // lecteur, Fable 5, sous garde consentement/DPA), "infomaniak" (VLM managé CH),
+  // "auto" (historique : Infomaniak CH prioritaire dès que sa clé est là).
+  // ⚠️ « claude » ne s'active QUE si MEDIVIEW_CLOUD_AI_PHI_CONSENT=true ET la clé
+  // Anthropic est présente ; sinon repli automatique sur local (PHI-safe).
+  // Cf. server/report/crProvider.ts.
+  crProvider: (process.env.CR_PROVIDER ?? "claude").toLowerCase(),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
-  anthropicModel: process.env.ANTHROPIC_MODEL ?? "claude-opus-4-8",
+  // Modèle Claude pour la lecture/CR. Défaut Fable 5 (Claude 5, choix gérant).
+  // Alternative la plus forte en lecture brute : claude-opus-4-8 / claude-opus-5.
+  anthropicModel: process.env.ANTHROPIC_MODEL ?? "claude-fable-5",
   // nLPD (audit H4) : envoyer des pixels d'imagerie (PHI potentiellement brûlé)
   // vers Claude (cloud US) exige un consentement documenté (DPA). Sans ce flag,
   // même si AI_BACKEND=claude, on retombe sur Ollama local (PHI-safe).

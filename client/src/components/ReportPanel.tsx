@@ -294,6 +294,10 @@ export default function ReportPanel({
   // Analyse exhaustive (toutes les coupes) — tâche de fond longue, sondée.
   const startExhaustive = trpc.ai.startExhaustive.useMutation();
   const [exhaustiveJob, setExhaustiveJob] = useState<string | null>(null);
+  // Panneau simplifié : les outils d'analyse spécialisés (fractures, pré-analyse
+  // rapide, segmentation, CR précis) sont repliés — l'action principale est le
+  // seul bouton « Analyser (IA) ». Ouvert à la demande.
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const exhaustiveDone = useRef(false);
   const exhaustiveStatus = trpc.ai.exhaustiveStatus.useQuery(
     { jobId: exhaustiveJob ?? "" },
@@ -718,11 +722,11 @@ export default function ReportPanel({
               });
               setExhaustiveJob(r.jobId);
             }}
-            title="Analyse exhaustive : balaye CHAQUE coupe de TOUTES les séries (100 %) + mesures + double lecture + vérification. Plusieurs minutes — ne quitte pas la page."
+            title="Analyse complète du dossier : sélectionne automatiquement les bonnes séries de coupes, balaye chaque coupe (100 %) + mesures + double lecture + vérification. Plusieurs minutes — ne quitte pas la page."
           >
             {exhaustiveStatus.data?.status === "running"
               ? "Analyse en cours…"
-              : "Générer (IA)"}
+              : "🔬 Analyser (IA)"}
           </Button>
           <Button
             size="sm"
@@ -879,8 +883,19 @@ export default function ReportPanel({
         </div>
       )}
 
-      {/* --- Boutons pré-analyse enrichie (anomalie / fractures) ---------- */}
+      {/* --- Outils d'analyse avancés (repliés : « Analyser (IA) » couvre le
+          cas courant ; ici les analyses spécialisées, à la demande) -------- */}
       {!isSigned && (
+        <button
+          type="button"
+          onClick={() => setShowAdvanced(v => !v)}
+          className="w-fit text-[11px] text-muted-foreground hover:text-foreground"
+          title="Outils spécialisés : recherche de fractures, pré-analyse rapide d'une série, segmentation, compte rendu précis."
+        >
+          {showAdvanced ? "▾" : "▸"} Options avancées
+        </button>
+      )}
+      {!isSigned && showAdvanced && (
         <div className="flex items-center gap-1 flex-wrap">
           <button
             type="button"

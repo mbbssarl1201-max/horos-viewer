@@ -228,6 +228,56 @@ export function selectDiagnosticSeries<
   return kept.length > 0 ? kept : series.slice();
 }
 
+/**
+ * Choisit la série DIAGNOSTIQUE à lire en priorité : la plus fournie en coupes
+ * (un scanogramme/SUMMARY fait 1-2 images ; une vraie série des centaines).
+ * Renvoie null si l'étude ne contient AUCUNE série diagnostique. PURE.
+ */
+export function pickPrimaryDiagnosticSeries<
+  T extends {
+    id?: number;
+    seriesDescription?: string | null;
+    modality?: string | null;
+    numberOfInstances?: number | null;
+  },
+>(series: readonly T[]): T | null {
+  const diag = series.filter(isDiagnosticSeries);
+  if (diag.length === 0) return null;
+  return diag.reduce((best, s) =>
+    (s.numberOfInstances ?? 0) > (best.numberOfInstances ?? 0) ? s : best
+  );
+}
+
+/**
+ * Décide QUELLES images lire pour ne jamais « lire » un scanogramme :
+ *  - étude sans AUCUNE série de coupes (uniquement repérage/SUMMARY) → `refuse`
+ *    (mieux vaut un refus honnête qu'un CR faux lu sur 2 vues de repérage) ;
+ *  - IA lancée sur une série de repérage alors que de vraies coupes existent →
+ *    on REDIRIGE vers la plus grosse série diagnostique ;
+ *  - IA lancée sur une vraie série de coupes → inchangée. PURE.
+ */
+export function resolveDiagnosticTarget(
+  opts: { seriesId?: number | null },
+  series: readonly {
+    id: number;
+    seriesDescription?: string | null;
+    modality?: string | null;
+    numberOfInstances?: number | null;
+  }[]
+): { refuse: boolean; seriesId: number | null } {
+  const diagnostic = series.filter(isDiagnosticSeries);
+  if (diagnostic.length === 0) return { refuse: true, seriesId: null };
+  if (opts.seriesId != null) {
+    const opened = series.find(s => s.id === opts.seriesId);
+    if (opened && !isDiagnosticSeries(opened)) {
+      const primary = pickPrimaryDiagnosticSeries(diagnostic);
+      return { refuse: false, seriesId: primary ? primary.id : opts.seriesId };
+    }
+    return { refuse: false, seriesId: opts.seriesId };
+  }
+  return { refuse: false, seriesId: null };
+}
+
 export interface PreanalysisResult {
   technique: string;
   resultats: string;
@@ -1230,14 +1280,41 @@ export async function runAiPreanalysis(
   // Anti-IDOR : la série demandée DOIT appartenir à l'étude (sinon un client
   // pourrait faire rendre/exfiltrer les coupes d'une série arbitraire — PHI).
   // Même garde que l'envoi de compte rendu.
-  if (input.seriesId) {
-    const series = await listSeriesByStudy(input.studyId);
-    if (!series.some((s: any) => s.id === input.seriesId)) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Série inconnue pour cette étude",
-      });
-    }
+  const studySeries = await listSeriesByStudy(input.studyId);
+  if (
+    input.seriesId &&
+    !studySeries.some((s: any) => s.id === input.seriesId)
+  ) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Série inconnue pour cette étude",
+    });
+  }
+
+  // Anti-scanogramme (root cause des CR faux) : ne JAMAIS « lire » une série de
+  // repérage. Étude sans aucune série de coupes → refus honnête (pas de faux CR
+  // ni de fausse anomalie lus sur 2 vues de scout) ; IA lancée sur un scano
+  // alors que de vraies coupes existent → redirection vers la série diagnostique.
+  const { refuse: noDiagnosticSeries, seriesId: resolvedSeriesId } =
+    resolveDiagnosticTarget({ seriesId: input.seriesId }, studySeries as any);
+  if (noDiagnosticSeries) {
+    return {
+      technique: "",
+      resultats:
+        "Aucune série de coupes diagnostique disponible pour cette étude : " +
+        "seules des images de repérage (scanogramme) et/ou des rapports de " +
+        "synthèse (SUMMARY) sont présentes. La pré-analyse n'a pas été effectuée.",
+      conclusion:
+        "Analyse impossible : l'import de cette étude est incomplet (aucune " +
+        "série de coupes). Vérifier le rapatriement PACS avant toute lecture.",
+      model: "aucun — pas de série diagnostique",
+      keySliceNumber: null,
+      abnormal: false,
+      evolution: null,
+      keyImage: null,
+      comparedPriorDate: null,
+      secondOpinion: null,
+    };
   }
 
   const wc = input.windowCenter ?? 40;
@@ -1330,10 +1407,10 @@ export async function runAiPreanalysis(
       console.warn("[aiPreanalysis] échantillonnage multi-séries échoué:", e);
     }
   }
-  if (input.seriesId && images.length === 0) {
+  if (resolvedSeriesId && images.length === 0) {
     try {
       const { sampleSeriesPngs } = await import("./aiSampling");
-      const sampled = await sampleSeriesPngs(input.seriesId, {
+      const sampled = await sampleSeriesPngs(resolvedSeriesId, {
         windowCenter: wc,
         windowWidth: ww,
         // Coupes réparties sur tout le volume. Cloud Claude : 24 (12 en

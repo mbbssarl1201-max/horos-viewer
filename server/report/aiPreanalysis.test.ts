@@ -817,3 +817,70 @@ describe("parseurs — étiquettes décorées markdown (gras/titres)", () => {
     expect(out.cleaned).not.toContain("**");
   });
 });
+
+describe("sélection de série diagnostique (anti-lecture de scanogramme)", () => {
+  const S = [
+    {
+      id: 1,
+      seriesDescription: "Scano   Scano   2.0 FL03",
+      modality: "CT",
+      numberOfInstances: 2,
+    },
+    {
+      id: 2,
+      seriesDescription: "Tissu Mou Standard Vol.   0.5 FC08",
+      modality: "CT",
+      numberOfInstances: 199,
+    },
+    {
+      id: 3,
+      seriesDescription: "OS Dur Vol.   0.5 FC30",
+      modality: "CT",
+      numberOfInstances: 32,
+    },
+    {
+      id: 4,
+      seriesDescription: "SUMMARY   2",
+      modality: "CT",
+      numberOfInstances: 2,
+    },
+  ];
+
+  it("pickPrimaryDiagnosticSeries : choisit la plus grosse série de coupes, ignore scano/SUMMARY", async () => {
+    const { pickPrimaryDiagnosticSeries } = await import("./aiPreanalysis");
+    expect(pickPrimaryDiagnosticSeries(S)?.id).toBe(2);
+  });
+
+  it("pickPrimaryDiagnosticSeries : null si l'étude n'a QUE scano + SUMMARY", async () => {
+    const { pickPrimaryDiagnosticSeries } = await import("./aiPreanalysis");
+    const scanoOnly = [S[0], S[3]];
+    expect(pickPrimaryDiagnosticSeries(scanoOnly)).toBeNull();
+  });
+
+  it("resolveDiagnosticTarget : étude sans coupes (scano+SUMMARY) → refuse", async () => {
+    const { resolveDiagnosticTarget } = await import("./aiPreanalysis");
+    const r = resolveDiagnosticTarget({ seriesId: 1 }, [S[0], S[3]]);
+    expect(r.refuse).toBe(true);
+  });
+
+  it("resolveDiagnosticTarget : IA lancée sur le scano → redirige vers la vraie série de coupes", async () => {
+    const { resolveDiagnosticTarget } = await import("./aiPreanalysis");
+    const r = resolveDiagnosticTarget({ seriesId: 1 }, S);
+    expect(r.refuse).toBe(false);
+    expect(r.seriesId).toBe(2);
+  });
+
+  it("resolveDiagnosticTarget : IA lancée sur une vraie série de coupes → inchangée", async () => {
+    const { resolveDiagnosticTarget } = await import("./aiPreanalysis");
+    const r = resolveDiagnosticTarget({ seriesId: 3 }, S);
+    expect(r.refuse).toBe(false);
+    expect(r.seriesId).toBe(3);
+  });
+
+  it("resolveDiagnosticTarget : sans série ouverte, étude avec coupes → pas de refus, pas de redirection forcée", async () => {
+    const { resolveDiagnosticTarget } = await import("./aiPreanalysis");
+    const r = resolveDiagnosticTarget({ seriesId: null }, S);
+    expect(r.refuse).toBe(false);
+    expect(r.seriesId).toBeNull();
+  });
+});

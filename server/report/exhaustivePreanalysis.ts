@@ -20,9 +20,65 @@ import {
   verifyConclusion,
   secondOpinionAbnormal,
   downscalePngBase64,
+  isDiagnosticSeries,
+  resolveDiagnosticTarget,
   type PreanalysisResult,
   type PreanalysisKeyImage,
 } from "./aiPreanalysis";
+
+interface SeriesMeta {
+  id: number;
+  seriesDescription?: string | null;
+  modality?: string | null;
+  numberOfInstances?: number | null;
+  seriesNumber?: number | null;
+}
+
+function seriesLabelOf(s: SeriesMeta): string {
+  return `${s.seriesDescription || `Série ${s.seriesNumber ?? s.id}`} — ${s.modality || "?"}`;
+}
+
+/**
+ * Choisit les séries à balayer en analyse EXHAUSTIVE, sans jamais « lire » un
+ * scanogramme (root cause des CR faux — cf. resolveDiagnosticTarget). PURE.
+ *  - wholeStudy : toutes les séries DIAGNOSTIQUES (scano/SUMMARY exclus) ; si
+ *    aucune → `refuse` (l'appelant renvoie un refus honnête, pas un CR sur scout) ;
+ *  - série unique : redirige un scano vers la plus grosse série diagnostique, ou
+ *    refuse si l'étude n'a aucune coupe.
+ */
+export function selectExhaustiveSeries(
+  input: { seriesId?: number | null; wholeStudy?: boolean },
+  allSeries: readonly SeriesMeta[]
+): { refuse: boolean; series: { id: number; label?: string; n: number }[] } {
+  const target = resolveDiagnosticTarget(
+    { seriesId: input.wholeStudy ? null : input.seriesId },
+    allSeries
+  );
+  if (target.refuse) return { refuse: true, series: [] };
+  if (input.wholeStudy) {
+    const diag = allSeries.filter(isDiagnosticSeries);
+    return {
+      refuse: false,
+      series: diag.map(s => ({
+        id: s.id,
+        label: seriesLabelOf(s),
+        n: s.numberOfInstances ?? 0,
+      })),
+    };
+  }
+  const sid = target.seriesId ?? input.seriesId ?? 0;
+  const meta = allSeries.find(s => s.id === sid);
+  return {
+    refuse: false,
+    series: [
+      {
+        id: sid,
+        label: meta ? seriesLabelOf(meta) : undefined,
+        n: meta?.numberOfInstances ?? 0,
+      },
+    ],
+  };
+}
 
 /**
  * Analyse EXHAUSTIVE : balaye TOUTES les coupes de la série (pas un échantillon).
@@ -133,22 +189,38 @@ async function runExhaustive(
   const wc = input.windowCenter;
   const ww = input.windowWidth;
 
-  // Séries à balayer : tout le dossier (séries DIAGNOSTIQUES) si wholeStudy,
-  // sinon la seule série demandée. Scanogramme/SUMMARY exclus en mode dossier.
+  // Séries à balayer, SANS jamais « lire » un scanogramme (cf.
+  // selectExhaustiveSeries) : étude sans coupes diagnostiques → refus honnête
+  // (pas de CR faux ni de fausse anomalie sur des images de repérage).
   const { listSeriesByStudy } = await import("../db");
-  const { isDiagnosticSeries } = await import("./aiPreanalysis");
-  let series: { id: number; label?: string; n: number }[];
-  if (input.wholeStudy) {
-    const allS = (await listSeriesByStudy(input.studyId)) as any[];
-    const diag = allS.filter(isDiagnosticSeries);
-    series = (diag.length ? diag : allS).map(s => ({
-      id: s.id,
-      label: `${s.seriesDescription || `Série ${s.seriesNumber ?? s.id}`} — ${s.modality || "?"}`,
-      n: s.numberOfInstances ?? 0,
-    }));
-  } else {
-    series = [{ id: input.seriesId, n: 0 }];
+  const allStudySeries = (await listSeriesByStudy(input.studyId)) as any[];
+  const picked = selectExhaustiveSeries(
+    { seriesId: input.seriesId, wholeStudy: input.wholeStudy },
+    allStudySeries
+  );
+  if (picked.refuse) {
+    job.result = {
+      technique: "",
+      resultats:
+        "Aucune série de coupes diagnostique disponible pour cette étude : " +
+        "seules des images de repérage (scanogramme) et/ou des rapports de " +
+        "synthèse (SUMMARY) sont présentes. L'analyse n'a pas été effectuée.",
+      conclusion:
+        "Analyse impossible : l'import de cette étude est incomplet (aucune " +
+        "série de coupes). Vérifier le rapatriement PACS avant toute lecture.",
+      model: "aucun — pas de série diagnostique",
+      keySliceNumber: null,
+      abnormal: false,
+      evolution: null,
+      screenedSlices: 0,
+      flaggedSlices: [],
+      secondOpinion: null,
+    };
+    job.status = "done";
+    await finishAiJob(job.id, job.result);
+    return;
   }
+  const series = picked.series;
 
   // Phase 1 : DÉPISTAGE — chaque coupe de CHAQUE série, basse résolution.
   job.progress = {

@@ -2489,6 +2489,17 @@ export const appRouter = router({
             message: "Série inconnue pour cette étude",
           });
         }
+        // Anti-scanogramme : segmenter une série de repérage renvoie du bruit —
+        // refus clair (une série de coupes est attendue).
+        const { isDiagnosticSeries } = await import("./report/aiPreanalysis");
+        const segTarget = series.find((s: any) => s.id === input.seriesId);
+        if (segTarget && !isDiagnosticSeries(segTarget)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Série de repérage (scanogramme) : sélectionnez une série de coupes pour la segmentation.",
+          });
+        }
         const { segmentCtSeries } = await import("./report/ctSegmentation");
         return segmentCtSeries(input.seriesId, {
           highRes: input.highRes,

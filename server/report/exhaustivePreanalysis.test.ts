@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   selectExhaustiveSeries,
   parseScreenReply,
+  selectKeySliceNumbers,
 } from "./exhaustivePreanalysis";
 
 const S = [
@@ -79,5 +80,36 @@ describe("parseScreenReply", () => {
 
   it("réponse vide → aucun", () => {
     expect(parseScreenReply("", [1, 2])).toEqual([]);
+  });
+});
+
+describe("selectKeySliceNumbers", () => {
+  it("2 coupes suspectes sur 60 → complète jusqu'au plancher avec des coupes réparties", () => {
+    const out = selectKeySliceNumbers([33, 17], 60, 10, 30);
+    expect(out.length).toBe(10);
+    expect(out).toContain(17);
+    expect(out).toContain(33);
+    expect(out).toEqual([...out].sort((a, b) => a - b));
+    expect(new Set(out).size).toBe(out.length);
+    expect(Math.min(...out)).toBeGreaterThanOrEqual(1);
+    expect(Math.max(...out)).toBeLessThanOrEqual(60);
+  });
+
+  it("aucune suspecte → plancher de coupes représentatives", () => {
+    const out = selectKeySliceNumbers([], 200, 10, 30);
+    expect(out.length).toBe(10);
+    expect(out[0]).toBe(1);
+    expect(out[out.length - 1]).toBe(200);
+  });
+
+  it("plus de suspectes que le plafond → tronque au plafond, suspectes d'abord", () => {
+    const flagged = Array.from({ length: 40 }, (_, i) => i + 1);
+    const out = selectKeySliceNumbers(flagged, 300, 10, 30);
+    expect(out.length).toBe(30);
+    expect(out.every(n => n <= 40)).toBe(true);
+  });
+
+  it("série plus petite que le plancher → toutes les coupes", () => {
+    expect(selectKeySliceNumbers([2], 4, 10, 30)).toEqual([1, 2, 3, 4]);
   });
 });

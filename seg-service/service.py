@@ -23,6 +23,9 @@ from flask import Flask, request, jsonify
 
 TOKEN = os.environ.get("SEG_TOKEN", "")
 TSEG = os.environ.get("TSEG_BIN", "TotalSegmentator")
+# CPU sans GPU : le modèle haute résolution (1.5 mm, fast=0) plante/dure trop
+# (E2E 22.08 : HTTP 500 en ~2 min). On force --fast (3 mm) sauf si désactivé.
+FORCE_FAST = os.environ.get("SEG_FORCE_FAST", "1") == "1"
 ALLOWED_TASKS = {
     "total",
     "total_mr",
@@ -142,7 +145,7 @@ def segment():
             nii = raw
         out = os.path.join(d, "out")
         cmd = [TSEG, "-i", nii, "-o", out, "--statistics", "--task", task]
-        if fast and task == "total":
+        if (fast or FORCE_FAST) and task == "total":
             cmd.append("--fast")
         with gpu_lock:
             t0 = time.time()

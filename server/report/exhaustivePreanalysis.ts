@@ -144,6 +144,31 @@ export function parseScreenReply(
   return Array.from(new Set(nums.filter(n => ok.has(n))));
 }
 
+/**
+ * Coupes à montrer au rédacteur (phase 2) : les suspectes d'abord (≤ `cap`),
+ * puis complétées jusqu'à `min` par des coupes RÉPARTIES sur tout le volume.
+ * Sans ce plancher, 2 coupes signalées = un rapport rédigé sur 2 images (E2E
+ * 22.08) — trop mince pour juger un examen. Triées, dédupliquées, 1-based. PURE.
+ */
+export function selectKeySliceNumbers(
+  flagged: readonly number[],
+  total: number,
+  min: number,
+  cap: number
+): number[] {
+  const out = new Set<number>([...flagged].sort((a, b) => a - b).slice(0, cap));
+  const target = Math.min(cap, Math.max(min, out.size), Math.max(0, total));
+  if (out.size < target) {
+    // Grille uniforme un peu plus dense que nécessaire, pour absorber les
+    // collisions avec les suspectes déjà présentes.
+    for (const i of pickSampleIndices(total, target + out.size)) {
+      if (out.size >= target) break;
+      out.add(i + 1);
+    }
+  }
+  return Array.from(out).sort((a, b) => a - b);
+}
+
 const SCREEN_SYS = [
   "Tu es un assistant de DÉPISTAGE rapide en imagerie. On te donne des coupes NUMÉROTÉES d'un même examen.",
   "Indique UNIQUEMENT les numéros des coupes où une anomalie est POSSIBLE (fracture, lésion, masse, hémorragie, asymétrie nette).",
@@ -308,8 +333,9 @@ async function runExhaustive(
   }
   if (screenedTotal === 0) throw new Error("Aucune coupe rendable");
 
-  // Phase 2 : coupes suspectes de TOUTES les séries (réparties, total ≤ 30) ;
-  // représentatives si une série n'a rien de suspect. Pleine résolution.
+  // Phase 2 : coupes suspectes de TOUTES les séries (réparties, total ≤ 30),
+  // complétées par un PLANCHER de coupes représentatives par série (jamais un
+  // rapport sur 2 images). Pleine résolution.
   job.phase = "Rédaction du rapport…";
   const CAP = 30;
   const entries = Array.from(flaggedBy.entries());
@@ -317,13 +343,16 @@ async function runExhaustive(
     4,
     Math.floor(CAP / Math.max(1, entries.length))
   );
+  const perSeriesMin = Math.min(perSeriesCap, entries.length > 1 ? 6 : 10);
   const keyImgs: PreanalysisKeyImage[] = [];
   for (const [sid, f] of entries) {
     if (keyImgs.length >= CAP) break;
-    let nums = Array.from(f.nums)
-      .sort((a, b) => a - b)
-      .slice(0, perSeriesCap);
-    if (nums.length === 0) nums = pickSampleIndices(f.total, 3).map(i => i + 1);
+    const nums = selectKeySliceNumbers(
+      Array.from(f.nums),
+      f.total,
+      perSeriesMin,
+      perSeriesCap
+    );
     for (const n of nums) {
       if (keyImgs.length >= CAP) break;
       const b64 = await renderSliceByNumber(sid, n, {

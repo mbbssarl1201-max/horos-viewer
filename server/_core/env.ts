@@ -160,6 +160,10 @@ export const ENV = {
   geminiVertexLocation: process.env.GEMINI_VERTEX_LOCATION ?? "europe-west1",
   geminiVertexModel: process.env.GEMINI_VERTEX_MODEL ?? "gemini-2.0-flash",
   geminiVertexToken: process.env.GEMINI_VERTEX_TOKEN ?? "",
+  // Modèles Gemini de la lecture radio (dépistage exhaustif / double lecture).
+  geminiScreenModel: process.env.GEMINI_SCREEN_MODEL ?? "gemini-2.5-flash",
+  geminiSecondReadModel:
+    process.env.GEMINI_SECOND_READ_MODEL ?? "gemini-2.5-pro",
   // Coordonnées GPS du cabinet pour la météo Open-Meteo (pas de clé requise).
   cabinetLat: process.env.CABINET_LAT ?? "",
   cabinetLng: process.env.CABINET_LNG ?? "",

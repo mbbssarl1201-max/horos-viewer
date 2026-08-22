@@ -8,6 +8,7 @@ totalseg-service v4 — segmentation CT (TotalSegmentator) multi-tâches + overl
 """
 import base64
 import glob
+import hmac
 import io
 import json
 import os
@@ -43,7 +44,10 @@ _PALETTE = [
 
 
 def _check():
-    return not TOKEN or request.headers.get("X-Seg-Token", "") == TOKEN
+    # Fail-closed (jeton OBLIGATOIRE) + comparaison en temps constant.
+    return bool(TOKEN) and hmac.compare_digest(
+        request.headers.get("X-Seg-Token", ""), TOKEN
+    )
 
 
 def _window(img, c=40.0, w=400.0):
@@ -117,7 +121,15 @@ def segment():
             ddir = os.path.join(d, "dicom")
             os.makedirs(ddir, exist_ok=True)
             with zipfile.ZipFile(raw) as z:
-                z.extractall(ddir)
+                # Anti zip-slip : jamais d'extraction hors du dossier cible.
+                root = os.path.realpath(ddir)
+                for member in z.namelist():
+                    dest = os.path.realpath(os.path.join(ddir, member))
+                    if not dest.startswith(root + os.sep) or member.endswith("/"):
+                        continue
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    with z.open(member) as src, open(dest, "wb") as dst:
+                        dst.write(src.read())
             subprocess.run(
                 ["dcm2niix", "-z", "y", "-o", d, "-f", "vol", ddir],
                 capture_output=True, timeout=300,

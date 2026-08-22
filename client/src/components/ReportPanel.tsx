@@ -353,6 +353,11 @@ export default function ReportPanel({
     abnormal: boolean | null;
     agree: boolean;
     model: string;
+    // Double lecture croisée (Gemini) : lecture du 2e lecteur + synthèse de
+    // réconciliation — absents quand le repli local (oui/non) a tourné.
+    resultats?: string;
+    conclusion?: string;
+    reconciliation?: string;
   } | null>(null);
 
   const runPreanalysis = async (
@@ -1007,6 +1012,24 @@ export default function ReportPanel({
               : "✓ 2e modèle d'accord avec le 1er"}
           </p>
         ))}
+      {!isSigned && secondOpinion?.reconciliation && (
+        <details className="rounded-md border border-border/60 px-2.5 py-1.5">
+          <summary className="cursor-pointer text-[11px] font-medium">
+            Double lecture ({secondOpinion.model})
+          </summary>
+          <div className="mt-1.5 space-y-1.5 text-[11px] text-muted-foreground">
+            <p className="whitespace-pre-wrap">
+              {secondOpinion.reconciliation}
+            </p>
+            {secondOpinion.conclusion && (
+              <p className="whitespace-pre-wrap">
+                <span className="font-medium">Conclusion du 2e lecteur : </span>
+                {secondOpinion.conclusion}
+              </p>
+            )}
+          </div>
+        </details>
+      )}
 
       {/* --- IA CERTIFIÉE (dispositifs médicaux CE/FDA) -------------------- */}
       {!isSigned && (

@@ -164,6 +164,12 @@ export const ENV = {
   geminiScreenModel: process.env.GEMINI_SCREEN_MODEL ?? "gemini-2.5-flash",
   geminiSecondReadModel:
     process.env.GEMINI_SECOND_READ_MODEL ?? "gemini-2.5-pro",
+  // Service account Vertex (même fichier que medicentral) : utilisé quand
+  // GEMINI_VERTEX_TOKEN n'est pas fourni — un jeton statique expire en 1 h.
+  geminiVertexSaPath:
+    process.env.GEMINI_VERTEX_SA_PATH ??
+    process.env.GOOGLE_APPLICATION_CREDENTIALS ??
+    "",
   // Coordonnées GPS du cabinet pour la météo Open-Meteo (pas de clé requise).
   cabinetLat: process.env.CABINET_LAT ?? "",
   cabinetLng: process.env.CABINET_LNG ?? "",

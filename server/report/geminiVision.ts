@@ -1,3 +1,5 @@
+import { createSign } from "crypto";
+import { existsSync, readFileSync } from "fs";
 import { ENV } from "../_core/env";
 
 /**
@@ -10,13 +12,86 @@ import { ENV } from "../_core/env";
  * données traitées en Europe (location Vertex UE).
  */
 
-/** Gemini vision utilisable ? (config Vertex + consentement PHI). */
+/**
+ * Gemini vision utilisable ? Config Vertex (token statique OU service account
+ * JSON monté, comme medicentral) + consentement PHI.
+ */
 export function geminiVisionConfigured(): boolean {
   return (
     !!ENV.geminiVertexProject &&
-    !!ENV.geminiVertexToken &&
+    (!!ENV.geminiVertexToken ||
+      (!!ENV.geminiVertexSaPath && existsSync(ENV.geminiVertexSaPath))) &&
     ENV.cloudAiPhiConsent
   );
+}
+
+interface ServiceAccount {
+  client_email: string;
+  private_key: string;
+  token_uri: string;
+}
+
+/**
+ * JWT RS256 d'échange OAuth pour un service account Google (scope
+ * cloud-platform, validité 1 h). Déterministe pour un instant donné. PURE
+ * (hors signature, déterministe elle aussi pour une clé donnée).
+ */
+export function createSignedJwt(sa: ServiceAccount, nowS: number): string {
+  const b64 = (o: object) =>
+    Buffer.from(JSON.stringify(o)).toString("base64url");
+  const unsigned = `${b64({ alg: "RS256", typ: "JWT" })}.${b64({
+    iss: sa.client_email,
+    scope: "https://www.googleapis.com/auth/cloud-platform",
+    aud: sa.token_uri,
+    iat: nowS,
+    exp: nowS + 3600,
+  })}`;
+  const signature = createSign("RSA-SHA256")
+    .update(unsigned)
+    .sign(sa.private_key)
+    .toString("base64url");
+  return `${unsigned}.${signature}`;
+}
+
+// Cache du jeton d'accès Vertex (renouvelé 5 min avant expiration).
+let cachedToken: { token: string; expiresAtMs: number } | null = null;
+
+/**
+ * Jeton d'accès Vertex : `GEMINI_VERTEX_TOKEN` statique si fourni, sinon
+ * échange OAuth du service account (fichier JSON monté). Null si indisponible.
+ */
+async function getVertexAccessToken(): Promise<string | null> {
+  if (ENV.geminiVertexToken) return ENV.geminiVertexToken;
+  if (cachedToken && Date.now() < cachedToken.expiresAtMs)
+    return cachedToken.token;
+  try {
+    const sa = JSON.parse(
+      readFileSync(ENV.geminiVertexSaPath, "utf8")
+    ) as ServiceAccount;
+    const jwt = createSignedJwt(sa, Math.floor(Date.now() / 1000));
+    const resp = await fetch(sa.token_uri, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      signal: AbortSignal.timeout(15_000),
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion: jwt,
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as {
+      access_token?: string;
+      expires_in?: number;
+    };
+    if (!data.access_token) return null;
+    cachedToken = {
+      token: data.access_token,
+      expiresAtMs: Date.now() + ((data.expires_in ?? 3600) - 300) * 1000,
+    };
+    return cachedToken.token;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -46,6 +121,8 @@ export async function geminiVision(opts: {
   timeoutMs?: number;
 }): Promise<string | null> {
   if (!geminiVisionConfigured()) return null;
+  const token = await getVertexAccessToken();
+  if (!token) return null;
   const loc = ENV.geminiVertexLocation;
   const url = `https://${loc}-aiplatform.googleapis.com/v1/projects/${ENV.geminiVertexProject}/locations/${loc}/publishers/google/models/${opts.model}:generateContent`;
   try {
@@ -53,7 +130,7 @@ export async function geminiVision(opts: {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${ENV.geminiVertexToken}`,
+        Authorization: `Bearer ${token}`,
       },
       signal: AbortSignal.timeout(opts.timeoutMs ?? 120_000),
       body: JSON.stringify({

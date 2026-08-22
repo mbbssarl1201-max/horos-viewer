@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { selectExhaustiveSeries } from "./exhaustivePreanalysis";
+import {
+  selectExhaustiveSeries,
+  parseScreenReply,
+} from "./exhaustivePreanalysis";
 
 const S = [
   {
@@ -56,5 +59,25 @@ describe("selectExhaustiveSeries — anti-scanogramme (analyse exhaustive)", () 
     const r = selectExhaustiveSeries({ seriesId: 3 }, S);
     expect(r.refuse).toBe(false);
     expect(r.series[0].id).toBe(3);
+  });
+});
+
+describe("parseScreenReply", () => {
+  it("extrait et filtre les numéros autorisés", () => {
+    expect(
+      parseScreenReply("Coupes 142, 143 et 999 suspectes", [141, 142, 143])
+    ).toEqual([142, 143]);
+  });
+
+  it("RAS → aucun", () => {
+    expect(parseScreenReply("RAS", [1, 2, 3])).toEqual([]);
+  });
+
+  it("dédoublonne", () => {
+    expect(parseScreenReply("7, 7, 7", [7])).toEqual([7]);
+  });
+
+  it("réponse vide → aucun", () => {
+    expect(parseScreenReply("", [1, 2])).toEqual([]);
   });
 });

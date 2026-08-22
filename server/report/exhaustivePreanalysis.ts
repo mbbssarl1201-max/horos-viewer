@@ -12,6 +12,7 @@ import {
   renderSliceByNumber,
   pickSampleIndices,
 } from "./aiSampling";
+import { geminiVision, geminiVisionConfigured } from "./geminiVision";
 import {
   generatePreanalysis,
   extractBurnedInText,
@@ -122,6 +123,20 @@ function gc() {
   });
 }
 
+/**
+ * Extrait les numéros de coupes suspectes d'une réponse de dépistage : chiffres
+ * filtrés par la liste des numéros réellement montrés, dédupliqués. « RAS » ou
+ * réponse vide → aucun. PURE.
+ */
+export function parseScreenReply(
+  txt: string,
+  allowed: readonly number[]
+): number[] {
+  const nums = (txt.match(/\d+/g) ?? []).map(Number);
+  const ok = new Set(allowed);
+  return Array.from(new Set(nums.filter(n => ok.has(n))));
+}
+
 const SCREEN_SYS = [
   "Tu es un assistant de DÉPISTAGE rapide en imagerie. On te donne des coupes NUMÉROTÉES d'un même examen.",
   "Indique UNIQUEMENT les numéros des coupes où une anomalie est POSSIBLE (fracture, lésion, masse, hémorragie, asymétrie nette).",
@@ -137,6 +152,20 @@ async function screenBatch(
   const userText = `Coupes fournies, dans l'ordre : n° ${labels.join(", ")}.${
     modality ? ` Modalité : ${modality}.` : ""
   } Quels numéros sont suspects ?`;
+  // Dépistage cloud (Gemini Flash, Vertex UE) quand configuré + consentement
+  // PHI : bien meilleur que le petit modèle local — c'est LE goulot de qualité
+  // de l'exhaustif. Échec/absence de config → repli qwen local (jamais de
+  // panne sèche).
+  if (geminiVisionConfigured()) {
+    const txt = await geminiVision({
+      model: ENV.geminiScreenModel,
+      system: SCREEN_SYS,
+      userText,
+      pngBase64: batch.map(b => b.pngBase64),
+      maxTokens: 100,
+    });
+    if (txt !== null) return parseScreenReply(txt, labels);
+  }
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), 120_000);
   try {
@@ -162,9 +191,7 @@ async function screenBatch(
     if (!resp.ok) return [];
     const data = await resp.json();
     const txt: string = data?.message?.content ?? "";
-    const nums = (txt.match(/\d+/g) ?? []).map(Number);
-    const allowed = new Set(labels);
-    return Array.from(new Set(nums.filter(n => allowed.has(n))));
+    return parseScreenReply(txt, labels);
   } catch {
     return [];
   } finally {
@@ -227,10 +254,12 @@ async function runExhaustive(
     done: 0,
     total: series.reduce((a, s) => a + Math.max(1, s.n), 0),
   };
-  // Dépistage plus fin : 384 px (vs 256) pour mieux repérer les petites lésions ;
-  // lots de 12 (au lieu de 20) pour ne pas saturer le contexte du modèle local.
-  const SCREEN_DIM = 384;
-  const BATCH = 12;
+  // Dépistage cloud (Gemini Flash) : 512 px / lots de 16 — le modèle cloud lit
+  // mieux et tient plus d'images par appel. Repli local (qwen) : 384 px / 12,
+  // pour ne pas saturer le contexte du petit modèle.
+  const cloudScreen = geminiVisionConfigured();
+  const SCREEN_DIM = cloudScreen ? 512 : 384;
+  const BATCH = cloudScreen ? 16 : 12;
   let screenedTotal = 0;
   const flaggedBy = new Map<
     number,

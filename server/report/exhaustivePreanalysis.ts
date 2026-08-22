@@ -13,6 +13,7 @@ import {
   pickSampleIndices,
 } from "./aiSampling";
 import { geminiVision, geminiVisionConfigured } from "./geminiVision";
+import { secondReadGemini, reconcileReads } from "./doubleLecture";
 import {
   generatePreanalysis,
   extractBurnedInText,
@@ -100,6 +101,12 @@ export interface ExhaustiveResult extends PreanalysisResult {
     abnormal: boolean | null;
     model: string;
     agree: boolean;
+    // Double lecture croisée (Gemini) : lecture complète du 2e lecteur +
+    // synthèse de réconciliation rédigée par le 1er (champs absents en repli
+    // local oui/non — rétro-compatible client).
+    resultats?: string;
+    conclusion?: string;
+    reconciliation?: string;
   } | null;
 }
 interface Job {
@@ -410,15 +417,49 @@ async function runExhaustive(
     }
   }
 
-  // 2e lecture indépendante (modèle local) → signal de désaccord.
+  // Double lecture croisée : relecture COMPLÈTE et indépendante par Gemini
+  // (Vertex UE), puis réconciliation rédigée par le 1er lecteur (Opus) —
+  // désaccords = points de vigilance dans le CR. Repli : l'ancienne 2e opinion
+  // locale (oui/non) si Gemini indisponible. Tout est fail-soft.
   let secondOpinion: ExhaustiveResult["secondOpinion"] = null;
   try {
-    const ab2 = await secondOpinionAbnormal(keyImgs, modality, false);
-    secondOpinion = {
-      abnormal: ab2,
-      model: ENV.ollamaVisionModel2,
-      agree: ab2 !== null && ab2 === (result.abnormal ?? null),
-    };
+    const sr = await secondReadGemini(keyImgs, {
+      indication: input.indication,
+      modality,
+      measurements,
+      totalSlices: screenedTotal,
+    });
+    if (sr) {
+      const rec = await reconcileReads(
+        {
+          resultats: result.resultats,
+          conclusion: result.conclusion,
+          model: result.model,
+        },
+        sr
+      );
+      secondOpinion = {
+        abnormal: sr.abnormal,
+        model: sr.model,
+        agree:
+          rec?.agree ??
+          (sr.abnormal !== null && sr.abnormal === (result.abnormal ?? null)),
+        resultats: sr.resultats,
+        conclusion: sr.conclusion,
+        reconciliation: rec?.section,
+      };
+      if (rec?.section) {
+        result.resultats =
+          `${result.resultats}\n\nDouble lecture (${result.model} × ${sr.model}) :\n${rec.section}`.trim();
+      }
+    } else {
+      const ab2 = await secondOpinionAbnormal(keyImgs, modality, false);
+      secondOpinion = {
+        abnormal: ab2,
+        model: ENV.ollamaVisionModel2,
+        agree: ab2 !== null && ab2 === (result.abnormal ?? null),
+      };
+    }
   } catch {
     /* fail-soft */
   }

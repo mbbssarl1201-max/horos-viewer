@@ -1,4 +1,5 @@
 import { ENV } from "../_core/env";
+import { anthropicMessagesFetch } from "./anthropicClient";
 import { geminiVision, geminiVisionConfigured } from "./geminiVision";
 import { downscalePngBase64, type PreanalysisKeyImage } from "./aiPreanalysis";
 
@@ -103,4 +104,88 @@ export async function secondReadGemini(
   });
   if (!txt) return null;
   return parseSecondRead(txt, ENV.geminiSecondReadModel);
+}
+
+/**
+ * Prompts de réconciliation : le premier lecteur (Opus) compare les deux
+ * lectures et rend une synthèse courte + un verdict `ACCORD: oui|non`. PURE.
+ */
+export function buildReconcilePrompt(
+  primary: { resultats: string; conclusion: string; model: string },
+  second: SecondRead
+): { system: string; user: string } {
+  const system = [
+    "Tu compares DEUX lectures indépendantes du même examen d'imagerie (double lecture radiologique).",
+    "Rends, en français et de façon CONCISE :",
+    "1. Les points d'accord (1-2 lignes).",
+    "2. Les DÉSACCORDS, chacun sur une ligne commençant par « À VÉRIFIER PAR LE MÉDECIN : » (rien si aucun).",
+    "Termine STRICTEMENT par une ligne « ACCORD: oui » si les conclusions concordent sur l'essentiel, sinon « ACCORD: non ».",
+    "N'invente aucun finding : ne cite que ce que les lectures contiennent.",
+  ].join("\n");
+  const user = [
+    `LECTURE 1 (${primary.model}) :`,
+    `Résultats : ${primary.resultats}`,
+    `Conclusion : ${primary.conclusion}`,
+    "",
+    `LECTURE 2 (${second.model}) :`,
+    `Résultats : ${second.resultats}`,
+    `Conclusion : ${second.conclusion}`,
+  ].join("\n");
+  return { system, user };
+}
+
+/**
+ * Lit la synthèse de réconciliation : verdict sur la ligne `ACCORD:` (retirée
+ * du texte affiché), `agree` null si absent. Null si texte vide. PURE.
+ */
+export function parseReconcile(
+  txt: string
+): { section: string; agree: boolean | null } | null {
+  const trimmed = txt.trim();
+  if (!trimmed) return null;
+  const m = trimmed.match(/^\s*\**\s*accord\s*:?\**\s*(oui|non|yes|no)\b.*$/im);
+  const agree = m
+    ? m[1].toLowerCase() === "oui" || m[1].toLowerCase() === "yes"
+    : null;
+  const section = trimmed
+    .replace(/^\s*\**\s*accord\s*:?\**\s*(oui|non|yes|no)\b.*$/gim, "")
+    .trim();
+  if (!section) return null;
+  return { section, agree };
+}
+
+/**
+ * Réconciliation par le premier lecteur (Opus, texte seul). Fail-soft : null si
+ * Claude non configuré / non consenti / échec API.
+ */
+export async function reconcileReads(
+  primary: { resultats: string; conclusion: string; model: string },
+  second: SecondRead
+): Promise<{ section: string; agree: boolean | null } | null> {
+  if (
+    ENV.aiBackend !== "claude" ||
+    !ENV.anthropicApiKey ||
+    !ENV.cloudAiPhiConsent
+  )
+    return null;
+  const { system, user } = buildReconcilePrompt(primary, second);
+  try {
+    const data = await anthropicMessagesFetch(
+      {
+        model: ENV.anthropicModel,
+        max_tokens: 700,
+        system,
+        messages: [{ role: "user", content: user }],
+      },
+      AbortSignal.timeout(90_000),
+      ENV.anthropicApiKey
+    );
+    const txt = (data as any)?.content?.find(
+      (b: any) => b?.type === "text"
+    )?.text;
+    if (typeof txt !== "string") return null;
+    return parseReconcile(txt);
+  } catch {
+    return null;
+  }
 }

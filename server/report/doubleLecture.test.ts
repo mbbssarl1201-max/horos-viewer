@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parseSecondRead, buildSecondReadPrompt } from "./doubleLecture";
+import {
+  parseSecondRead,
+  buildSecondReadPrompt,
+  buildReconcilePrompt,
+  parseReconcile,
+} from "./doubleLecture";
 
 describe("parseSecondRead", () => {
   it("découpe les 3 sections", () => {
@@ -62,5 +67,47 @@ describe("buildSecondReadPrompt", () => {
     const p = buildSecondReadPrompt({});
     expect(p.system.length).toBeGreaterThan(50);
     expect(p.user.length).toBeGreaterThan(10);
+  });
+});
+
+describe("réconciliation", () => {
+  it("le prompt contient les deux lectures et exige ACCORD:", () => {
+    const p = buildReconcilePrompt(
+      { resultats: "r1", conclusion: "c1", model: "claude-opus-5" },
+      {
+        resultats: "r2",
+        conclusion: "c2",
+        abnormal: true,
+        model: "gemini-2.5-pro",
+      }
+    );
+    expect(p.user).toContain("r1");
+    expect(p.user).toContain("r2");
+    expect(p.user).toContain("claude-opus-5");
+    expect(p.user).toContain("gemini-2.5-pro");
+    expect(p.system).toContain("ACCORD:");
+  });
+
+  it("parseReconcile lit le verdict oui/non", () => {
+    expect(parseReconcile("Accord global.\nACCORD: oui")!.agree).toBe(true);
+    expect(parseReconcile("Désaccord sur L4-L5.\nACCORD: non")!.agree).toBe(
+      false
+    );
+  });
+
+  it("verdict absent → agree null, section conservée", () => {
+    const r = parseReconcile("Analyse comparative.");
+    expect(r!.agree).toBeNull();
+    expect(r!.section).toBe("Analyse comparative.");
+  });
+
+  it("la ligne ACCORD: est retirée de la section affichée", () => {
+    const r = parseReconcile("Les lectures concordent.\nACCORD: oui");
+    expect(r!.section).toBe("Les lectures concordent.");
+  });
+
+  it("texte vide → null", () => {
+    expect(parseReconcile("")).toBeNull();
+    expect(parseReconcile("  \n ")).toBeNull();
   });
 });
